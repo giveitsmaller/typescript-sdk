@@ -1,0 +1,29 @@
+{
+  "name": "@giveitsmaller/sdk",
+  "version": "0.1.0",
+  "description": "Node.js SDK for the GISL (Give It Smaller) file compression and processing API",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "types": "./src/index.ts",
+  "files": [
+    "src/"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@giveitsmaller/contracts": "file:../../generated/typescript"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "typescript": "^5.7",
+    "vitest": "^3.1"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  }
+}
