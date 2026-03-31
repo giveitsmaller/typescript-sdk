@@ -4,12 +4,16 @@
   "description": "Node.js SDK for the GISL (Give It Smaller) file compression and processing API",
   "license": "MIT",
   "type": "module",
+  "main": "./dist/index.js",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
   },
-  "types": "./src/index.ts",
+  "types": "./dist/index.d.ts",
   "files": [
-    "src/"
+    "dist/"
   ],
   "engines": {
     "node": ">=18"
@@ -23,6 +27,8 @@
     "vitest": "^3.1"
   },
   "scripts": {
+    "build": "tsc",
+    "prepack": "npm run build",
     "check": "tsc --noEmit",
     "test": "vitest run"
   }
