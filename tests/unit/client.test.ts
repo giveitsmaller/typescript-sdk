@@ -316,6 +316,43 @@ describe('GislClient', () => {
   });
 
   // -----------------------------------------------------------------------
+  // getWorkflowDownloads
+  // -----------------------------------------------------------------------
+
+  describe('getWorkflowDownloads', () => {
+    it('issues GET against the plural /downloads path', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: { downloads: [] },
+        }),
+      );
+
+      await client.getWorkflowDownloads('wf-1');
+
+      const [url, options] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('https://api.example.com/api/workflows/wf-1/downloads');
+      expect(options.method).toBe('GET');
+    });
+
+    it('percent-encodes the workflow id', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: { downloads: [] },
+        }),
+      );
+
+      await client.getWorkflowDownloads('wf/with spaces');
+
+      const [url] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe(
+        'https://api.example.com/api/workflows/wf%2Fwith%20spaces/downloads',
+      );
+    });
+  });
+
+  // -----------------------------------------------------------------------
   // SSE streaming
   // -----------------------------------------------------------------------
 

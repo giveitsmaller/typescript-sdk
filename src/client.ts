@@ -341,7 +341,7 @@ export class GislClient {
    * Get download URLs for a completed workflow.
    */
   async getWorkflowDownloads(workflowId: string): Promise<WorkflowDownloadResponse> {
-    return this.request('GET', `/api/workflows/${encodeURIComponent(workflowId)}/download`, {
+    return this.request('GET', `/api/workflows/${encodeURIComponent(workflowId)}/downloads`, {
       deserialize: WorkflowDownloadResponseFromJSON,
     });
   }
