@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { GislClient } from '../../src/client.js';
+import { GislClient, DEFAULT_MULTIPART_FIRST_CHUNK_SIZE } from '../../src/client.js';
 import { GislApiError, GislValidationError, GislTimeoutError } from '../../src/errors.js';
 
 function jsonResponse(data: unknown, status = 200): Response {
@@ -312,6 +312,150 @@ describe('GislClient', () => {
 
       const [, options] = fetchSpy.mock.calls[0] as [string, RequestInit];
       expect(options.body).toBeInstanceOf(FormData);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Multipart upload
+  // -----------------------------------------------------------------------
+
+  describe('uploadFile multipart', () => {
+    // Blob size chosen so total_parts === 2: 8MB first chunk (sent in initiate)
+    // + one tail chunk (uploaded via the single presigned URL). Keeps the mock
+    // deterministic (queue.length === 1 -> exactly one worker). BLOB_SIZE must
+    // be strictly > multipartThreshold (default 10MB) to route through
+    // multipartUpload().
+    const TAIL_CHUNK_SIZE = 2 * 1024 * 1024 + 1; // 2 MB + 1 byte
+    const BLOB_SIZE = DEFAULT_MULTIPART_FIRST_CHUNK_SIZE + TAIL_CHUNK_SIZE;
+
+    function mockMultipartFlow(): void {
+      // 1) POST /api/uploads/multipart/initiate
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            file_id: 'file-mp-1',
+            mime_type: 'application/octet-stream',
+            first_chunk_etag: '"etag-part-1"',
+            first_chunk_size_bytes: DEFAULT_MULTIPART_FIRST_CHUNK_SIZE,
+            total_parts: 2,
+            recommended_chunk_size: TAIL_CHUNK_SIZE,
+            presigned_urls: [
+              {
+                part_number: 2,
+                url: 'https://s3.example.com/upload?part=2',
+                expires_at: '2026-04-18T09:00:00.000Z',
+              },
+            ],
+          },
+        }),
+      );
+      // 2) PUT https://s3.example.com/... (single S3 part upload)
+      fetchSpy.mockResolvedValueOnce(
+        new Response('', {
+          status: 200,
+          headers: { etag: '"etag-part-2"' },
+        }),
+      );
+      // 3) POST /api/uploads/multipart/complete
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            file_id: 'file-mp-1',
+            original_name: 'big.bin',
+            mime_type: 'application/octet-stream',
+            size_bytes: BLOB_SIZE,
+          },
+        }),
+      );
+    }
+
+    it('sends exactly 8MB in the initiate request (not the full file body)', async () => {
+      mockMultipartFlow();
+      const blob = new Blob([new Uint8Array(BLOB_SIZE)]);
+
+      await client.uploadFile(blob);
+
+      const [initUrl, initOpts] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      expect(initUrl).toBe('https://api.example.com/api/uploads/multipart/initiate');
+
+      const initiateForm = initOpts.body as FormData;
+      const firstChunk = initiateForm.get('file') as Blob;
+      expect(firstChunk).toBeInstanceOf(Blob);
+      expect(firstChunk.size).toBe(DEFAULT_MULTIPART_FIRST_CHUNK_SIZE);
+      // Guard: must not be the full blob (that was the 413 bug).
+      expect(firstChunk.size).not.toBe(BLOB_SIZE);
+    });
+
+    it('uses contract-compliant FormData field names on initiate', async () => {
+      mockMultipartFlow();
+      const blob = new Blob([new Uint8Array(BLOB_SIZE)]);
+
+      await client.uploadFile(blob);
+
+      const initiateForm = (fetchSpy.mock.calls[0][1] as RequestInit).body as FormData;
+
+      // New names (per api.yaml:1245-1262)
+      expect(initiateForm.has('file')).toBe(true);
+      expect(initiateForm.has('filename')).toBe(true);
+      expect(initiateForm.has('total_size')).toBe(true);
+      expect(initiateForm.get('total_size')).toBe(BLOB_SIZE.toString());
+
+      // Old names (the 400-validation bug) must be gone
+      expect(initiateForm.has('chunk')).toBe(false);
+      expect(initiateForm.has('original_name')).toBe(false);
+      expect(initiateForm.has('total_size_bytes')).toBe(false);
+    });
+
+    it('floors multipartThreshold at the first-chunk size (sub-8MB config cannot bypass contract)', async () => {
+      // A misconfigured consumer sets threshold below 8MB. The client MUST
+      // raise it to 8MB so the multipart path never routes a file that would
+      // produce a sub-8MB first chunk.
+      const lowThresholdClient = new GislClient({
+        baseUrl: 'https://api.example.com',
+        apiKey: 'test-key',
+        multipartThreshold: 1 * 1024 * 1024, // 1 MB — below the contract floor
+      });
+
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            file_id: 'file-small',
+            original_name: 'upload',
+            mime_type: 'application/octet-stream',
+            size_bytes: 5 * 1024 * 1024,
+          },
+        }),
+      );
+
+      // 5MB file: above the user-set 1MB threshold, but below the enforced
+      // 8MB floor — must route to singleUpload, not multipartUpload.
+      const blob = new Blob([new Uint8Array(5 * 1024 * 1024)]);
+      await lowThresholdClient.uploadFile(blob);
+
+      const [url] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('https://api.example.com/api/uploads');
+      expect(url).not.toContain('multipart');
+    });
+
+    it('calls complete with file_id and the S3 part etag (parts[0].part_number === 2)', async () => {
+      mockMultipartFlow();
+      const blob = new Blob([new Uint8Array(BLOB_SIZE)]);
+
+      const result = await client.uploadFile(blob);
+      expect(result.fileId).toBe('file-mp-1');
+
+      // fetchSpy.mock.calls: [0]=initiate, [1]=S3 PUT, [2]=complete
+      const [completeUrl, completeOpts] = fetchSpy.mock.calls[2] as [string, RequestInit];
+      expect(completeUrl).toBe('https://api.example.com/api/uploads/multipart/complete');
+
+      const completeBody = JSON.parse(completeOpts.body as string);
+      expect(completeBody.file_id).toBe('file-mp-1');
+      expect(completeBody.parts).toHaveLength(1);
+      expect(completeBody.parts[0].part_number).toBe(2);
+      expect(completeBody.parts[0].etag).toBe('"etag-part-2"');
     });
   });
 

@@ -37,6 +37,12 @@ import type {
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MULTIPART_THRESHOLD = 10 * 1024 * 1024; // 10 MB
 const DEFAULT_MULTIPART_CONCURRENCY = 4;
+// Fixed per contract (compression_contracts/openapi/api.yaml:134). The server
+// uses the first chunk for MIME detection + throughput measurement and stores
+// it as S3 multipart part 1. Must NOT be derived from multipartThreshold —
+// that is the "use multipart above this size" routing threshold, a separate
+// concept. Conflating them caused the /api/uploads/multipart/initiate 413.
+export const DEFAULT_MULTIPART_FIRST_CHUNK_SIZE = 8 * 1024 * 1024; // 8 MB
 const DEFAULT_POLL_INTERVAL_MS = 2_000;
 const DEFAULT_POLL_TIMEOUT_MS = 300_000; // 5 min
 
@@ -56,7 +62,13 @@ export class GislClient {
   constructor(config: GislClientConfig) {
     this.baseUrl = config.baseUrl.replace(/\/+$/, '');
     this.timeoutMs = config.timeout ?? DEFAULT_TIMEOUT_MS;
-    this.multipartThreshold = config.multipartThreshold ?? DEFAULT_MULTIPART_THRESHOLD;
+    // Floor the threshold at the first-chunk size: the multipart initiate
+    // must always carry an 8MB chunk, so routing a sub-8MB file into the
+    // multipart path would violate the contract.
+    this.multipartThreshold = Math.max(
+      config.multipartThreshold ?? DEFAULT_MULTIPART_THRESHOLD,
+      DEFAULT_MULTIPART_FIRST_CHUNK_SIZE,
+    );
     this.multipartConcurrency = config.multipartConcurrency ?? DEFAULT_MULTIPART_CONCURRENCY;
 
     this.headers = { ...config.headers };
@@ -208,13 +220,13 @@ export class GislClient {
     options?: UploadOptions,
   ): Promise<UploadResponse> {
     // Step 1: Initiate with first chunk
-    const firstChunkSize = Math.min(totalSize, this.multipartThreshold);
+    const firstChunkSize = Math.min(totalSize, DEFAULT_MULTIPART_FIRST_CHUNK_SIZE);
     const firstChunk = blob.slice(0, firstChunkSize);
 
     const initiateForm = new FormData();
-    initiateForm.append('chunk', firstChunk, fileName);
-    initiateForm.append('original_name', fileName);
-    initiateForm.append('total_size_bytes', totalSize.toString());
+    initiateForm.append('file', firstChunk, fileName);
+    initiateForm.append('filename', fileName);
+    initiateForm.append('total_size', totalSize.toString());
 
     const initResponse = await this.request<MultipartInitiateResponse>(
       'POST',

@@ -1,5 +1,5 @@
 // SDK classes and functions
-export { GislClient } from './client.js';
+export { GislClient, DEFAULT_MULTIPART_FIRST_CHUNK_SIZE } from './client.js';
 export { verifyWebhook } from './webhook.js';
 export { parseSseStream } from './sse.js';
 
