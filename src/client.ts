@@ -290,7 +290,7 @@ export class GislClient {
 
     return this.request<UploadResponse>('POST', '/api/uploads/multipart/complete', {
       body: {
-        file_id: initResponse.fileId,
+        upload_id: initResponse.uploadId,
         parts: etags,
       },
       deserialize: UploadResponseFromJSON,

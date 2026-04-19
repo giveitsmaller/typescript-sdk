@@ -334,7 +334,7 @@ describe('GislClient', () => {
         jsonResponse({
           success: true,
           data: {
-            file_id: 'file-mp-1',
+            upload_id: 'upload-mp-1',
             mime_type: 'application/octet-stream',
             first_chunk_etag: '"etag-part-1"',
             first_chunk_size_bytes: DEFAULT_MULTIPART_FIRST_CHUNK_SIZE,
@@ -440,7 +440,7 @@ describe('GislClient', () => {
       expect(url).not.toContain('multipart');
     });
 
-    it('calls complete with file_id and the S3 part etag (parts[0].part_number === 2)', async () => {
+    it('calls complete with upload_id from initiate and the S3 part etag (parts[0].part_number === 2)', async () => {
       mockMultipartFlow();
       const blob = new Blob([new Uint8Array(BLOB_SIZE)]);
 
@@ -452,7 +452,8 @@ describe('GislClient', () => {
       expect(completeUrl).toBe('https://api.example.com/api/uploads/multipart/complete');
 
       const completeBody = JSON.parse(completeOpts.body as string);
-      expect(completeBody.file_id).toBe('file-mp-1');
+      expect(completeBody.upload_id).toBe('upload-mp-1');
+      expect(completeBody.file_id).toBeUndefined();
       expect(completeBody.parts).toHaveLength(1);
       expect(completeBody.parts[0].part_number).toBe(2);
       expect(completeBody.parts[0].etag).toBe('"etag-part-2"');
