@@ -44,22 +44,27 @@ describe('GislClient', () => {
       expect(result.originalName).toBe('test.jpg');
     });
 
-    it('throws GislApiError on error envelope', async () => {
+    it('throws GislApiError on error envelope with endpoint path in message', async () => {
       fetchSpy.mockResolvedValueOnce(
         jsonResponse({ success: false, error: 'Not found' }, 404),
       );
 
-      await expect(client.getMetadata('xyz')).rejects.toThrow(GislApiError);
-
-      fetchSpy.mockResolvedValueOnce(
-        jsonResponse({ success: false, error: 'Not found' }, 404),
-      );
-      await expect(client.getMetadata('xyz')).rejects.toThrow(
-        'API error 404: Not found',
-      );
+      try {
+        await client.getMetadata('xyz');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislApiError);
+        const apiErr = err as GislApiError;
+        expect(apiErr.statusCode).toBe(404);
+        expect(apiErr.errorMessage).toBe('Not found');
+        expect(apiErr.path).toBe('/api/uploads/xyz/metadata');
+        expect(apiErr.message).toBe(
+          'API error 404 at /api/uploads/xyz/metadata: Not found',
+        );
+      }
     });
 
-    it('throws GislValidationError on validation error envelope', async () => {
+    it('throws GislValidationError on validation error envelope (array-shape details)', async () => {
       fetchSpy.mockResolvedValueOnce(
         jsonResponse(
           {
@@ -76,8 +81,100 @@ describe('GislClient', () => {
         expect.unreachable('should have thrown');
       } catch (err) {
         expect(err).toBeInstanceOf(GislValidationError);
-        expect((err as GislValidationError).details).toHaveLength(1);
-        expect((err as GislValidationError).details[0].field).toBe('file');
+        const validationErr = err as GislValidationError;
+        expect(validationErr.details).toHaveLength(1);
+        expect(validationErr.details[0].field).toBe('file');
+        expect(validationErr.path).toBe('/api/uploads/bad/metadata');
+      }
+    });
+
+    it('forwards non-array details through GislApiError (does NOT escalate to GislValidationError)', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'Conflict',
+            details: { reason: 'already_exists', conflicting_id: 'abc' },
+          },
+          409,
+        ),
+      );
+
+      try {
+        await client.getMetadata('conflict');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislApiError);
+        expect(err).not.toBeInstanceOf(GislValidationError);
+        const apiErr = err as GislApiError;
+        expect(apiErr.details).toEqual({ reason: 'already_exists', conflicting_id: 'abc' });
+        expect(apiErr.path).toBe('/api/uploads/conflict/metadata');
+      }
+    });
+
+    it('includes endpoint path when server returns a non-JSON body', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        new Response('<html>502 Bad Gateway</html>', {
+          status: 502,
+          headers: { 'Content-Type': 'text/html' },
+        }),
+      );
+
+      try {
+        await client.getMetadata('nopjson');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislApiError);
+        const apiErr = err as GislApiError;
+        expect(apiErr.statusCode).toBe(502);
+        expect(apiErr.path).toBe('/api/uploads/nopjson/metadata');
+        expect(apiErr.message).toBe(
+          'API error 502 at /api/uploads/nopjson/metadata: Non-JSON response',
+        );
+      }
+    });
+
+    it('throws GislApiError with path when JSON body is malformed', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        new Response('not-json{', {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+
+      try {
+        await client.getMetadata('broken');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislApiError);
+        const apiErr = err as GislApiError;
+        expect(apiErr.statusCode).toBe(500);
+        expect(apiErr.path).toBe('/api/uploads/broken/metadata');
+        expect(apiErr.message).toBe(
+          'API error 500 at /api/uploads/broken/metadata: Invalid JSON response',
+        );
+      }
+    });
+
+    it('falls back to GislApiError when details is an array but not validation-shape', async () => {
+      // E.g. an array of bare strings or arbitrary objects — should NOT be
+      // treated as validation errors (the old Array.isArray check would
+      // have miscast it and consumers reading details[0].field would crash).
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          { success: false, error: 'Bulk error', details: ['err-a', 'err-b'] },
+          500,
+        ),
+      );
+
+      try {
+        await client.getMetadata('bulk');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislApiError);
+        expect(err).not.toBeInstanceOf(GislValidationError);
+        const apiErr = err as GislApiError;
+        expect(apiErr.details).toEqual(['err-a', 'err-b']);
       }
     });
   });

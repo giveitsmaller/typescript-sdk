@@ -52,6 +52,21 @@ const TERMINAL_STATUSES: ReadonlySet<string> = new Set([
   WorkflowStatus.partially_failed,
 ]);
 
+function isValidationDetails(
+  value: unknown,
+): value is Array<{ field: string; message: string }> {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (el) =>
+        typeof el === 'object' &&
+        el !== null &&
+        typeof (el as { field?: unknown }).field === 'string' &&
+        typeof (el as { message?: unknown }).message === 'string',
+    )
+  );
+}
+
 export class GislClient {
   private readonly baseUrl: string;
   private readonly headers: Record<string, string>;
@@ -134,30 +149,46 @@ export class GislClient {
     path: string,
     deserialize?: (raw: unknown) => T,
   ): Promise<T> {
-    const contentType = response.headers.get('content-type') ?? '';
-    if (!contentType.includes('application/json')) {
+    const contentType = (response.headers.get('content-type') ?? '').toLowerCase();
+    const isJsonContent = contentType.includes('application/json') || contentType.includes('+json');
+    if (!isJsonContent) {
       if (!response.ok) {
-        throw new GislApiError(response.status, `Non-JSON error from ${path}`);
+        throw new GislApiError(response.status, 'Non-JSON response', path);
       }
       return undefined as unknown as T;
     }
 
-    const json = await response.json();
+    let json: { success?: boolean; data?: unknown; error?: string; details?: unknown };
+    try {
+      json = await response.json();
+    } catch {
+      throw new GislApiError(response.status, 'Invalid JSON response', path);
+    }
 
     // Schema endpoint returns raw JSON (no envelope)
     if (path === '/api/operations/schema') {
       if (!response.ok) {
-        throw new GislApiError(response.status, json.error ?? 'Unknown error');
+        throw new GislApiError(response.status, json.error ?? 'Unknown error', path);
       }
       return deserialize ? deserialize(json) : (json as T);
     }
 
     // Standard envelope: { success, data } or { success, error, details }
     if (!response.ok || json.success === false) {
-      if (json.details && Array.isArray(json.details)) {
-        throw new GislValidationError(response.status, json.error ?? 'Validation error', json.details);
+      if (isValidationDetails(json.details)) {
+        throw new GislValidationError(
+          response.status,
+          json.error ?? 'Validation error',
+          json.details,
+          path,
+        );
       }
-      throw new GislApiError(response.status, json.error ?? 'Unknown error');
+      throw new GislApiError(
+        response.status,
+        json.error ?? 'Unknown error',
+        path,
+        json.details,
+      );
     }
 
     const data = json.data ?? json;
@@ -362,14 +393,15 @@ export class GislClient {
    * Stream SSE events for a workflow. Returns an async iterable.
    */
   async streamEvents(workflowId: string): Promise<AsyncGenerator<GislSseEvent>> {
+    const eventsPath = `/api/workflows/${encodeURIComponent(workflowId)}/events`;
     const response = await this.request<Response>(
       'GET',
-      `/api/workflows/${encodeURIComponent(workflowId)}/events`,
+      eventsPath,
       { rawResponse: true },
     );
 
     if (!response.ok) {
-      await this.handleResponse(response, `/api/workflows/${workflowId}/events`);
+      await this.handleResponse(response, eventsPath);
     }
 
     return parseSseStream(response);
