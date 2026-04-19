@@ -4,6 +4,7 @@ import { basename } from 'node:path';
 import {
   UploadResponseFromJSON,
   MultipartInitiateResponseFromJSON,
+  MultipartCompleteResponseFromJSON,
   WorkflowCreateResponseFromJSON,
   WorkflowStatusResponseFromJSON,
   WorkflowDownloadResponseFromJSON,
@@ -16,6 +17,7 @@ import {
 import type {
   UploadResponse,
   MultipartInitiateResponse,
+  MultipartCompleteResponse,
   WorkflowCreateResponse,
   WorkflowStatusResponse,
   WorkflowDownloadResponse,
@@ -244,6 +246,17 @@ export class GislClient {
     });
   }
 
+  /**
+   * Direct-to-S3 multipart upload for files above the threshold.
+   *
+   * The /multipart/complete response (MultipartCompleteResponse) only carries
+   * { upload_id, status }. The server's upload_id is the same UUID callers
+   * pass as file_id to POST /api/workflows — so fileId is synthesised from
+   * upload_id and a full UploadResponse is returned to keep the public
+   * uploadFile() API uniform across single and multipart paths. The mimeType
+   * comes from the initiate response's first-chunk detection; for authoritative
+   * post-upload metadata callers should use getMetadata(fileId).
+   */
   private async multipartUpload(
     blob: Blob,
     fileName: string,
@@ -316,16 +329,36 @@ export class GislClient {
     );
     await Promise.all(workers);
 
-    // Step 3: Complete multipart upload
+    // Step 3: Complete multipart upload.
     etags.sort((a, b) => a.part_number - b.part_number);
 
-    return this.request<UploadResponse>('POST', '/api/uploads/multipart/complete', {
-      body: {
-        upload_id: initResponse.uploadId,
-        parts: etags,
+    const completeResp = await this.request<MultipartCompleteResponse>(
+      'POST',
+      '/api/uploads/multipart/complete',
+      {
+        body: {
+          upload_id: initResponse.uploadId,
+          parts: etags,
+        },
+        deserialize: MultipartCompleteResponseFromJSON,
       },
-      deserialize: UploadResponseFromJSON,
-    });
+    );
+
+    // Defensive: the status enum currently has only 'completed', but guard
+    // against future expansion so an unexpected terminal state doesn't pass
+    // as a successful upload.
+    if (completeResp.status !== 'completed') {
+      throw new GislError(
+        `Multipart upload completed with unexpected status: ${completeResp.status}`,
+      );
+    }
+
+    return {
+      fileId: completeResp.uploadId,
+      originalName: fileName,
+      mimeType: initResponse.mimeType,
+      sizeBytes: blob.size,
+    };
   }
 
   // -----------------------------------------------------------------------

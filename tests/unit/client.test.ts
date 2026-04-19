@@ -454,17 +454,18 @@ describe('GislClient', () => {
           headers: { etag: '"etag-part-2"' },
         }),
       );
-      // 3) POST /api/uploads/multipart/complete
+      // 3) POST /api/uploads/multipart/complete (contracts@dc0244d: 201 + {upload_id, status})
       fetchSpy.mockResolvedValueOnce(
-        jsonResponse({
-          success: true,
-          data: {
-            file_id: 'file-mp-1',
-            original_name: 'big.bin',
-            mime_type: 'application/octet-stream',
-            size_bytes: BLOB_SIZE,
+        jsonResponse(
+          {
+            success: true,
+            data: {
+              upload_id: 'upload-mp-1',
+              status: 'completed',
+            },
           },
-        }),
+          201,
+        ),
       );
     }
 
@@ -542,7 +543,10 @@ describe('GislClient', () => {
       const blob = new Blob([new Uint8Array(BLOB_SIZE)]);
 
       const result = await client.uploadFile(blob);
-      expect(result.fileId).toBe('file-mp-1');
+      // fileId is synthesised from the server's upload_id — per contracts they
+      // are the same UUID, just different labels across /multipart/complete
+      // and /workflows (see MultipartCompleteResponse docs).
+      expect(result.fileId).toBe('upload-mp-1');
 
       // fetchSpy.mock.calls: [0]=initiate, [1]=S3 PUT, [2]=complete
       const [completeUrl, completeOpts] = fetchSpy.mock.calls[2] as [string, RequestInit];
@@ -554,6 +558,25 @@ describe('GislClient', () => {
       expect(completeBody.parts).toHaveLength(1);
       expect(completeBody.parts[0].part_number).toBe(2);
       expect(completeBody.parts[0].etag).toBe('"etag-part-2"');
+    });
+
+    it('synthesises UploadResponse from already-captured state (no metadata round trip)', async () => {
+      mockMultipartFlow();
+      const blob = new Blob([new Uint8Array(BLOB_SIZE)]);
+
+      const result = await client.uploadFile(blob);
+
+      // fileId == the server's upload_id (contract identity)
+      expect(result.fileId).toBe('upload-mp-1');
+      // originalName comes from uploadFile()'s fileName resolution. A Blob
+      // has no .name, so the fallback 'upload' applies (see client.ts:227).
+      expect(result.originalName).toBe('upload');
+      // mimeType comes from the initiate response's detection.
+      expect(result.mimeType).toBe('application/octet-stream');
+      // sizeBytes comes from the caller's blob size.
+      expect(result.sizeBytes).toBe(BLOB_SIZE);
+      // Only three HTTP calls: initiate, S3 PUT, complete. No metadata fetch.
+      expect(fetchSpy.mock.calls).toHaveLength(3);
     });
   });
 
