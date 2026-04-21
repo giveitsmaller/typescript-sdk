@@ -5,6 +5,7 @@ import {
   UploadResponseFromJSON,
   MultipartInitiateResponseFromJSON,
   MultipartCompleteResponseFromJSON,
+  MultipartCompleteRequestToJSON,
   WorkflowCreateResponseFromJSON,
   WorkflowStatusResponseFromJSON,
   WorkflowDownloadResponseFromJSON,
@@ -18,6 +19,7 @@ import type {
   UploadResponse,
   MultipartInitiateResponse,
   MultipartCompleteResponse,
+  MultipartCompleteRequest,
   WorkflowCreateResponse,
   WorkflowStatusResponse,
   WorkflowDownloadResponse,
@@ -286,7 +288,7 @@ export class GislClient {
     options?.onProgress?.(uploadedBytes, totalSize);
 
     // Step 2: Upload remaining chunks to S3 presigned URLs
-    const etags: Array<{ part_number: number; etag: string }> = [];
+    const etags: Array<{ partNumber: number; etag: string }> = [];
     const presignedUrls = initResponse.presignedUrls;
     const chunkSize = initResponse.recommendedChunkSize;
 
@@ -311,7 +313,7 @@ export class GislClient {
         throw new GislError(`S3 response missing ETag for part ${part.partNumber}`);
       }
 
-      etags.push({ part_number: part.partNumber, etag });
+      etags.push({ partNumber: part.partNumber, etag });
       uploadedBytes += end - start;
       options?.onProgress?.(uploadedBytes, totalSize);
     };
@@ -330,16 +332,41 @@ export class GislClient {
     await Promise.all(workers);
 
     // Step 3: Complete multipart upload.
-    etags.sort((a, b) => a.part_number - b.part_number);
+    // Build a typed MultipartCompleteRequest and serialise via the generated
+    // ToJSON helper — tsc now catches any field-name drift between the SDK
+    // and the OpenAPI spec (see contract-drift-fields.test.ts describe 'c').
+    etags.sort((a, b) => a.partNumber - b.partNumber);
+
+    const completeRequest: MultipartCompleteRequest = {
+      uploadId: initResponse.uploadId,
+      parts: etags,
+    };
+
+    // MultipartCompleteRequestToJSON's declared return type is the camelCase
+    // `MultipartCompleteRequest` interface, but at runtime it returns the
+    // snake_case wire object — an openapi-generator v7 quirk. The drift gate
+    // for field names lives at `completeRequest: MultipartCompleteRequest`
+    // above; the local wire type + runtime sanity check below guard against
+    // the remaining hypothetical: a future generator version emitting a
+    // different shape without the declared type catching it.
+    const wireCompleteBody = MultipartCompleteRequestToJSON(completeRequest) as unknown as {
+      upload_id: string;
+      parts: Array<{ part_number: number; etag: string }>;
+    };
+    if (
+      typeof wireCompleteBody?.upload_id !== 'string' ||
+      !Array.isArray(wireCompleteBody?.parts)
+    ) {
+      throw new GislError(
+        'MultipartCompleteRequestToJSON returned an unexpected shape — generator output may have changed.',
+      );
+    }
 
     const completeResp = await this.request<MultipartCompleteResponse>(
       'POST',
       '/api/uploads/multipart/complete',
       {
-        body: {
-          upload_id: initResponse.uploadId,
-          parts: etags,
-        },
+        body: wireCompleteBody as unknown as Record<string, unknown>,
         deserialize: MultipartCompleteResponseFromJSON,
       },
     );

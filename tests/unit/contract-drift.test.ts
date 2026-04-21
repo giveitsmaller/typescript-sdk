@@ -22,32 +22,9 @@
  *    POST, etc.) are out of scope for this test (ticket B6jFI4Ml).
  */
 import { describe, it, expect } from 'vitest';
-import { readFileSync, existsSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { parse as parseYaml } from 'yaml';
-
-const TEST_DIR = dirname(fileURLToPath(import.meta.url));
-// tests/unit/contract-drift.test.ts -> ../../.. = sdks repo root
-const SDKS_REPO_ROOT = resolve(TEST_DIR, '../../../..');
-const CLIENT_SRC_PATH = resolve(SDKS_REPO_ROOT, 'packages/typescript/src/client.ts');
-
-const CONTRACT_PATH_CANDIDATES = [
-  resolve(SDKS_REPO_ROOT, 'compression_contracts/openapi/api.yaml'),     // CI (actions/checkout with path:)
-  resolve(SDKS_REPO_ROOT, '../compression_contracts/openapi/api.yaml'),  // local sibling checkout
-];
-
-function resolveContractPath(): string {
-  for (const candidate of CONTRACT_PATH_CANDIDATES) {
-    if (existsSync(candidate)) return candidate;
-  }
-  throw new Error(
-    `Could not locate compression_contracts/openapi/api.yaml. Tried:\n` +
-      CONTRACT_PATH_CANDIDATES.map(p => `  - ${p}`).join('\n') +
-      `\n\nEnsure the compression_contracts repo is checked out as a sibling of ` +
-      `giveitsmaller-sdks (local) or nested at the repo root (CI).`,
-  );
-}
+import { CLIENT_SRC_PATH, resolveContractsRepoSpec } from './_contract-paths.js';
 
 function extractSdkPaths(clientSource: string): string[] {
   const paths = new Set<string>();
@@ -76,7 +53,7 @@ function extractContractPaths(apiYaml: string): string[] {
 describe('contract drift', () => {
   it('every SDK URL template matches an OpenAPI contract path', () => {
     const clientSource = readFileSync(CLIENT_SRC_PATH, 'utf8');
-    const contractYaml = readFileSync(resolveContractPath(), 'utf8');
+    const contractYaml = readFileSync(resolveContractsRepoSpec(), 'utf8');
 
     const sdkPaths = extractSdkPaths(clientSource);
     const contractPaths = new Set(extractContractPaths(contractYaml));

@@ -113,6 +113,41 @@ export interface WorkflowCreatePayload {
   };
 }
 
+/**
+ * Single source of truth for WorkflowCreatePayload's top-level wire keys.
+ * Read by `contract-drift-fields.test.ts` to cross-check against the spec at
+ * POST /api/workflows. Not re-exported from `index.ts`; this is reachable
+ * only via deep imports and should not be treated as public API.
+ * @internal
+ */
+export const WORKFLOW_CREATE_PAYLOAD_KEYS = Object.freeze([
+  'jobs',
+  'workflow_edges',
+  'callback_url',
+  'callback_events',
+  'export',
+] as const);
+
+// Compile-time invariant: WORKFLOW_CREATE_PAYLOAD_KEYS must exactly equal
+// keyof WorkflowCreatePayload. The tuple wraps are load-bearing — a naked
+// `A extends B` would distribute over the union and silently pass. tsc fails
+// at the `_AssertTrue<...>` line below with the specific extra/missing keys
+// named in the error tuple. This lives in src/ (not tests/) because
+// tsconfig.json excludes tests from the build; and is pure-type (no `const`
+// / `void`) so no runtime JS is emitted to the shipped module.
+type _ExpectedWorkflowCreatePayloadKey = (typeof WORKFLOW_CREATE_PAYLOAD_KEYS)[number];
+type _ExcessPayload = Exclude<keyof WorkflowCreatePayload, _ExpectedWorkflowCreatePayloadKey>;
+type _ExcessExpected = Exclude<_ExpectedWorkflowCreatePayloadKey, keyof WorkflowCreatePayload>;
+type _WorkflowCreatePayloadDrift =
+  [_ExcessPayload] extends [never]
+    ? [_ExcessExpected] extends [never]
+      ? true
+      : ['DRIFT: WorkflowCreatePayload is missing keys declared in WORKFLOW_CREATE_PAYLOAD_KEYS', _ExcessExpected]
+    : ['DRIFT: WorkflowCreatePayload has EXTRA keys not in WORKFLOW_CREATE_PAYLOAD_KEYS', _ExcessPayload];
+type _AssertTrue<T extends true> = T;
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+type _WorkflowCreatePayloadDriftAssertion = _AssertTrue<_WorkflowCreatePayloadDrift>;
+
 // ---------------------------------------------------------------------------
 // Polling options
 // ---------------------------------------------------------------------------
