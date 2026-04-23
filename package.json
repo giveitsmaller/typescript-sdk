@@ -31,6 +31,8 @@
     "build": "tsc",
     "prepack": "npm run build",
     "check": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:parity": "vitest run tests/parity",
+    "parity:update": "UPDATE_PARITY_FIXTURES=1 vitest run tests/parity"
   }
 }
