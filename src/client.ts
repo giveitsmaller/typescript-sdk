@@ -28,7 +28,7 @@ import type {
   RetryResponse,
 } from '@giveitsmaller/contracts/openapi';
 
-import { GislApiError, GislError, GislTimeoutError, GislValidationError } from './errors.js';
+import { GislAbortError, GislApiError, GislError, GislTimeoutError, GislValidationError } from './errors.js';
 import { parseSseStream } from './sse.js';
 import type {
   GislClientConfig,
@@ -71,6 +71,46 @@ function isValidationDetails(
   );
 }
 
+// An abort may surface as DOMException (browser + modern Node), a plain Error
+// subclass with name='AbortError', or (rarely) a plain object with that name
+// on less conformant runtimes. Match any non-null thing exposing the name.
+function isAbortError(err: unknown): boolean {
+  return (
+    err !== null &&
+    typeof err === 'object' &&
+    (err as { name?: unknown }).name === 'AbortError'
+  );
+}
+
+// Wire an optional external AbortSignal onto an internal per-request controller
+// so either source trips the composed fetch. The `onExternalAbort` callback
+// fires the moment the external signal aborts — callers use it to capture the
+// temporal order of user-vs-timeout causes, so the tiebreak in request() does
+// not rely on `signal.aborted` read at catch time (which flips true regardless
+// of which cause actually fired first).
+//
+// Returns a teardown that removes the listener — must be called in a finally
+// so long-lived user AbortControllers do not accumulate listeners across many
+// uploads. Node 18+ compatible (no AbortSignal.any).
+function bindAbortSignal(
+  external: AbortSignal | undefined,
+  internal: AbortController,
+  onExternalAbort?: () => void,
+): () => void {
+  if (!external) return () => {};
+  if (external.aborted) {
+    onExternalAbort?.();
+    internal.abort();
+    return () => {};
+  }
+  const onAbort = (): void => {
+    onExternalAbort?.();
+    internal.abort();
+  };
+  external.addEventListener('abort', onAbort, { once: true });
+  return () => external.removeEventListener('abort', onAbort);
+}
+
 export class GislClient {
   private readonly baseUrl: string;
   private readonly headers: Record<string, string>;
@@ -108,8 +148,14 @@ export class GislClient {
       json?: boolean;
       deserialize?: (raw: unknown) => T;
       rawResponse?: boolean;
+      signal?: AbortSignal;
     } = {},
   ): Promise<T> {
+    // Fast-fail on a pre-aborted user signal before building the request.
+    if (opts.signal?.aborted) {
+      throw new GislAbortError(`Request to ${method} ${path} aborted`);
+    }
+
     const url = `${this.baseUrl}${path}`;
     const headers: Record<string, string> = { ...this.headers };
     let body: BodyInit | undefined;
@@ -122,7 +168,20 @@ export class GislClient {
     }
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    // Record the first cause that tripped the composed controller. Checking
+    // `opts.signal.aborted` alone at catch time is not sound: if the timer
+    // fires first and the user signal aborts microseconds later (before
+    // `catch` runs), that flag is also true — but the true cause was the
+    // timeout. Capturing which side fired first gives a deterministic
+    // classification regardless of scheduling.
+    let firstCause: 'timeout' | 'user' | null = null;
+    const timer = setTimeout(() => {
+      if (firstCause === null) firstCause = 'timeout';
+      controller.abort();
+    }, this.timeoutMs);
+    const unbind = bindAbortSignal(opts.signal, controller, () => {
+      if (firstCause === null) firstCause = 'user';
+    });
 
     let response: Response;
     try {
@@ -133,12 +192,16 @@ export class GislClient {
         signal: controller.signal,
       });
     } catch (err: unknown) {
-      if (err instanceof DOMException && err.name === 'AbortError') {
+      if (isAbortError(err)) {
+        if (firstCause === 'user') {
+          throw new GislAbortError(`Request to ${method} ${path} aborted`);
+        }
         throw new GislTimeoutError(`Request to ${method} ${path} timed out after ${this.timeoutMs}ms`);
       }
       throw err;
     } finally {
       clearTimeout(timer);
+      unbind();
     }
 
     if (opts.rawResponse) {
@@ -214,6 +277,12 @@ export class GislClient {
     file: string | Blob,
     options?: UploadOptions,
   ): Promise<UploadResponse> {
+    // Pre-abort check: bail before statSync/readFileSync buffers the whole
+    // file into memory when the caller has already cancelled.
+    if (options?.signal?.aborted) {
+      throw new GislAbortError('Upload aborted before start');
+    }
+
     let blob: Blob;
     let fileName: string;
     let fileSize: number;
@@ -234,10 +303,14 @@ export class GislClient {
       return this.multipartUpload(blob, fileName, fileSize, options);
     }
 
-    return this.singleUpload(blob, fileName);
+    return this.singleUpload(blob, fileName, options);
   }
 
-  private async singleUpload(blob: Blob, fileName: string): Promise<UploadResponse> {
+  private async singleUpload(
+    blob: Blob,
+    fileName: string,
+    options?: UploadOptions,
+  ): Promise<UploadResponse> {
     const form = new FormData();
     form.append('file', blob, fileName);
 
@@ -245,6 +318,7 @@ export class GislClient {
       body: form,
       json: false,
       deserialize: UploadResponseFromJSON,
+      signal: options?.signal,
     });
   }
 
@@ -281,6 +355,7 @@ export class GislClient {
         body: initiateForm,
         json: false,
         deserialize: MultipartInitiateResponseFromJSON,
+        signal: options?.signal,
       },
     );
 
@@ -298,11 +373,24 @@ export class GislClient {
       const end = Math.min(start + chunkSize, totalSize);
       const chunk = blob.slice(start, end);
 
-      const s3Response = await fetch(part.url, {
-        method: 'PUT',
-        body: chunk,
-        headers: { 'Content-Length': (end - start).toString() },
-      });
+      let s3Response: Response;
+      try {
+        s3Response = await fetch(part.url, {
+          method: 'PUT',
+          body: chunk,
+          headers: { 'Content-Length': (end - start).toString() },
+          signal: options?.signal,
+        });
+      } catch (err: unknown) {
+        // An aborted PUT surfaces as AbortError — re-classify as GislAbortError
+        // when the caller's signal was the trigger. Non-abort network errors
+        // (TypeError from DNS/TLS/etc.) bubble raw, matching the public
+        // contract in docs/typescript/errors.md.
+        if (isAbortError(err) && options?.signal?.aborted) {
+          throw new GislAbortError(`S3 part ${part.partNumber} upload aborted`);
+        }
+        throw err;
+      }
 
       if (!s3Response.ok) {
         throw new GislError(`S3 chunk upload failed for part ${part.partNumber}: ${s3Response.status}`);
@@ -318,14 +406,29 @@ export class GislClient {
       options?.onProgress?.(uploadedBytes, totalSize);
     };
 
-    // Upload with concurrency limit
+    // Upload with concurrency limit. Workers check the signal before pulling
+    // the next queue item so a mid-upload abort drains fast without
+    // dispatching new chunks. Chunks already in-flight are cancelled via the
+    // composed signal passed to fetch above — this flag only prevents siblings
+    // from starting new work. A dedicated boolean (not the thrown value) is
+    // used because a worker could legitimately throw `undefined` and a value
+    // sentinel would silently disarm the fast-exit.
     const queue = [...presignedUrls.keys()];
+    let workerFailed = false;
     const workers = Array.from(
       { length: Math.min(this.multipartConcurrency, queue.length) },
       async () => {
-        while (queue.length > 0) {
+        while (queue.length > 0 && !workerFailed) {
+          if (options?.signal?.aborted) {
+            throw new GislAbortError('Multipart upload aborted');
+          }
           const index = queue.shift()!;
-          await uploadChunk(index);
+          try {
+            await uploadChunk(index);
+          } catch (err) {
+            workerFailed = true;
+            throw err;
+          }
         }
       },
     );
@@ -368,6 +471,7 @@ export class GislClient {
       {
         body: wireCompleteBody as unknown as Record<string, unknown>,
         deserialize: MultipartCompleteResponseFromJSON,
+        signal: options?.signal,
       },
     );
 

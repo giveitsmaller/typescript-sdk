@@ -53,3 +53,10 @@ export class GislTimeoutError extends GislError {
     this.name = 'GislTimeoutError';
   }
 }
+
+export class GislAbortError extends GislError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'GislAbortError';
+  }
+}

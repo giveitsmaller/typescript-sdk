@@ -183,4 +183,12 @@ export type GislSseEvent =
 export interface UploadOptions {
   /** Called with bytes uploaded so far (only for multipart) */
   onProgress?: (uploadedBytes: number, totalBytes: number) => void;
+  /**
+   * Cancel an in-flight upload. Aborting rejects the `uploadFile` promise with
+   * `GislAbortError`. Applies to the API requests (initiate, complete) and
+   * every S3 part PUT. Composes with the client-level per-request timeout —
+   * whichever callback fires first determines the error class: user abort
+   * first → `GislAbortError`; timer first → `GislTimeoutError`.
+   */
+  signal?: AbortSignal;
 }

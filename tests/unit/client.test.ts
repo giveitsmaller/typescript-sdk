@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { GislClient, DEFAULT_MULTIPART_FIRST_CHUNK_SIZE } from '../../src/client.js';
-import { GislApiError, GislValidationError, GislTimeoutError } from '../../src/errors.js';
+import { GislAbortError, GislApiError, GislValidationError, GislTimeoutError } from '../../src/errors.js';
 
 function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -614,6 +614,365 @@ describe('GislClient', () => {
       expect(url).toBe(
         'https://api.example.com/api/workflows/wf%2Fwith%20spaces/downloads',
       );
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // AbortSignal on uploadFile
+  // -----------------------------------------------------------------------
+
+  describe('uploadFile cancellation', () => {
+    // Reuse the multipart block's flow helper shape.
+    const TAIL_CHUNK_SIZE = 2 * 1024 * 1024 + 1;
+    const BLOB_SIZE = DEFAULT_MULTIPART_FIRST_CHUNK_SIZE + TAIL_CHUNK_SIZE;
+
+    it('fails fast with GislAbortError when signal is already aborted on entry', async () => {
+      const controller = new AbortController();
+      controller.abort();
+      const blob = new Blob([new Uint8Array(1024)]);
+
+      await expect(
+        client.uploadFile(blob, { signal: controller.signal }),
+      ).rejects.toBeInstanceOf(GislAbortError);
+      // No HTTP traffic: the guard fires before any fetch / file-read.
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('propagates a mid-flight abort during single-part as GislAbortError', async () => {
+      const controller = new AbortController();
+      fetchSpy.mockImplementationOnce(async (_url, init: RequestInit) => {
+        // The client wraps its own controller around opts.signal — fetch
+        // receives the composed signal. Simulate the runtime behaviour: wait
+        // for abort, then throw an AbortError the way fetch does.
+        return new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener(
+            'abort',
+            () => {
+              const err = new Error('The operation was aborted');
+              err.name = 'AbortError';
+              reject(err);
+            },
+            { once: true },
+          );
+          // Deterministic sync: abort on the next microtask so the listener
+          // is registered and fetch is genuinely in-flight. No wall-clock
+          // delay — robust against slow CI runners.
+          queueMicrotask(() => controller.abort());
+        });
+      });
+
+      const blob = new Blob([new Uint8Array(1024)]);
+      await expect(
+        client.uploadFile(blob, { signal: controller.signal }),
+      ).rejects.toBeInstanceOf(GislAbortError);
+    });
+
+    it('classifies abort-after-timeout as GislTimeoutError (temporal order: timer-first wins)', async () => {
+      // The timer fires, aborts the composed controller, and the user signal
+      // flips `aborted=true` microseconds later (still inside the same catch
+      // window). The OLD "check opts.signal.aborted at catch time" logic
+      // would misclassify this as a user cancellation. The temporal-order
+      // tiebreak must stick with the first cause.
+      const fastClient = new GislClient({
+        baseUrl: 'https://api.example.com',
+        apiKey: 'test-key',
+        timeout: 10,
+      });
+      const controller = new AbortController();
+
+      fetchSpy.mockImplementationOnce(async (_url, init: RequestInit) => {
+        return new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener(
+            'abort',
+            () => {
+              // Compose fired -> user aborts in response (post-timer). First
+              // cause was the internal timer, so classification must be
+              // GislTimeoutError.
+              controller.abort();
+              const err = new Error('The operation was aborted');
+              err.name = 'AbortError';
+              reject(err);
+            },
+            { once: true },
+          );
+        });
+      });
+
+      const blob = new Blob([new Uint8Array(1024)]);
+      await expect(
+        fastClient.uploadFile(blob, { signal: controller.signal }),
+      ).rejects.toBeInstanceOf(GislTimeoutError);
+    });
+
+    it('still classifies pure timeouts (no user signal) as GislTimeoutError', async () => {
+      const fastClient = new GislClient({
+        baseUrl: 'https://api.example.com',
+        apiKey: 'test-key',
+        timeout: 5,
+      });
+
+      fetchSpy.mockImplementationOnce(async (_url, init: RequestInit) => {
+        return new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener(
+            'abort',
+            () => {
+              const err = new Error('The operation was aborted');
+              err.name = 'AbortError';
+              reject(err);
+            },
+            { once: true },
+          );
+        });
+      });
+
+      const blob = new Blob([new Uint8Array(1024)]);
+      await expect(fastClient.uploadFile(blob)).rejects.toBeInstanceOf(
+        GislTimeoutError,
+      );
+    });
+
+    it('propagates abort during an S3 part PUT as GislAbortError', async () => {
+      const controller = new AbortController();
+
+      // 1) initiate — succeeds synchronously
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            upload_id: 'upload-mp-cancel',
+            mime_type: 'application/octet-stream',
+            first_chunk_etag: '"etag-part-1"',
+            first_chunk_size_bytes: DEFAULT_MULTIPART_FIRST_CHUNK_SIZE,
+            total_parts: 2,
+            recommended_chunk_size: TAIL_CHUNK_SIZE,
+            presigned_urls: [
+              {
+                part_number: 2,
+                url: 'https://s3.example.com/upload?part=2',
+                expires_at: '2026-04-18T09:00:00.000Z',
+              },
+            ],
+          },
+        }),
+      );
+
+      // 2) S3 PUT — hangs until abort fires, then rejects like fetch does.
+      //    Abort is triggered deterministically from inside the mock on the
+      //    next microtask (after the listener registers).
+      fetchSpy.mockImplementationOnce(async (_url, init: RequestInit) => {
+        return new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener(
+            'abort',
+            () => {
+              const err = new Error('The operation was aborted');
+              err.name = 'AbortError';
+              reject(err);
+            },
+            { once: true },
+          );
+          queueMicrotask(() => controller.abort());
+        });
+      });
+
+      const blob = new Blob([new Uint8Array(BLOB_SIZE)]);
+      await expect(
+        client.uploadFile(blob, { signal: controller.signal }),
+      ).rejects.toBeInstanceOf(GislAbortError);
+      // Complete was never called — abort drained the queue before the
+      // finish leg ran.
+      const urls = fetchSpy.mock.calls.map((c) => c[0] as string);
+      expect(urls.some((u) => u.includes('/multipart/complete'))).toBe(false);
+    });
+
+    it('propagates abort during /multipart/complete as GislAbortError', async () => {
+      const controller = new AbortController();
+
+      // 1) initiate succeeds
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            upload_id: 'upload-mp-complete-abort',
+            mime_type: 'application/octet-stream',
+            first_chunk_etag: '"etag-part-1"',
+            first_chunk_size_bytes: DEFAULT_MULTIPART_FIRST_CHUNK_SIZE,
+            total_parts: 2,
+            recommended_chunk_size: TAIL_CHUNK_SIZE,
+            presigned_urls: [
+              {
+                part_number: 2,
+                url: 'https://s3.example.com/upload?part=2',
+                expires_at: '2026-04-18T09:00:00.000Z',
+              },
+            ],
+          },
+        }),
+      );
+      // 2) S3 PUT succeeds
+      fetchSpy.mockResolvedValueOnce(
+        new Response('', {
+          status: 200,
+          headers: { etag: '"etag-part-2"' },
+        }),
+      );
+      // 3) /multipart/complete hangs on the signal, then rejects on abort.
+      //    Deterministic: only this leg's mock schedules the abort, so we
+      //    know the previous fetches have already completed when it fires.
+      fetchSpy.mockImplementationOnce(async (_url, init: RequestInit) => {
+        return new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener(
+            'abort',
+            () => {
+              const err = new Error('The operation was aborted');
+              err.name = 'AbortError';
+              reject(err);
+            },
+            { once: true },
+          );
+          queueMicrotask(() => controller.abort());
+        });
+      });
+
+      const blob = new Blob([new Uint8Array(BLOB_SIZE)]);
+      await expect(
+        client.uploadFile(blob, { signal: controller.signal }),
+      ).rejects.toBeInstanceOf(GislAbortError);
+      // Exactly 3 fetches: initiate, S3 PUT, complete (aborted). No 4th.
+      expect(fetchSpy.mock.calls).toHaveLength(3);
+      const completeUrl = fetchSpy.mock.calls[2][0] as string;
+      expect(completeUrl).toContain('/multipart/complete');
+    });
+
+    it('surfaces abort fired BEFORE the first S3 PUT dispatches', async () => {
+      const controller = new AbortController();
+
+      // 1) initiate resolves — but on resolve we trip the user signal in a
+      //    microtask, BEFORE the multipart worker loop pulls from the queue.
+      fetchSpy.mockImplementationOnce(async () => {
+        const response = jsonResponse({
+          success: true,
+          data: {
+            upload_id: 'upload-mp-gap',
+            mime_type: 'application/octet-stream',
+            first_chunk_etag: '"etag-part-1"',
+            first_chunk_size_bytes: DEFAULT_MULTIPART_FIRST_CHUNK_SIZE,
+            total_parts: 2,
+            recommended_chunk_size: TAIL_CHUNK_SIZE,
+            presigned_urls: [
+              {
+                part_number: 2,
+                url: 'https://s3.example.com/upload?part=2',
+                expires_at: '2026-04-18T09:00:00.000Z',
+              },
+            ],
+          },
+        });
+        queueMicrotask(() => controller.abort());
+        return response;
+      });
+
+      const blob = new Blob([new Uint8Array(BLOB_SIZE)]);
+      await expect(
+        client.uploadFile(blob, { signal: controller.signal }),
+      ).rejects.toBeInstanceOf(GislAbortError);
+
+      // Only the initiate fetch ran. No S3 PUT or complete call escaped.
+      expect(fetchSpy.mock.calls).toHaveLength(1);
+      const urls = fetchSpy.mock.calls.map((c) => c[0] as string);
+      expect(urls.some((u) => u.includes('s3.example.com'))).toBe(false);
+      expect(urls.some((u) => u.includes('/multipart/complete'))).toBe(false);
+    });
+
+    it('does not leak listeners when the same AbortController is reused across uploads', async () => {
+      const controller = new AbortController();
+
+      // 20 successful single-part uploads, same controller passed to each.
+      // If bindAbortSignal fails to remove its listener after each request
+      // settles, the listener count grows unbounded.
+      for (let i = 0; i < 20; i++) {
+        fetchSpy.mockResolvedValueOnce(
+          jsonResponse({
+            success: true,
+            data: {
+              file_id: `file-${i}`,
+              original_name: 'upload',
+              mime_type: 'application/octet-stream',
+              size_bytes: 1024,
+            },
+          }),
+        );
+      }
+
+      const blob = new Blob([new Uint8Array(1024)]);
+      for (let i = 0; i < 20; i++) {
+        await client.uploadFile(blob, { signal: controller.signal });
+      }
+
+      // @ts-expect-error — Node-only util, typed via @types/node but on the
+      // events module. Re-importing adds noise; the cast is local to this test.
+      const { getEventListeners } = await import('node:events');
+      expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
+    });
+
+    it('tiebreak: user aborts BEFORE the timer could fire → GislAbortError with user-intent message', async () => {
+      const fastClient = new GislClient({
+        baseUrl: 'https://api.example.com',
+        apiKey: 'test-key',
+        timeout: 500, // timer won't realistically fire during this test
+      });
+      const controller = new AbortController();
+
+      fetchSpy.mockImplementationOnce(async (_url, init: RequestInit) => {
+        return new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener(
+            'abort',
+            () => {
+              const err = new Error('The operation was aborted');
+              err.name = 'AbortError';
+              reject(err);
+            },
+            { once: true },
+          );
+          // User aborts deterministically on the next microtask —
+          // well before the 500ms internal timer could ever trip.
+          queueMicrotask(() => controller.abort());
+        });
+      });
+
+      const blob = new Blob([new Uint8Array(1024)]);
+      try {
+        await fastClient.uploadFile(blob, { signal: controller.signal });
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislAbortError);
+        expect((err as Error).name).toBe('GislAbortError');
+        // Classification must surface the user cancellation, not a timeout.
+        expect((err as Error).message).not.toMatch(/timed out/i);
+        expect((err as Error).message).toMatch(/aborted/i);
+      }
+    });
+
+    it('backcompat: uploadFile without signal behaves exactly as before', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            file_id: 'file-no-signal',
+            original_name: 'upload',
+            mime_type: 'application/octet-stream',
+            size_bytes: 1024,
+          },
+        }),
+      );
+
+      const blob = new Blob([new Uint8Array(1024)]);
+      const result = await client.uploadFile(blob);
+
+      expect(result.fileId).toBe('file-no-signal');
+      // The fetch got a signal, but it was the internal per-request timeout
+      // signal — not the one we never passed.
+      const init = fetchSpy.mock.calls[0][1] as RequestInit;
+      expect(init.signal).toBeDefined();
     });
   });
 
