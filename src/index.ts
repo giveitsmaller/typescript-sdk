@@ -80,7 +80,10 @@ export type {
   ConvertDocumentPdfOptions,
   MergeImageOptions,
   MergeVideoOptions,
+  MergeVideoPerInputOptions,
   MergeAudioOptions,
+  MergeAudioPerInputOptions,
   MergeDocumentOptions,
+  MergeDocumentPerInputOptions,
   ArchiveOptions,
 } from '@giveitsmaller/contracts/operations';
