@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { GislClient, DEFAULT_MULTIPART_FIRST_CHUNK_SIZE } from '../../src/client.js';
+import { uploadSource } from '../../src/types.js';
 import {
   GislAbortError,
   GislApiError,
@@ -237,13 +238,28 @@ describe('GislClient', () => {
 
   describe('createWorkflow', () => {
     it('sends wire-format JSON payload', async () => {
+      // Envelope must satisfy WorkflowCreateResponseFromJSON's required v2
+      // fields (workflow_id, status, created_at, jobs, delivery_plan,
+      // processing_plan, warnings) — server emits empty arrays rather than
+      // omitting these per the V2 cutover invariant. Pre-T4 mock omitted
+      // `created_at` / `delivery_plan` / `processing_plan` / `warnings` and
+      // tripped `(json['warnings']).map is not a function` inside FromJSON.
       fetchSpy.mockResolvedValueOnce(
         jsonResponse({
           success: true,
           data: {
             workflow_id: 'wf-1',
             status: 'pending',
+            created_at: '2026-04-27T10:00:00Z',
             jobs: [],
+            delivery_plan: {
+              mode: 'individual',
+              selection_type: 'terminal',
+              outputs: [],
+              hidden_outputs: [],
+            },
+            processing_plan: { jobs: [] },
+            warnings: [],
           },
         }),
       );
@@ -251,8 +267,8 @@ describe('GislClient', () => {
       const result = await client.createWorkflow({
         jobs: [
           {
-            ref: 'job-1',
-            file_id: 'file-abc',
+            id: 'job_compressed',
+            source: uploadSource('file-abc'),
             operations: [{ type: 'compress', options: { quality: 80 } }],
           },
         ],
@@ -268,7 +284,62 @@ describe('GislClient', () => {
         'application/json',
       );
       const sentBody = JSON.parse(options.body as string);
-      expect(sentBody.jobs[0].file_id).toBe('file-abc');
+      expect(sentBody.jobs[0].source.type).toBe('upload');
+      expect(sentBody.jobs[0].source.file_id).toBe('file-abc');
+      // V1 `ref` field must NOT appear on v2 jobs (regression guard).
+      expect('ref' in sentBody.jobs[0]).toBe(false);
+    });
+
+    it('forwards top-level v2 envelope fields (delivery / processing / export) on the wire', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              workflow_id: 'wf-1',
+              jobs: [],
+              created_at: '2026-04-27T00:00:00Z',
+              warnings: [],
+              delivery_plan: {
+                mode: 'individual',
+                selection_type: 'all_outputs',
+                outputs: [],
+                hidden_outputs: [],
+                reasons: [],
+              },
+              processing_plan: { jobs: [] },
+            },
+          }),
+          { status: 201, headers: { 'Content-Type': 'application/json' } },
+        ),
+      );
+
+      await client.createWorkflow({
+        jobs: [
+          {
+            id: 'compressed',
+            source: uploadSource('file-abc'),
+            operations: [{ type: 'compress', options: { quality: 80 } }],
+          },
+        ],
+        delivery: { mode: 'bundle', bundle_format: 'zip' },
+        processing: { class_hint: 'long_form_preferred' },
+        export: {
+          type: 'connection',
+          connection_id: 'conn_1',
+          path: '/exports/run-1',
+        },
+      });
+
+      const [, options] = fetchSpy.mock.calls[0] as [URL | string, RequestInit];
+      const sentBody = JSON.parse(options.body as string);
+      expect(sentBody.delivery).toEqual({ mode: 'bundle', bundle_format: 'zip' });
+      expect(sentBody.processing).toEqual({ class_hint: 'long_form_preferred' });
+      expect(sentBody.export).toEqual({
+        type: 'connection',
+        connection_id: 'conn_1',
+        path: '/exports/run-1',
+      });
     });
   });
 

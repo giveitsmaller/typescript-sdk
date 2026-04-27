@@ -9,6 +9,7 @@ import type {
   SseJobFailedData,
   SseWorkflowTerminalData,
 } from '@giveitsmaller/contracts/openapi';
+import type { JobInputV2RoleEnum } from '@giveitsmaller/contracts/openapi';
 
 // ---------------------------------------------------------------------------
 // Client configuration
@@ -44,7 +45,7 @@ export interface GislClientConfig {
 }
 
 // ---------------------------------------------------------------------------
-// Job definition (typed replacement for generated `any`)
+// Operation definition (typed replacement for generated `any`)
 // ---------------------------------------------------------------------------
 
 export interface OperationDef {
@@ -52,70 +53,150 @@ export interface OperationDef {
   options?: Record<string, unknown>;
 }
 
-/** Job sourced from an uploaded file */
-export interface FileJobPayload {
-  ref: string;
+// ---------------------------------------------------------------------------
+// v2 source variants — discriminated by `type` wire key
+// ---------------------------------------------------------------------------
+
+export interface UploadSourcePayload {
+  type: 'upload';
   file_id: string;
-  operations: OperationDef[];
 }
 
-/** Job sourced from a single upstream job's output */
-export interface SourceJobPayload {
+export interface JobOutputSourcePayload {
+  type: 'job_output';
+  from: string;
+  operation?: string;
+}
+
+export interface ExternalImportSourcePayload {
+  type: 'external_import';
+  external_source_id: string;
+}
+
+export interface ConnectionSourcePayload {
+  type: 'connection';
+  connection_id: string;
+  path: string;
+}
+
+export type WorkflowSourcePayload =
+  | UploadSourcePayload
+  | JobOutputSourcePayload
+  | ExternalImportSourcePayload
+  | ConnectionSourcePayload;
+
+// ---------------------------------------------------------------------------
+// Source factories — return wire-format objects with the `type` discriminator
+// ---------------------------------------------------------------------------
+
+export function uploadSource(fileId: string): UploadSourcePayload {
+  return { type: 'upload', file_id: fileId };
+}
+
+export function jobOutputSource(
+  from: string,
+  operation?: string,
+): JobOutputSourcePayload {
+  return operation === undefined
+    ? { type: 'job_output', from }
+    : { type: 'job_output', from, operation };
+}
+
+export function externalImportSource(
+  externalSourceId: string,
+): ExternalImportSourcePayload {
+  return { type: 'external_import', external_source_id: externalSourceId };
+}
+
+export function connectionSource(
+  connectionId: string,
+  path: string,
+): ConnectionSourcePayload {
+  return { type: 'connection', connection_id: connectionId, path };
+}
+
+// ---------------------------------------------------------------------------
+// JobInputV2 — multi-input entry per ADR-0004
+// ---------------------------------------------------------------------------
+
+export interface JobInputV2Payload {
+  source: WorkflowSourcePayload;
+  role?: JobInputV2RoleEnum;
+  per_input_options?: Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
+// JobDefinition (single shape; `source` XOR `inputs[]` — runtime-enforced)
+// ---------------------------------------------------------------------------
+
+export interface JobDefinitionPayload {
+  /**
+   * Optional local identifier within the workflow. Server auto-generates
+   * `^job_\d+$` when omitted; the SDK MUST NOT auto-generate. Required
+   * when this job is referenced by another job's `JobOutputSource.from`,
+   * `workflow_edges`, or `delivery.selection.explicit.refs[]`.
+   */
+  id?: string;
+  /** Single-input source. Mutually exclusive with `inputs[]` (server enforces). */
+  source?: WorkflowSourcePayload;
+  /** Multi-input list for merge / archive / image_watermark / custom_luma / audio_overlay. */
+  inputs?: JobInputV2Payload[];
+  operations: OperationDef[];
+  /** Per-job hide-intermediates promotion flag per ADR-0003. */
+  deliver?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// External destination (workflow-level export). Discriminated union over
+// `connection` | `external_import`. Replaces V1 `ExportConfig`.
+// ---------------------------------------------------------------------------
+
+export type ExternalDestinationPayload =
+  | { type: 'connection'; connection_id: string; path: string }
+  | { type: 'external_import'; external_source_id: string };
+
+// ---------------------------------------------------------------------------
+// Delivery (workflow-level) per ADR-0003
+// ---------------------------------------------------------------------------
+
+export type DeliveryModePayload = 'individual' | 'bundle' | 'both';
+export type DeliveryBundleFormatPayload = 'zip' | 'tar_gz';
+export type DeliverySelectionTypePayload = 'terminal' | 'all_outputs' | 'explicit';
+
+export interface DeliveryOutputRefPayload {
   ref: string;
-  source: { ref: string; operation?: string };
-  operations: OperationDef[];
+  operation?: string;
 }
 
-/** Job sourced from multiple upstream jobs (merge/archive) */
-export interface InputsJobPayload {
-  ref: string;
-  inputs: Array<{
-    ref: string;
-    operation?: string;
-    per_input_options?: Record<string, unknown>;
-  }>;
-  operations: OperationDef[];
+export interface DeliverySelectionPayload {
+  type: DeliverySelectionTypePayload;
+  refs?: DeliveryOutputRefPayload[];
 }
 
-export type JobDefinitionPayload =
-  | FileJobPayload
-  | SourceJobPayload
-  | InputsJobPayload;
-
-// ---------------------------------------------------------------------------
-// Job factory functions
-// ---------------------------------------------------------------------------
-
-export function fileJob(
-  ref: string,
-  fileId: string,
-  operations: OperationDef[],
-): FileJobPayload {
-  return { ref, file_id: fileId, operations };
-}
-
-export function sourceJob(
-  ref: string,
-  source: { ref: string; operation?: string },
-  operations: OperationDef[],
-): SourceJobPayload {
-  return { ref, source, operations };
-}
-
-export function inputsJob(
-  ref: string,
-  inputs: Array<{
-    ref: string;
-    operation?: string;
-    per_input_options?: Record<string, unknown>;
-  }>,
-  operations: OperationDef[],
-): InputsJobPayload {
-  return { ref, inputs, operations };
+export interface DeliveryPayload {
+  mode?: DeliveryModePayload;
+  bundle_format?: DeliveryBundleFormatPayload;
+  bundle_filename?: string;
+  include_metadata?: boolean;
+  selection?: DeliverySelectionPayload;
 }
 
 // ---------------------------------------------------------------------------
-// Workflow creation request (SDK-level, wire-format ready)
+// Workflow processing hint (workflow-level) per I15-CONS
+// ---------------------------------------------------------------------------
+
+export type ProcessingClassHintPayload =
+  | 'auto'
+  | 'short_form_only'
+  | 'long_form_allowed'
+  | 'long_form_preferred';
+
+export interface WorkflowProcessingPayload {
+  class_hint?: ProcessingClassHintPayload;
+}
+
+// ---------------------------------------------------------------------------
+// Workflow creation request (SDK-level, wire-format ready, snake_case)
 // ---------------------------------------------------------------------------
 
 export interface WorkflowCreatePayload {
@@ -123,12 +204,9 @@ export interface WorkflowCreatePayload {
   workflow_edges?: Array<{ from: string; to: string }>;
   callback_url?: string;
   callback_events?: CallbackEventType[];
-  export?: {
-    service: 's3';
-    bucket: string;
-    key_prefix?: string;
-    role_arn: string;
-  };
+  export?: ExternalDestinationPayload;
+  delivery?: DeliveryPayload;
+  processing?: WorkflowProcessingPayload;
 }
 
 /**
@@ -144,6 +222,8 @@ export const WORKFLOW_CREATE_PAYLOAD_KEYS = Object.freeze([
   'callback_url',
   'callback_events',
   'export',
+  'delivery',
+  'processing',
 ] as const);
 
 // Compile-time invariant: WORKFLOW_CREATE_PAYLOAD_KEYS must exactly equal

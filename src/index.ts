@@ -11,12 +11,29 @@ export type {
   WaitOptions,
   WorkflowCreatePayload,
   OperationDef,
-  FileJobPayload,
-  SourceJobPayload,
-  InputsJobPayload,
+  WorkflowSourcePayload,
+  UploadSourcePayload,
+  JobOutputSourcePayload,
+  ExternalImportSourcePayload,
+  ConnectionSourcePayload,
+  JobInputV2Payload,
   JobDefinitionPayload,
+  ExternalDestinationPayload,
+  DeliveryPayload,
+  DeliveryModePayload,
+  DeliveryBundleFormatPayload,
+  DeliverySelectionPayload,
+  DeliverySelectionTypePayload,
+  DeliveryOutputRefPayload,
+  WorkflowProcessingPayload,
+  ProcessingClassHintPayload,
 } from './types.js';
-export { fileJob, sourceJob, inputsJob } from './types.js';
+export {
+  uploadSource,
+  jobOutputSource,
+  externalImportSource,
+  connectionSource,
+} from './types.js';
 
 // Errors
 export {
@@ -49,7 +66,11 @@ export type {
   JobResponse,
   OperationResponse,
   OperationResult,
-  ExportConfig,
+  ExternalDestination,
+  Delivery,
+  WorkflowProcessing,
+  JobInputV2,
+  WorkflowSource,
 } from '@giveitsmaller/contracts/openapi';
 
 export {
@@ -59,6 +80,7 @@ export {
   CallbackEventType,
   OperationStatus,
   JobStatus,
+  JobInputV2RoleEnum,
 } from '@giveitsmaller/contracts/openapi';
 
 export type {
@@ -91,7 +113,9 @@ export type {
   MergeVideoPerInputOptions,
   MergeAudioOptions,
   MergeAudioPerInputOptions,
-  MergeDocumentOptions,
-  MergeDocumentPerInputOptions,
+  // MergeDocumentOptions / MergeDocumentPerInputOptions removed in v2:
+  // MergeOutputType was narrowed to drop `image` and `document` per the
+  // spike doc (§3, I12 BREAKING). Consumer migration guidance lives in
+  // T8a (AJlSc6DI / mCRKA1m5).
   ArchiveOptions,
 } from '@giveitsmaller/contracts/operations';

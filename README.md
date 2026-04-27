@@ -13,7 +13,7 @@ Node.js 18+ required.
 ## Quickstart
 
 ```ts
-import { GislClient, fileJob, OperationType } from '@giveitsmaller/sdk';
+import { GislClient, uploadSource, OperationType } from '@giveitsmaller/sdk';
 
 const client = new GislClient({
   baseUrl: 'https://api.giveitsmaller.com',
@@ -24,9 +24,13 @@ const upload = await client.uploadFile('./photo.jpg');
 
 const workflow = await client.createWorkflow({
   jobs: [
-    fileJob('compressed', upload.fileId, [
-      { type: OperationType.compress, options: { mode: 'lossy', quality: 80 } },
-    ]),
+    {
+      id: 'compressed',
+      source: uploadSource(upload.fileId),
+      operations: [
+        { type: OperationType.compress, options: { mode: 'lossy', quality: 80 } },
+      ],
+    },
   ],
 });
 
