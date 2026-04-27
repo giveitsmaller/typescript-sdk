@@ -2013,4 +2013,332 @@ describe('GislClient', () => {
       }
     });
   });
+
+  // -----------------------------------------------------------------------
+  // T5 (A0AV950u): upload thresholds + metadata_hint forwarding
+  //
+  // The v2 contract pins UploadThresholds.single_shot_max_bytes at 10_000_000
+  // (was 10_485_760 / 10MiB pre-T5). Routing predicate is strictly
+  // `size > threshold`, so equal-to stays single-shot. The multipart-only
+  // `metadata_hint` form field is JSON-stringified and dropped on single-shot.
+  // -----------------------------------------------------------------------
+
+  describe('upload thresholds + metadata_hint', () => {
+    const SINGLE_SHOT_MAX_BYTES = 10_000_000; // mirror of client.ts module const
+    // Tail size when boundary+1 routes through multipart: total - 8MB first chunk.
+    // Stays positive because SINGLE_SHOT_MAX_BYTES (10_000_000) > first chunk (8_388_608).
+    const TAIL_BOUNDARY = SINGLE_SHOT_MAX_BYTES + 1 - DEFAULT_MULTIPART_FIRST_CHUNK_SIZE;
+
+    function singleUploadResponse(fileId = 'file-bound', sizeBytes = SINGLE_SHOT_MAX_BYTES): Response {
+      return jsonResponse({
+        success: true,
+        data: {
+          file_id: fileId,
+          original_name: 'upload',
+          mime_type: 'application/octet-stream',
+          size_bytes: sizeBytes,
+          constraints_applied: {
+            max_size_bytes: 10_000_000,
+            max_duration_seconds: null,
+            processing_class_pre_assignment: 'short_form',
+          },
+        },
+      });
+    }
+
+    interface MultipartMockOptions {
+      uploadId?: string;
+      tailSize?: number;
+      mimeType?: string;
+      constraintsApplied?: {
+        max_size_bytes: number;
+        max_duration_seconds: number | null;
+        processing_class_pre_assignment: 'short_form' | 'long_form' | 'unknown';
+      };
+    }
+
+    function mockMultipartFlow(opts: MultipartMockOptions = {}): {
+      uploadId: string;
+      tailSize: number;
+    } {
+      const uploadId = opts.uploadId ?? 'upload-thr-1';
+      const tailSize = opts.tailSize ?? TAIL_BOUNDARY;
+      const constraintsApplied = opts.constraintsApplied ?? {
+        max_size_bytes: 10_000_000,
+        max_duration_seconds: null,
+        processing_class_pre_assignment: 'short_form' as const,
+      };
+
+      // Leg 1: initiate.
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            upload_id: uploadId,
+            mime_type: opts.mimeType ?? 'application/octet-stream',
+            first_chunk_etag: '"etag-part-1"',
+            first_chunk_size_bytes: DEFAULT_MULTIPART_FIRST_CHUNK_SIZE,
+            total_parts: 2,
+            recommended_chunk_size: tailSize,
+            presigned_urls: [
+              {
+                part_number: 2,
+                url: 'https://s3.example.com/upload?part=2',
+                expires_at: '2099-01-01T00:00:00.000Z',
+              },
+            ],
+            constraints_applied: constraintsApplied,
+          },
+        }),
+      );
+      // Leg 2: S3 PUT.
+      fetchSpy.mockResolvedValueOnce(
+        new Response('', {
+          status: 200,
+          headers: { etag: '"etag-part-2"' },
+        }),
+      );
+      // Leg 3: complete.
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: true,
+            data: {
+              upload_id: uploadId,
+              status: 'completed',
+            },
+          },
+          201,
+        ),
+      );
+      return { uploadId, tailSize };
+    }
+
+    // Helper: extract a multipart FormData body from a fetchSpy invocation. We
+    // can't introspect the FormData via the captured RequestInit alone (it's
+    // an opaque BodyInit at the type level), but the tests pass FormData
+    // directly so a runtime cast is sound.
+    function formDataAt(callIndex: number): FormData {
+      const init = fetchSpy.mock.calls[callIndex][1] as RequestInit;
+      const body = init.body;
+      if (!(body instanceof FormData)) {
+        throw new Error(
+          `formDataAt(${callIndex}): body is not FormData (got ${Object.prototype.toString.call(body)})`,
+        );
+      }
+      return body;
+    }
+
+    it('routes single-shot at the threshold boundary (size === 10_000_000)', async () => {
+      fetchSpy.mockResolvedValueOnce(singleUploadResponse());
+
+      const blob = new Blob([new Uint8Array(SINGLE_SHOT_MAX_BYTES)]);
+      await client.uploadFile(blob);
+
+      // Exactly one outbound call to /api/uploads. No multipart legs.
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      const [url] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('https://api.example.com/api/uploads');
+      expect(url).not.toContain('multipart');
+    });
+
+    it('routes multipart above the boundary (size === 10_000_001)', async () => {
+      mockMultipartFlow();
+
+      const blob = new Blob([new Uint8Array(SINGLE_SHOT_MAX_BYTES + 1)]);
+      await client.uploadFile(blob);
+
+      // Three legs: initiate, S3 PUT, complete. The first call MUST be
+      // /multipart/initiate — single-shot would have been just /api/uploads.
+      expect(fetchSpy).toHaveBeenCalledTimes(3);
+      const [initUrl] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      expect(initUrl).toBe('https://api.example.com/api/uploads/multipart/initiate');
+    });
+
+    it('default multipartThreshold matches the v2 single_shot_max_bytes const (10_000_000)', async () => {
+      // No explicit multipartThreshold — exercise the default. Two clients
+      // (one per blob size) so the fetch mock stack stays simple.
+      const defaultClient = new GislClient({
+        baseUrl: 'https://api.example.com',
+        apiKey: 'test-key',
+      });
+
+      // Below boundary: still single-shot.
+      fetchSpy.mockResolvedValueOnce(singleUploadResponse('file-eq', SINGLE_SHOT_MAX_BYTES));
+      await defaultClient.uploadFile(
+        new Blob([new Uint8Array(SINGLE_SHOT_MAX_BYTES)]),
+      );
+      expect(fetchSpy.mock.calls).toHaveLength(1);
+      expect(fetchSpy.mock.calls[0][0]).toBe('https://api.example.com/api/uploads');
+
+      // Above boundary: multipart. We need a SECOND independent client
+      // because the abovesize blob queues 3 mocks; otherwise the prior
+      // single-shot test could pollute call ordering.
+      mockMultipartFlow({ uploadId: 'upload-default' });
+      await defaultClient.uploadFile(
+        new Blob([new Uint8Array(SINGLE_SHOT_MAX_BYTES + 1)]),
+      );
+      // Total now 4 calls: 1 single-shot (above) + 3 multipart (init/PUT/complete).
+      expect(fetchSpy.mock.calls).toHaveLength(4);
+      expect(fetchSpy.mock.calls[1][0]).toBe(
+        'https://api.example.com/api/uploads/multipart/initiate',
+      );
+    });
+
+    it('forwards metadataHint as a snake_case-serialised single FormData field on multipart initiate', async () => {
+      mockMultipartFlow();
+
+      const hint = { durationSeconds: 30, width: 1920, height: 1080 };
+      const blob = new Blob([new Uint8Array(SINGLE_SHOT_MAX_BYTES + 1)]);
+      await client.uploadFile(blob, { metadataHint: hint });
+
+      // The hint is routed through the generated `ToJSON` helper before
+      // stringification so the wire form uses the contract-pinned
+      // snake_case keys (`duration_seconds`, NOT `durationSeconds`).
+      const initiateForm = formDataAt(0);
+      const all = initiateForm.getAll('metadata_hint');
+      expect(all).toHaveLength(1);
+      const parsed = JSON.parse(all[0] as string);
+      expect(parsed).toEqual({
+        duration_seconds: 30,
+        width: 1920,
+        height: 1080,
+      });
+      // Regression guard: camelCase keys must NOT appear on the wire.
+      expect(parsed).not.toHaveProperty('durationSeconds');
+    });
+
+    it('omits metadata_hint when metadataHint is undefined on multipart upload', async () => {
+      mockMultipartFlow();
+      const blob = new Blob([new Uint8Array(SINGLE_SHOT_MAX_BYTES + 1)]);
+      await client.uploadFile(blob);
+
+      const initiateForm = formDataAt(0);
+      // No `metadata_hint` field at all — not even an empty string.
+      expect(initiateForm.has('metadata_hint')).toBe(false);
+      expect(initiateForm.getAll('metadata_hint')).toHaveLength(0);
+    });
+
+    it('silently ignores metadataHint on a single-shot upload (sub-threshold)', async () => {
+      fetchSpy.mockResolvedValueOnce(singleUploadResponse('file-small', 100));
+
+      const blob = new Blob([new Uint8Array(100)]);
+      await client.uploadFile(blob, {
+        metadataHint: { durationSeconds: 30, width: 1920, height: 1080 },
+      });
+
+      // Single-shot path. The /api/uploads body must NOT carry metadata_hint —
+      // the contract only accepts it on /multipart/initiate.
+      const form = formDataAt(0);
+      expect(form.has('metadata_hint')).toBe(false);
+    });
+
+    it('synthesised UploadResponse forwards constraintsApplied from the initiate response', async () => {
+      const constraints = {
+        max_size_bytes: 524_288_000,
+        max_duration_seconds: 600,
+        processing_class_pre_assignment: 'short_form' as const,
+      };
+      mockMultipartFlow({ constraintsApplied: constraints });
+
+      const blob = new Blob([new Uint8Array(SINGLE_SHOT_MAX_BYTES + 1)]);
+      const result = await client.uploadFile(blob);
+
+      // Structural equality — the implementer notes the synthesis returns the
+      // SAME object reference, but pinning shape is more refactor-robust.
+      expect(result.constraintsApplied).toEqual({
+        maxSizeBytes: 524_288_000,
+        maxDurationSeconds: 600,
+        processingClassPreAssignment: 'short_form',
+      });
+    });
+
+    it('round-trips processing_class_pre_assignment="long_form" through the synthesised UploadResponse', async () => {
+      mockMultipartFlow({
+        constraintsApplied: {
+          max_size_bytes: 1_073_741_824,
+          max_duration_seconds: 7200,
+          processing_class_pre_assignment: 'long_form',
+        },
+      });
+
+      const blob = new Blob([new Uint8Array(SINGLE_SHOT_MAX_BYTES + 1)]);
+      const result = await client.uploadFile(blob);
+
+      expect(result.constraintsApplied.processingClassPreAssignment).toBe('long_form');
+      expect(result.constraintsApplied.maxSizeBytes).toBe(1_073_741_824);
+      expect(result.constraintsApplied.maxDurationSeconds).toBe(7200);
+    });
+
+    it('honours caller-supplied multipartThreshold override at its boundary', async () => {
+      // Custom threshold above the v2 default (10_000_000) and above the
+      // 8 MiB floor — exercises the configurable path independently of the
+      // default-const tests above. Concrete regression guard: a future
+      // change of `>` to `>=` in the routing predicate would fail here.
+      const overrideClient = new GislClient({
+        baseUrl: 'https://api.example.com',
+        apiKey: 'test-api-key',
+        multipartThreshold: 12_000_000,
+      });
+
+      // Boundary-exact: 12_000_000 → single-shot.
+      fetchSpy.mockResolvedValueOnce(
+        singleUploadResponse('file-override-exact', 12_000_000),
+      );
+      const exact = new Blob([new Uint8Array(12_000_000)]);
+      await overrideClient.uploadFile(exact);
+      expect(fetchSpy.mock.calls).toHaveLength(1);
+      const exactUrl = String(fetchSpy.mock.calls[0]?.[0]);
+      expect(exactUrl).toContain('/api/uploads');
+      expect(exactUrl).not.toContain('multipart');
+
+      fetchSpy.mockClear();
+
+      // One byte over → multipart. Stretch tailSize to match the over-blob.
+      mockMultipartFlow({
+        uploadId: 'upload-override-over',
+        tailSize: 12_000_001 - DEFAULT_MULTIPART_FIRST_CHUNK_SIZE,
+      });
+      const over = new Blob([new Uint8Array(12_000_001)]);
+      await overrideClient.uploadFile(over);
+      const initiateUrl = String(fetchSpy.mock.calls[0]?.[0]);
+      expect(initiateUrl).toContain('/api/uploads/multipart/initiate');
+    });
+
+    it('single-shot UploadResponse round-trips constraintsApplied via FromJSON', async () => {
+      // Synthesis path is covered above; this pins the FromJSON path so a
+      // regression replacing UploadResponseFromJSON with a hand-rolled
+      // mapper that drops constraintsApplied still fails the unit suite
+      // (parity catches it too but unit feedback is faster).
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: true,
+            data: {
+              file_id: '01936fb2-0000-7000-8000-000000000099',
+              original_name: 'small.bin',
+              mime_type: 'image/jpeg',
+              size_bytes: 1024,
+              constraints_applied: {
+                max_size_bytes: 10_000_000,
+                max_duration_seconds: null,
+                processing_class_pre_assignment: 'short_form',
+              },
+            },
+          },
+          200,
+        ),
+      );
+
+      const blob = new Blob([new Uint8Array(1024)]);
+      const result = await client.uploadFile(blob);
+
+      expect(result.constraintsApplied).toEqual({
+        maxSizeBytes: 10_000_000,
+        processingClassPreAssignment: 'short_form',
+      });
+      // `null` wire value normalises to undefined post-FromJSON.
+      expect(result.constraintsApplied.maxDurationSeconds).toBeUndefined();
+    });
+  });
 });

@@ -4,6 +4,7 @@ import { basename } from 'node:path';
 import {
   UploadResponseFromJSON,
   MultipartInitiateResponseFromJSON,
+  MultipartInitiateRequestMetadataHintToJSON,
   MultipartCompleteResponseFromJSON,
   MultipartCompleteRequestToJSON,
   WorkflowCreateResponseFromJSON,
@@ -23,6 +24,9 @@ import {
   TierRestrictionResponseFromJSON,
   UserTier,
   WorkflowExpiredResponseFromJSON,
+  UploadThresholdsSingleShotMaxBytesEnum,
+  UploadThresholdsMultipartChunkSizeEnum,
+  UploadThresholdsMultipartConcurrencyDefaultEnum,
 } from '@giveitsmaller/contracts/openapi';
 
 import type {
@@ -62,8 +66,38 @@ import type {
 } from './types.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
-const DEFAULT_MULTIPART_THRESHOLD = 10 * 1024 * 1024; // 10 MB
-const DEFAULT_MULTIPART_CONCURRENCY = 4;
+// SDK-internal aliases derived from the contract-pinned UploadThresholds enums
+// (compression_contracts/openapi schema `UploadThresholds`, ticket u0ar7Yye).
+// `satisfies number` keeps the literal type so the drift guards below pin the
+// expected value at compile time. Bumping any of these requires a contracts
+// release that regenerates the corresponding *Enum, plus updating the literal
+// in the matching `_AssertTrue<>` line.
+const SINGLE_SHOT_MAX_BYTES =
+  UploadThresholdsSingleShotMaxBytesEnum.NUMBER_10000000 satisfies number;
+const MULTIPART_CHUNK_SIZE =
+  UploadThresholdsMultipartChunkSizeEnum.NUMBER_5242880 satisfies number;
+const MULTIPART_CONCURRENCY_DEFAULT =
+  UploadThresholdsMultipartConcurrencyDefaultEnum.NUMBER_4 satisfies number;
+
+// Compile-time drift guards: pin the literal value of each constant so a
+// future contracts regen that changes the enum member breaks the build here
+// rather than silently shifting SDK behaviour. Mirrors the
+// WORKFLOW_CREATE_PAYLOAD_KEYS pattern in types.ts.
+type _AssertTrue<T extends true> = T;
+type _SingleShotMaxBytesIsTenMillion =
+  typeof SINGLE_SHOT_MAX_BYTES extends 10_000_000 ? true : false;
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+type _AssertSingleShotMaxBytes = _AssertTrue<_SingleShotMaxBytesIsTenMillion>;
+type _MultipartChunkSizeIsFiveMiB =
+  typeof MULTIPART_CHUNK_SIZE extends 5_242_880 ? true : false;
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+type _AssertMultipartChunkSize = _AssertTrue<_MultipartChunkSizeIsFiveMiB>;
+type _MultipartConcurrencyDefaultIsFour =
+  typeof MULTIPART_CONCURRENCY_DEFAULT extends 4 ? true : false;
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+type _AssertMultipartConcurrencyDefault =
+  _AssertTrue<_MultipartConcurrencyDefaultIsFour>;
+
 const DEFAULT_MULTIPART_MAX_ATTEMPTS = 3;
 const DEFAULT_MULTIPART_RETRY_BASE_MS = 500;
 // Fixed per contract (compression_contracts/openapi/api.yaml:134). The server
@@ -71,6 +105,8 @@ const DEFAULT_MULTIPART_RETRY_BASE_MS = 500;
 // it as S3 multipart part 1. Must NOT be derived from multipartThreshold —
 // that is the "use multipart above this size" routing threshold, a separate
 // concept. Conflating them caused the /api/uploads/multipart/initiate 413.
+// TODO(58nBQLWQ): replace with UploadThresholdsMultipartFirstChunkSizeEnum
+// once contracts ticket promotes this to a typed const (v2.3.1 follow-up).
 export const DEFAULT_MULTIPART_FIRST_CHUNK_SIZE = 8 * 1024 * 1024; // 8 MB
 const DEFAULT_POLL_INTERVAL_MS = 2_000;
 const DEFAULT_POLL_TIMEOUT_MS = 300_000; // 5 min
@@ -257,10 +293,10 @@ export class GislClient {
     // must always carry an 8MB chunk, so routing a sub-8MB file into the
     // multipart path would violate the contract.
     this.multipartThreshold = Math.max(
-      config.multipartThreshold ?? DEFAULT_MULTIPART_THRESHOLD,
+      config.multipartThreshold ?? SINGLE_SHOT_MAX_BYTES,
       DEFAULT_MULTIPART_FIRST_CHUNK_SIZE,
     );
-    this.multipartConcurrency = config.multipartConcurrency ?? DEFAULT_MULTIPART_CONCURRENCY;
+    this.multipartConcurrency = config.multipartConcurrency ?? MULTIPART_CONCURRENCY_DEFAULT;
     // Sanitise: reject NaN/Infinity (the former would cause `attempt < NaN`
     // to be perpetually false, skipping every PUT; the latter would retry
     // unboundedly). Floor at 1 so a misconfigured 0/negative still attempts
@@ -632,6 +668,21 @@ export class GislClient {
     initiateForm.append('file', firstChunk, fileName);
     initiateForm.append('filename', fileName);
     initiateForm.append('total_size', totalSize.toString());
+    if (options?.metadataHint !== undefined) {
+      // Wire format: a single FormData field carrying the JSON-stringified
+      // hint object. Single-shot uploads do not accept this field — see
+      // singleUpload() which silently ignores `options.metadataHint`.
+      // Route through the generated ToJSON helper so the wire form is the
+      // contract-pinned snake_case shape (`duration_seconds`, `width`,
+      // `height`). Stringify-ing the camelCase TS object directly would
+      // emit `durationSeconds` and the server would silently drop it,
+      // defeating the hint's primary use (long-form pre-classification when
+      // the first-chunk probe lacks container metadata).
+      initiateForm.append(
+        'metadata_hint',
+        JSON.stringify(MultipartInitiateRequestMetadataHintToJSON(options.metadataHint)),
+      );
+    }
 
     const initResponse = await this.request<MultipartInitiateResponse>(
       'POST',
@@ -876,6 +927,11 @@ export class GislClient {
       originalName: fileName,
       mimeType: initResponse.mimeType,
       sizeBytes: blob.size,
+      // Preserved from the initiate response: v2 contract makes
+      // `constraintsApplied` a REQUIRED field on UploadResponse, and the
+      // multipart/complete endpoint does not re-emit it. The first-chunk probe
+      // result on the initiate envelope is the authoritative source.
+      constraintsApplied: initResponse.constraintsApplied,
     };
   }
 

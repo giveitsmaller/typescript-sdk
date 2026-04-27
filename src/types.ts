@@ -8,6 +8,7 @@ import type {
   SseJobCompletedData,
   SseJobFailedData,
   SseWorkflowTerminalData,
+  MultipartInitiateRequestMetadataHint,
 } from '@giveitsmaller/contracts/openapi';
 import type { JobInputV2RoleEnum } from '@giveitsmaller/contracts/openapi';
 
@@ -289,4 +290,12 @@ export interface UploadOptions {
    * first → `GislAbortError`; timer first → `GislTimeoutError`.
    */
   signal?: AbortSignal;
+  /**
+   * Optional metadata hint forwarded to multipart initiate so the server
+   * can size-check and preflight-route based on caller-asserted dimensions.
+   * Single-shot uploads ignore this field (the multipart initiate is the
+   * only endpoint that accepts it). Wire-encoded as a JSON-stringified
+   * single FormData field on the multipart/initiate request.
+   */
+  metadataHint?: MultipartInitiateRequestMetadataHint;
 }
