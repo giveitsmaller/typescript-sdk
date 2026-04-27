@@ -115,7 +115,24 @@ export type {
   MergeAudioPerInputOptions,
   // MergeDocumentOptions / MergeDocumentPerInputOptions removed in v2:
   // MergeOutputType was narrowed to drop `image` and `document` per the
-  // spike doc (§3, I12 BREAKING). Consumer migration guidance lives in
-  // T8a (AJlSc6DI / mCRKA1m5).
+  // spike doc (§3, I12 BREAKING). Consumer migration guidance: T17
+  // (mCRKA1m5).
   ArchiveOptions,
+  // V1 `watermark` was split into `image_watermark` (multi-input,
+  // base + overlay) and `text_watermark` (single-input, image base) at
+  // the v2 cutover (I4-CONS, ADR-0004 §Greenfield V2.0). Consumer
+  // migration guidance lives in T17 (mCRKA1m5).
+  ImageWatermarkImageOptions,
+  ImageWatermarkImageGifOptions,
+  ImageWatermarkVideoOptions,
+  TextWatermarkImageOptions,
+} from '@giveitsmaller/contracts/operations';
+
+export {
+  ImageWatermarkImageAnchor,
+  ImageWatermarkImageGifAnchor,
+  ImageWatermarkVideoAnchor,
+  TextWatermarkImageAnchor,
+  TextWatermarkImageFontFamily,
+  TextWatermarkImageWatermarkMode,
 } from '@giveitsmaller/contracts/operations';
