@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { GislClient, DEFAULT_MULTIPART_FIRST_CHUNK_SIZE } from '../../src/client.js';
 import { uploadSource } from '../../src/types.js';
+import type { GislSseEvent } from '../../src/types.js';
 import {
   GislAbortError,
   GislApiError,
@@ -1618,13 +1619,64 @@ describe('GislClient', () => {
       );
 
       const eventStream = await client.streamEvents('wf-1');
-      const events = [];
+      const events: GislSseEvent[] = [];
       for await (const event of eventStream) {
         events.push(event);
       }
 
       expect(events).toHaveLength(1);
       expect(events[0].event).toBe('operation.progress');
+    });
+
+    it('narrows v2 phased ProgressStatus values via the GislSseEvent discriminator', async () => {
+      // T9 acceptance: GislSseEvent discrimination still works after the
+      // ProgressStatus widening (probing / decoding / encoding + phase_input_index
+      // + phase_total_inputs). Active narrowing test — a regression that drops
+      // the phased shape from SseOperationProgressData would surface here.
+      fetchSpy.mockResolvedValueOnce(
+        new Response(
+          'event: operation.progress\n' +
+          'data: {"operation_id":"01936fb3-0000-7000-8000-0000000000c1",' +
+          '"progress":40,"status":"decoding","phase_input_index":1,"phase_total_inputs":3}\n\n',
+          { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+        ),
+      );
+
+      const eventStream = await client.streamEvents('wf-1');
+      const events: GislSseEvent[] = [];
+      for await (const event of eventStream) {
+        events.push(event);
+      }
+
+      expect(events).toHaveLength(1);
+      const ev = events[0];
+      // Discriminator narrowing: TS knows ev.data is SseOperationProgressData
+      // when ev.event === 'operation.progress'.
+      if (ev.event === 'operation.progress') {
+        // GislSseEvent's union includes a `{event: string; data: unknown}`
+        // catch-all so discriminator narrowing alone leaves `data: unknown`.
+        // The SDK's SSE parser doesn't run wire JSON through `FromJSON`
+        // helpers, so consumers see raw snake_case wire fields — distinct
+        // from the camelCase `SseOperationProgressData` interface emitted
+        // by openapi-generator. Pin the wire shape with a local interface:
+        // a regression that drops the phased fields from the wire shape
+        // surfaces here as a `Property X does not exist` tsc error, not
+        // as a runtime undefined.
+        interface ProgressWireShape {
+          operation_id: string;
+          progress: number;
+          status: 'started' | 'downloading' | 'probing' | 'decoding'
+            | 'processing' | 'encoding' | 'uploading';
+          phase_input_index?: number;
+          phase_total_inputs?: number;
+        }
+        const data = ev.data as ProgressWireShape;
+        expect(data.status).toBe('decoding');
+        expect(data.phase_input_index).toBe(1);
+        expect(data.phase_total_inputs).toBe(3);
+      } else {
+        throw new Error(`expected operation.progress, got ${ev.event}`);
+      }
     });
   });
 
