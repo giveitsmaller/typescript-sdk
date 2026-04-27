@@ -193,6 +193,26 @@ describe('error classes', () => {
       expect(err.payload.violations[0].availability).toBe('planned');
     });
 
+    it.each([
+      ['operation.audio_overlay', '2026-Q4'],
+      ['operation.audio_watermark', '2027-Q1'],
+      ['operation.custom_luma', '2026-Q4'],
+    ] as const)('FeatureNotAvailable: planned op %s parses violation metadata', (feature, eta) => {
+      const err = new GislFeatureNotAvailableError(
+        422,
+        'Feature not available',
+        {
+          success: false,
+          error: 'Feature not available',
+          errorType: 'feature_not_available',
+          violations: [{ feature, availability: 'planned', eta }],
+        },
+      );
+      expect(err.payload.violations[0].feature).toBe(feature);
+      expect(err.payload.violations[0].availability).toBe('planned');
+      expect(err.payload.violations[0].eta).toBe(eta);
+    });
+
     it('WorkflowExpired: discriminator + expiredAt is a Date instance', () => {
       const expiredAt = new Date('2026-04-20T12:00:00Z');
       const err = new GislWorkflowExpiredError(

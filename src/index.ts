@@ -126,6 +126,16 @@ export type {
   ImageWatermarkImageGifOptions,
   ImageWatermarkVideoOptions,
   TextWatermarkImageOptions,
+  // Planned operation option types. The contract carries full schemas
+  // for these (so consumers can type their code today), but the API
+  // returns `feature_not_available` (422) until Lambda support ships.
+  // Detect planned status via the metadata sidecars below before
+  // sending requests.
+  CustomLumaVideoOptions,
+  AudioOverlayAudioOptions,
+  AudioOverlayVideoOptions,
+  AudioWatermarkAudioOptions,
+  AudioWatermarkVideoOptions,
 } from '@giveitsmaller/contracts/operations';
 
 export {
@@ -135,4 +145,42 @@ export {
   TextWatermarkImageAnchor,
   TextWatermarkImageFontFamily,
   TextWatermarkImageWatermarkMode,
+  AudioOverlayAudioMode,
+  AudioOverlayVideoMode,
+  AudioOverlayVideoNoAudioTrackBehaviour,
+  AudioWatermarkAudioMethod,
+  AudioWatermarkAudioRobustness,
+  AudioWatermarkAudioDensity,
+  AudioWatermarkVideoMethod,
+  AudioWatermarkVideoRobustness,
+  AudioWatermarkVideoDensity,
+} from '@giveitsmaller/contracts/operations';
+
+// Per-operation metadata sidecars. Inspect `availability`,
+// `required_tier`, per-value gating, mime-group availability and
+// per-feature flags before submitting a workflow — the API will
+// otherwise reject planned ops with `feature_not_available` (422,
+// surfaces as `GislFeatureNotAvailableError`).
+export {
+  archiveMetadata,
+  audioOverlayMetadata,
+  audioWatermarkMetadata,
+  compressMetadata,
+  convertMetadata,
+  customLumaMetadata,
+  imageWatermarkMetadata,
+  mergeMetadata,
+  textWatermarkMetadata,
+  thumbnailMetadata,
+} from '@giveitsmaller/contracts/operations';
+export type {
+  OperationMetadata,
+  AvailabilityValue,
+  AvailabilityEntry,
+  FeatureEntry,
+  MimeGroupMetadata,
+  OptionMetadata,
+  ProcessingClass,
+  ProcessingClassConstraints,
+  UserTier,
 } from '@giveitsmaller/contracts/operations';
