@@ -23,6 +23,24 @@ export interface GislClientConfig {
   multipartThreshold?: number;
   /** Max concurrent chunk uploads for multipart (default: 4) */
   multipartConcurrency?: number;
+  /**
+   * Max total attempts per multipart S3 PUT, including the first try
+   * (default: 3 — one initial + two retries). 0 or 1 disables retry.
+   * Non-finite or fractional values are coerced via `Math.floor` and
+   * floored at 1; `NaN`/`Infinity` fall back to the default.
+   * Retries fire on 5xx/429 responses and on network TypeError; 4xx (other
+   * than 429) and abort signals fail fast.
+   */
+  multipartMaxAttempts?: number;
+  /**
+   * Base milliseconds for full-jitter exponential backoff between multipart
+   * retry attempts (default: 500). Each retry's delay is `random(0, base * 2^n)`
+   * where n is the zero-indexed retry number. `0` opts out of backoff (retries
+   * fire immediately) — useful for tests; not recommended for production where
+   * jitter is the only defence against thundering-herd retry storms against
+   * shared-throttling sources like S3. `NaN`/`Infinity` fall back to the default.
+   */
+  multipartRetryBaseMs?: number;
 }
 
 // ---------------------------------------------------------------------------

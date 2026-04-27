@@ -41,6 +41,8 @@ import type {
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MULTIPART_THRESHOLD = 10 * 1024 * 1024; // 10 MB
 const DEFAULT_MULTIPART_CONCURRENCY = 4;
+const DEFAULT_MULTIPART_MAX_ATTEMPTS = 3;
+const DEFAULT_MULTIPART_RETRY_BASE_MS = 500;
 // Fixed per contract (compression_contracts/openapi/api.yaml:134). The server
 // uses the first chunk for MIME detection + throughput measurement and stores
 // it as S3 multipart part 1. Must NOT be derived from multipartThreshold —
@@ -82,6 +84,97 @@ function isAbortError(err: unknown): boolean {
   );
 }
 
+// Retryable S3 PUT response statuses: 429 throttling, 503 slow-down, and any
+// other 5xx (502/504 are common transients behind CloudFront/S3). 4xx other
+// than 429 (403 signed-URL expiry, 400 SignatureDoesNotMatch, etc.) are
+// configuration / authority issues — retrying just delays the real failure.
+function isRetryableStatus(status: number): boolean {
+  return status === 429 || (status >= 500 && status <= 599);
+}
+
+// fetch surfaces network failures (DNS, TLS, TCP reset, mid-body disconnect)
+// as TypeError. Abort surfaces as a DOMException with name='AbortError', not
+// a TypeError, so a plain instanceof check is sufficient — abort is filtered
+// before reaching here by the dedicated isAbortError guard in the catch.
+function isRetryableNetworkError(err: unknown): boolean {
+  return err instanceof TypeError;
+}
+
+// Full-jitter exponential backoff: delay = random(0, base * 2^attemptIndex).
+// AWS SDK guidance for shared-throttling sources like S3 — keeps competing
+// clients from synchronising their retries.
+function fullJitterDelay(baseMs: number, attemptIndex: number): number {
+  if (baseMs <= 0) return 0;
+  const ceiling = baseMs * Math.pow(2, attemptIndex);
+  return Math.floor(Math.random() * ceiling);
+}
+
+// Cancel a Response body so undici (Node 18+ fetch) releases the underlying
+// connection promptly instead of waiting for GC. We swallow any error: the
+// retry loop is about to re-PUT the chunk; failing the cleanup must not
+// shadow the real failure that triggered the retry.
+async function drainResponseBody(response: Response): Promise<void> {
+  try {
+    await response.body?.cancel();
+  } catch {
+    /* ignore */
+  }
+}
+
+// Reject NaN/Infinity and floor at 1 attempt. A misconfigured 0/negative
+// still attempts the PUT once (so callers see the underlying error rather
+// than a silent zero-PUT no-op).
+function sanitiseAttempts(value: number | undefined, fallback: number): number {
+  if (value === undefined || !Number.isFinite(value)) return fallback;
+  return Math.max(1, Math.floor(value));
+}
+
+// Reject NaN/Infinity and clamp at 0. `0` is permitted so callers can opt out
+// of backoff entirely (e.g. for fast-path tests); `Infinity` would otherwise
+// stall the retry loop indefinitely on the very first backoff.
+function sanitiseBaseMs(value: number | undefined, fallback: number): number {
+  if (value === undefined || !Number.isFinite(value)) return fallback;
+  return Math.max(0, Math.floor(value));
+}
+
+// Cancellable sleep. Resolves after `ms` ms, rejects with GislAbortError if
+// the caller's signal aborts, or resolves early (without throwing) if the
+// internal `wakeSignal` fires — that path lets a sibling worker's terminal
+// failure short-circuit a peer's backoff sleep without producing a spurious
+// abort error in the peer's own throw stack.
+function sleepWithEitherSignal(
+  ms: number,
+  abortSignal: AbortSignal | undefined,
+  wakeSignal: AbortSignal,
+): Promise<void> {
+  if (abortSignal?.aborted) {
+    return Promise.reject(new GislAbortError('Multipart upload aborted'));
+  }
+  if (wakeSignal.aborted || ms <= 0) return Promise.resolve();
+  return new Promise<void>((resolve, reject) => {
+    const cleanup = (): void => {
+      abortSignal?.removeEventListener('abort', onAbort);
+      wakeSignal.removeEventListener('abort', onWake);
+    };
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      cleanup();
+      reject(new GislAbortError('Multipart upload aborted'));
+    };
+    const onWake = (): void => {
+      clearTimeout(timer);
+      cleanup();
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, ms);
+    abortSignal?.addEventListener('abort', onAbort, { once: true });
+    wakeSignal.addEventListener('abort', onWake, { once: true });
+  });
+}
+
 // Wire an optional external AbortSignal onto an internal per-request controller
 // so either source trips the composed fetch. The `onExternalAbort` callback
 // fires the moment the external signal aborts — callers use it to capture the
@@ -117,6 +210,8 @@ export class GislClient {
   private readonly timeoutMs: number;
   private readonly multipartThreshold: number;
   private readonly multipartConcurrency: number;
+  private readonly multipartMaxAttempts: number;
+  private readonly multipartRetryBaseMs: number;
 
   constructor(config: GislClientConfig) {
     this.baseUrl = config.baseUrl.replace(/\/+$/, '');
@@ -129,6 +224,18 @@ export class GislClient {
       DEFAULT_MULTIPART_FIRST_CHUNK_SIZE,
     );
     this.multipartConcurrency = config.multipartConcurrency ?? DEFAULT_MULTIPART_CONCURRENCY;
+    // Sanitise: reject NaN/Infinity (the former would cause `attempt < NaN`
+    // to be perpetually false, skipping every PUT; the latter would retry
+    // unboundedly). Floor at 1 so a misconfigured 0/negative still attempts
+    // once.
+    this.multipartMaxAttempts = sanitiseAttempts(
+      config.multipartMaxAttempts,
+      DEFAULT_MULTIPART_MAX_ATTEMPTS,
+    );
+    this.multipartRetryBaseMs = sanitiseBaseMs(
+      config.multipartRetryBaseMs,
+      DEFAULT_MULTIPART_RETRY_BASE_MS,
+    );
 
     this.headers = { ...config.headers };
     if (config.apiKey) {
@@ -367,58 +474,158 @@ export class GislClient {
     const presignedUrls = initResponse.presignedUrls;
     const chunkSize = initResponse.recommendedChunkSize;
 
-    const uploadChunk = async (index: number): Promise<void> => {
-      const part = presignedUrls[index];
-      const start = firstChunkSize + index * chunkSize;
-      const end = Math.min(start + chunkSize, totalSize);
-      const chunk = blob.slice(start, end);
+    // Internal abort signal that workers use to short-circuit each others'
+    // backoff sleeps. When any worker hits a terminal failure it aborts this
+    // controller, which races the caller's signal inside sleepWithSignal so
+    // sleeping siblings stop waiting for their timer to expire.
+    const failureController = new AbortController();
 
+    type FetchOutcome =
+      | { kind: 'ok'; etag: string }
+      | { kind: 'retryable'; lastErr: unknown }
+      | { kind: 'fatal'; err: unknown };
+
+    // Single PUT attempt. Returns a structured outcome instead of throwing
+    // for retryable/non-retryable distinctions, so the caller can decide
+    // whether to loop without conflating user-callback errors with
+    // network-layer retries (codex review).
+    const attemptPut = async (
+      part: { partNumber: number; url: string },
+      chunk: Blob,
+      contentLength: number,
+    ): Promise<FetchOutcome> => {
       let s3Response: Response;
       try {
         s3Response = await fetch(part.url, {
           method: 'PUT',
           body: chunk,
-          headers: { 'Content-Length': (end - start).toString() },
+          headers: { 'Content-Length': contentLength.toString() },
           signal: options?.signal,
         });
       } catch (err: unknown) {
-        // An aborted PUT surfaces as AbortError — re-classify as GislAbortError
-        // when the caller's signal was the trigger. Non-abort network errors
-        // (TypeError from DNS/TLS/etc.) bubble raw, matching the public
-        // contract in docs/typescript/errors.md.
         if (isAbortError(err) && options?.signal?.aborted) {
+          return {
+            kind: 'fatal',
+            err: new GislAbortError(`S3 part ${part.partNumber} upload aborted`),
+          };
+        }
+        if (isRetryableNetworkError(err)) {
+          return { kind: 'retryable', lastErr: err };
+        }
+        return { kind: 'fatal', err };
+      }
+
+      if (s3Response.ok) {
+        const etag = s3Response.headers.get('etag');
+        if (!etag) {
+          // Drain the body even though we're failing fast — keeps the
+          // connection released eagerly.
+          await drainResponseBody(s3Response);
+          return {
+            kind: 'fatal',
+            err: new GislError(
+              `S3 response missing ETag for part ${part.partNumber}`,
+            ),
+          };
+        }
+        return { kind: 'ok', etag };
+      }
+
+      // Non-OK: drain the body in BOTH branches before deciding. Undici
+      // holds the connection open until the body is consumed regardless of
+      // whether we retry.
+      await drainResponseBody(s3Response);
+
+      if (!isRetryableStatus(s3Response.status)) {
+        return {
+          kind: 'fatal',
+          err: new GislError(
+            `S3 chunk upload failed for part ${part.partNumber}: ${s3Response.status}`,
+          ),
+        };
+      }
+
+      return {
+        kind: 'retryable',
+        lastErr: new GislError(
+          `S3 chunk upload failed for part ${part.partNumber}: ${s3Response.status}`,
+        ),
+      };
+    };
+
+    const uploadChunk = async (index: number): Promise<void> => {
+      const part = presignedUrls[index];
+      const start = firstChunkSize + index * chunkSize;
+      const end = Math.min(start + chunkSize, totalSize);
+      // Blob.slice() returns a new Blob view; the underlying bytes are
+      // immutable so the same `chunk` may be re-sent across retry attempts.
+      // S3 multipart parts are idempotent by partNumber — a re-PUT overwrites,
+      // there is no duplicate-data risk.
+      const chunk = blob.slice(start, end);
+      const contentLength = end - start;
+
+      let lastErr: unknown = null;
+      for (let attempt = 0; attempt < this.multipartMaxAttempts; attempt++) {
+        if (options?.signal?.aborted) {
           throw new GislAbortError(`S3 part ${part.partNumber} upload aborted`);
         }
-        throw err;
+        if (failureController.signal.aborted) {
+          // Sibling worker hit a terminal failure: bail before dispatching a
+          // wasted PUT. The thrown error is swallowed by the outer worker
+          // loop — Promise.all has already settled with the first failure.
+          throw new GislError(
+            `S3 part ${part.partNumber} upload abandoned after sibling worker failure`,
+          );
+        }
+
+        const outcome = await attemptPut(part, chunk, contentLength);
+
+        if (outcome.kind === 'ok') {
+          // Apply progress side effects OUTSIDE the retry-scoped path so a
+          // user-callback throw does not trigger a duplicate PUT (codex
+          // review: retrying after a successful PUT would double-record the
+          // ETag and re-upload an already accepted part).
+          etags.push({ partNumber: part.partNumber, etag: outcome.etag });
+          uploadedBytes += contentLength;
+          options?.onProgress?.(uploadedBytes, totalSize);
+          return;
+        }
+
+        if (outcome.kind === 'fatal') {
+          throw outcome.err;
+        }
+
+        lastErr = outcome.lastErr;
+
+        if (attempt + 1 >= this.multipartMaxAttempts) break;
+
+        const delay = fullJitterDelay(this.multipartRetryBaseMs, attempt);
+        // Race the caller's signal AND the sibling-failure signal so a
+        // worker that fails terminally wakes its sleeping peers instead of
+        // forcing them to wait out their backoff timer.
+        await sleepWithEitherSignal(
+          delay,
+          options?.signal,
+          failureController.signal,
+        );
       }
 
-      if (!s3Response.ok) {
-        throw new GislError(`S3 chunk upload failed for part ${part.partNumber}: ${s3Response.status}`);
-      }
-
-      const etag = s3Response.headers.get('etag');
-      if (!etag) {
-        throw new GislError(`S3 response missing ETag for part ${part.partNumber}`);
-      }
-
-      etags.push({ partNumber: part.partNumber, etag });
-      uploadedBytes += end - start;
-      options?.onProgress?.(uploadedBytes, totalSize);
+      throw new GislError(
+        `S3 chunk upload failed for part ${part.partNumber} after ${this.multipartMaxAttempts} attempts: ` +
+          (lastErr instanceof Error ? lastErr.message : String(lastErr)),
+      );
     };
 
     // Upload with concurrency limit. Workers check the signal before pulling
     // the next queue item so a mid-upload abort drains fast without
     // dispatching new chunks. Chunks already in-flight are cancelled via the
-    // composed signal passed to fetch above — this flag only prevents siblings
-    // from starting new work. A dedicated boolean (not the thrown value) is
-    // used because a worker could legitimately throw `undefined` and a value
-    // sentinel would silently disarm the fast-exit.
+    // composed signal passed to fetch above; sleeping siblings are woken via
+    // the failureController set below.
     const queue = [...presignedUrls.keys()];
-    let workerFailed = false;
     const workers = Array.from(
       { length: Math.min(this.multipartConcurrency, queue.length) },
       async () => {
-        while (queue.length > 0 && !workerFailed) {
+        while (queue.length > 0 && !failureController.signal.aborted) {
           if (options?.signal?.aborted) {
             throw new GislAbortError('Multipart upload aborted');
           }
@@ -426,7 +633,9 @@ export class GislClient {
           try {
             await uploadChunk(index);
           } catch (err) {
-            workerFailed = true;
+            // Wake any sibling currently in a backoff sleep, and prevent
+            // siblings from picking up further queue items.
+            failureController.abort();
             throw err;
           }
         }

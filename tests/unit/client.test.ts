@@ -977,6 +977,543 @@ describe('GislClient', () => {
   });
 
   // -----------------------------------------------------------------------
+  // Multipart S3 PUT retry
+  // -----------------------------------------------------------------------
+
+  describe('multipart upload retry', () => {
+    const TAIL_CHUNK_SIZE = 2 * 1024 * 1024 + 1; // matches mockMultipartFlow shape
+    const BLOB_SIZE = DEFAULT_MULTIPART_FIRST_CHUNK_SIZE + TAIL_CHUNK_SIZE;
+
+    function makeRetryClient(overrides?: {
+      multipartMaxAttempts?: number;
+      multipartRetryBaseMs?: number;
+    }): GislClient {
+      return new GislClient({
+        baseUrl: 'https://api.example.com',
+        apiKey: 'test-key',
+        // Tiny base keeps tests fast; full-jitter ceiling stays in single-digit ms.
+        multipartRetryBaseMs: 1,
+        multipartMaxAttempts: 3,
+        ...overrides,
+      });
+    }
+
+    function mockInitiate(): void {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            upload_id: 'upload-mp-retry',
+            mime_type: 'application/octet-stream',
+            first_chunk_etag: '"etag-part-1"',
+            first_chunk_size_bytes: DEFAULT_MULTIPART_FIRST_CHUNK_SIZE,
+            total_parts: 2,
+            recommended_chunk_size: TAIL_CHUNK_SIZE,
+            presigned_urls: [
+              {
+                part_number: 2,
+                url: 'https://s3.example.com/upload?part=2',
+                expires_at: '2026-04-18T09:00:00.000Z',
+              },
+            ],
+          },
+        }),
+      );
+    }
+
+    function mockS3Status(status: number, etag = '"etag-part-2"'): void {
+      const headers: Record<string, string> = {};
+      if (status >= 200 && status < 300) headers.etag = etag;
+      fetchSpy.mockResolvedValueOnce(
+        new Response('', { status, headers }),
+      );
+    }
+
+    function mockComplete(): void {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: true,
+            data: { upload_id: 'upload-mp-retry', status: 'completed' },
+          },
+          201,
+        ),
+      );
+    }
+
+    it('retries a transient 500 and succeeds on the second attempt', async () => {
+      mockInitiate();
+      mockS3Status(500);
+      mockS3Status(200);
+      mockComplete();
+
+      const client = makeRetryClient();
+      const blob = new Blob([new Uint8Array(BLOB_SIZE)]);
+      const result = await client.uploadFile(blob);
+
+      expect(result.fileId).toBe('upload-mp-retry');
+      // initiate + 2x PUT + complete
+      expect(fetchSpy.mock.calls).toHaveLength(4);
+    });
+
+    it('retries on 429 (Too Many Requests)', async () => {
+      mockInitiate();
+      mockS3Status(429);
+      mockS3Status(200);
+      mockComplete();
+
+      const client = makeRetryClient();
+      await client.uploadFile(new Blob([new Uint8Array(BLOB_SIZE)]));
+
+      expect(fetchSpy.mock.calls).toHaveLength(4);
+    });
+
+    it('retries on 503 (Slow Down)', async () => {
+      mockInitiate();
+      mockS3Status(503);
+      mockS3Status(200);
+      mockComplete();
+
+      const client = makeRetryClient();
+      await client.uploadFile(new Blob([new Uint8Array(BLOB_SIZE)]));
+
+      expect(fetchSpy.mock.calls).toHaveLength(4);
+    });
+
+    it('retries on 502 (Bad Gateway)', async () => {
+      mockInitiate();
+      mockS3Status(502);
+      mockS3Status(200);
+      mockComplete();
+
+      const client = makeRetryClient();
+      await client.uploadFile(new Blob([new Uint8Array(BLOB_SIZE)]));
+
+      expect(fetchSpy.mock.calls).toHaveLength(4);
+    });
+
+    it('retries on 504 (Gateway Timeout)', async () => {
+      mockInitiate();
+      mockS3Status(504);
+      mockS3Status(200);
+      mockComplete();
+
+      const client = makeRetryClient();
+      await client.uploadFile(new Blob([new Uint8Array(BLOB_SIZE)]));
+
+      expect(fetchSpy.mock.calls).toHaveLength(4);
+    });
+
+    it('fails fast on 403 (signed-URL expiry) without retrying', async () => {
+      mockInitiate();
+      mockS3Status(403);
+
+      const client = makeRetryClient();
+      await expect(
+        client.uploadFile(new Blob([new Uint8Array(BLOB_SIZE)])),
+      ).rejects.toThrow(/S3 chunk upload failed for part 2: 403/);
+      // initiate + 1x PUT only
+      expect(fetchSpy.mock.calls).toHaveLength(2);
+    });
+
+    it('fails fast on 401 without retrying', async () => {
+      mockInitiate();
+      mockS3Status(401);
+
+      const client = makeRetryClient();
+      await expect(
+        client.uploadFile(new Blob([new Uint8Array(BLOB_SIZE)])),
+      ).rejects.toThrow(/S3 chunk upload failed for part 2: 401/);
+      expect(fetchSpy.mock.calls).toHaveLength(2);
+    });
+
+    it('fails fast when a 200 response is missing its ETag header (no retry)', async () => {
+      mockInitiate();
+      // 200 with empty headers — etag absent
+      fetchSpy.mockResolvedValueOnce(new Response('', { status: 200 }));
+
+      const client = makeRetryClient();
+      await expect(
+        client.uploadFile(new Blob([new Uint8Array(BLOB_SIZE)])),
+      ).rejects.toThrow(/missing ETag for part 2/);
+      expect(fetchSpy.mock.calls).toHaveLength(2);
+    });
+
+    it('retries on a network TypeError (DNS/TLS/TCP failure)', async () => {
+      mockInitiate();
+      fetchSpy.mockRejectedValueOnce(new TypeError('network failure'));
+      mockS3Status(200);
+      mockComplete();
+
+      const client = makeRetryClient();
+      await client.uploadFile(new Blob([new Uint8Array(BLOB_SIZE)]));
+
+      expect(fetchSpy.mock.calls).toHaveLength(4);
+    });
+
+    it('throws after max attempts with the attempt count in the message', async () => {
+      mockInitiate();
+      mockS3Status(500);
+      mockS3Status(500);
+      mockS3Status(500);
+
+      const client = makeRetryClient({ multipartMaxAttempts: 3 });
+      await expect(
+        client.uploadFile(new Blob([new Uint8Array(BLOB_SIZE)])),
+      ).rejects.toThrow(/after 3 attempts/);
+      // initiate + 3 PUTs
+      expect(fetchSpy.mock.calls).toHaveLength(4);
+    });
+
+    it('happy path with retry enabled still issues exactly 3 fetches (initiate, PUT, complete)', async () => {
+      mockInitiate();
+      mockS3Status(200);
+      mockComplete();
+
+      const client = makeRetryClient({ multipartMaxAttempts: 5 });
+      const result = await client.uploadFile(new Blob([new Uint8Array(BLOB_SIZE)]));
+
+      expect(result.fileId).toBe('upload-mp-retry');
+      expect(fetchSpy.mock.calls).toHaveLength(3);
+    });
+
+    it('respects multipartMaxAttempts=1 (effectively disables retry)', async () => {
+      mockInitiate();
+      mockS3Status(500);
+
+      const client = makeRetryClient({ multipartMaxAttempts: 1 });
+      await expect(
+        client.uploadFile(new Blob([new Uint8Array(BLOB_SIZE)])),
+      ).rejects.toThrow(/after 1 attempts/);
+      expect(fetchSpy.mock.calls).toHaveLength(2);
+    });
+
+    it('floors multipartMaxAttempts=0 to 1 attempt', async () => {
+      mockInitiate();
+      mockS3Status(500);
+
+      const client = makeRetryClient({ multipartMaxAttempts: 0 });
+      await expect(
+        client.uploadFile(new Blob([new Uint8Array(BLOB_SIZE)])),
+      ).rejects.toThrow(/after 1 attempts/);
+      expect(fetchSpy.mock.calls).toHaveLength(2);
+    });
+
+    it('aborts during retry backoff with GislAbortError before the next PUT dispatches', async () => {
+      const controller = new AbortController();
+      mockInitiate();
+      // First PUT: resolve with 500, then trigger the abort. The next
+      // microtask after this resolution is the retry loop scheduling its
+      // backoff sleep — abort lands during that sleep, before any second
+      // PUT dispatches.
+      fetchSpy.mockImplementationOnce(async () => {
+        queueMicrotask(() => controller.abort());
+        return new Response('', { status: 500 });
+      });
+      // No further mocks: if the retry dispatches another PUT, fetchSpy will
+      // return undefined and the test will fail with a different error.
+
+      const client = makeRetryClient({
+        multipartMaxAttempts: 3,
+        // Long enough that abort wins the race with the sleep timer.
+        multipartRetryBaseMs: 200,
+      });
+
+      await expect(
+        client.uploadFile(new Blob([new Uint8Array(BLOB_SIZE)]), {
+          signal: controller.signal,
+        }),
+      ).rejects.toBeInstanceOf(GislAbortError);
+
+      // Exactly: initiate + first PUT (500). No second PUT, no complete.
+      expect(fetchSpy.mock.calls).toHaveLength(2);
+    });
+
+    it('with concurrency=2, one chunk retrying does not stall its sibling', async () => {
+      // Two presigned parts. Part A (#2) returns 500 once then 200. Part B
+      // (#3) succeeds on first try. Both must complete; complete-call sees
+      // both ETags. Workers run independently.
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            upload_id: 'upload-mp-conc',
+            mime_type: 'application/octet-stream',
+            first_chunk_etag: '"etag-part-1"',
+            first_chunk_size_bytes: DEFAULT_MULTIPART_FIRST_CHUNK_SIZE,
+            total_parts: 3,
+            recommended_chunk_size: TAIL_CHUNK_SIZE,
+            presigned_urls: [
+              { part_number: 2, url: 'https://s3.example.com/upload?part=2', expires_at: '2026-04-18T09:00:00.000Z' },
+              { part_number: 3, url: 'https://s3.example.com/upload?part=3', expires_at: '2026-04-18T09:00:00.000Z' },
+            ],
+          },
+        }),
+      );
+
+      // Order is deterministic because workers pull from the queue in order
+      // and use the same fetchSpy queue. Worker 0 takes part 2 (gets 500
+      // first), worker 1 takes part 3 (gets 200). When worker 0 retries,
+      // the next mock in the queue is the part-2 success.
+      mockS3Status(500); // worker 0, part 2, attempt 1
+      mockS3Status(200); // worker 1, part 3, attempt 1
+      mockS3Status(200); // worker 0, part 2, attempt 2 (retry)
+      // complete
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: true,
+            data: { upload_id: 'upload-mp-conc', status: 'completed' },
+          },
+          201,
+        ),
+      );
+
+      const client = new GislClient({
+        baseUrl: 'https://api.example.com',
+        apiKey: 'test-key',
+        multipartConcurrency: 2,
+        multipartRetryBaseMs: 1,
+        multipartMaxAttempts: 3,
+      });
+
+      // Big enough for 3 total parts (1 first-chunk + 2 tail parts).
+      const blob = new Blob([new Uint8Array(DEFAULT_MULTIPART_FIRST_CHUNK_SIZE + 2 * TAIL_CHUNK_SIZE)]);
+      const result = await client.uploadFile(blob);
+
+      expect(result.fileId).toBe('upload-mp-conc');
+      // initiate + 3 S3 PUTs (one retry) + complete
+      expect(fetchSpy.mock.calls).toHaveLength(5);
+    });
+
+    it('does not double-count progress when a chunk retries', async () => {
+      mockInitiate();
+      mockS3Status(500);
+      mockS3Status(200);
+      mockComplete();
+
+      const client = makeRetryClient();
+      const progress: Array<[number, number]> = [];
+      await client.uploadFile(new Blob([new Uint8Array(BLOB_SIZE)]), {
+        onProgress: (uploaded, total) => progress.push([uploaded, total]),
+      });
+
+      // Two onProgress events expected: one after the first-chunk initiate,
+      // one after the (eventually-successful) tail chunk PUT. The failed
+      // attempt must NOT have fired onProgress.
+      expect(progress).toHaveLength(2);
+      expect(progress[0]).toEqual([DEFAULT_MULTIPART_FIRST_CHUNK_SIZE, BLOB_SIZE]);
+      expect(progress[1]).toEqual([BLOB_SIZE, BLOB_SIZE]);
+    });
+
+    it('does not retry a non-TypeError, non-Abort exception (e.g. plain Error)', async () => {
+      // Custom polyfills or unusual runtimes may surface fetch failures as a
+      // plain `Error` (or RangeError, SyntaxError, etc.). These are NOT
+      // retryable — only TypeError network failures qualify.
+      mockInitiate();
+      fetchSpy.mockRejectedValueOnce(new Error('boom'));
+
+      const client = makeRetryClient();
+      await expect(
+        client.uploadFile(new Blob([new Uint8Array(BLOB_SIZE)])),
+      ).rejects.toThrow(/boom/);
+      // initiate + 1 PUT only (no retry)
+      expect(fetchSpy.mock.calls).toHaveLength(2);
+    });
+
+    it('mixes retry types: TypeError → 503 → 200 succeeds in 3 attempts', async () => {
+      // The most realistic flake: a TCP reset is followed by transient
+      // throttling, then success. The retry loop must accept either error
+      // category in lastErr without confusion.
+      mockInitiate();
+      fetchSpy.mockRejectedValueOnce(new TypeError('connection reset'));
+      mockS3Status(503);
+      mockS3Status(200);
+      mockComplete();
+
+      const client = makeRetryClient({ multipartMaxAttempts: 3 });
+      await client.uploadFile(new Blob([new Uint8Array(BLOB_SIZE)]));
+
+      // initiate + 3 PUTs + complete
+      expect(fetchSpy.mock.calls).toHaveLength(5);
+    });
+
+    it('preserves the TypeError message in the after-N-attempts terminal error', async () => {
+      mockInitiate();
+      fetchSpy.mockRejectedValueOnce(new TypeError('TLS handshake failed'));
+      fetchSpy.mockRejectedValueOnce(new TypeError('TLS handshake failed'));
+      fetchSpy.mockRejectedValueOnce(new TypeError('TLS handshake failed'));
+
+      const client = makeRetryClient({ multipartMaxAttempts: 3 });
+      await expect(
+        client.uploadFile(new Blob([new Uint8Array(BLOB_SIZE)])),
+      ).rejects.toThrow(/TLS handshake failed/);
+    });
+
+    it('coerces a non-finite multipartMaxAttempts (NaN) back to the default 3', async () => {
+      mockInitiate();
+      mockS3Status(500);
+      mockS3Status(500);
+      mockS3Status(200);
+      mockComplete();
+
+      const client = new GislClient({
+        baseUrl: 'https://api.example.com',
+        apiKey: 'test-key',
+        multipartRetryBaseMs: 1,
+        multipartMaxAttempts: NaN,
+      });
+      await client.uploadFile(new Blob([new Uint8Array(BLOB_SIZE)]));
+
+      // Default of 3 attempts kicks in; succeeds on attempt 3.
+      // initiate + 3 PUTs + complete = 5
+      expect(fetchSpy.mock.calls).toHaveLength(5);
+    });
+
+    it('coerces Infinity multipartMaxAttempts back to the default (no infinite loop)', async () => {
+      mockInitiate();
+      mockS3Status(500);
+      mockS3Status(500);
+      mockS3Status(500);
+
+      const client = new GislClient({
+        baseUrl: 'https://api.example.com',
+        apiKey: 'test-key',
+        multipartRetryBaseMs: 1,
+        multipartMaxAttempts: Infinity,
+      });
+      await expect(
+        client.uploadFile(new Blob([new Uint8Array(BLOB_SIZE)])),
+      ).rejects.toThrow(/after 3 attempts/);
+      // Default 3, not infinity: initiate + 3 PUTs = 4 fetches.
+      expect(fetchSpy.mock.calls).toHaveLength(4);
+    });
+
+    it('cancels the response body of a retryable non-OK response before retrying', async () => {
+      mockInitiate();
+      // Build a 500 response with a real ReadableStream body so we can
+      // observe whether it gets cancelled. The cancellation tracker fires
+      // when the retry loop calls drainResponseBody.
+      let cancelled = false;
+      const stream = new ReadableStream({
+        cancel: () => {
+          cancelled = true;
+        },
+      });
+      fetchSpy.mockResolvedValueOnce(new Response(stream, { status: 500 }));
+      mockS3Status(200);
+      mockComplete();
+
+      const client = makeRetryClient();
+      await client.uploadFile(new Blob([new Uint8Array(BLOB_SIZE)]));
+
+      expect(cancelled).toBe(true);
+    });
+
+    it('cancels the response body on a non-retryable 4xx before throwing', async () => {
+      mockInitiate();
+      let cancelled = false;
+      const stream = new ReadableStream({
+        cancel: () => {
+          cancelled = true;
+        },
+      });
+      fetchSpy.mockResolvedValueOnce(new Response(stream, { status: 403 }));
+
+      const client = makeRetryClient();
+      await expect(
+        client.uploadFile(new Blob([new Uint8Array(BLOB_SIZE)])),
+      ).rejects.toThrow(/403/);
+      expect(cancelled).toBe(true);
+    });
+
+    it('does NOT retry when onProgress throws after a successful PUT', async () => {
+      // Regression: a user callback throwing TypeError must not be classified
+      // as a retryable network error. Otherwise the SDK would re-PUT an
+      // already-accepted part and double-record the ETag.
+      mockInitiate();
+      mockS3Status(200);
+      // No second PUT mock — if the SDK retries, fetchSpy returns undefined
+      // and the test fails with a different error than the one we expect.
+
+      const client = makeRetryClient();
+      const blob = new Blob([new Uint8Array(BLOB_SIZE)]);
+
+      // onProgress is called after initiate AND after each S3 part. Throw
+      // only on the post-PUT call (the second invocation) so the regression
+      // path under test (retry-after-success) is the one exercised.
+      let progressCallCount = 0;
+      await expect(
+        client.uploadFile(blob, {
+          onProgress: () => {
+            progressCallCount += 1;
+            if (progressCallCount >= 2) {
+              throw new TypeError('user callback bug');
+            }
+          },
+        }),
+      ).rejects.toThrow(/user callback bug/);
+
+      // initiate + 1 PUT only — no retry, no complete.
+      expect(fetchSpy.mock.calls).toHaveLength(2);
+    });
+
+    it('wakes a sibling worker out of its backoff sleep when another worker fails', async () => {
+      // Two parts. Worker A picks part 2, gets a non-retryable 403 → fails
+      // fast. Worker B picks part 3, gets a 500 → enters backoff sleep.
+      // Math.random is pinned to 0.999 so the full-jitter delay is
+      // deterministically near the upper bound (~5s); without the wake
+      // signal the test would block for that full delay and the elapsed-
+      // time assertion would fail. With the wake signal, B exits the sleep
+      // immediately when A aborts the failure controller.
+      const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.999);
+      try {
+        fetchSpy.mockResolvedValueOnce(
+          jsonResponse({
+            success: true,
+            data: {
+              upload_id: 'upload-mp-wake',
+              mime_type: 'application/octet-stream',
+              first_chunk_etag: '"etag-part-1"',
+              first_chunk_size_bytes: DEFAULT_MULTIPART_FIRST_CHUNK_SIZE,
+              total_parts: 3,
+              recommended_chunk_size: TAIL_CHUNK_SIZE,
+              presigned_urls: [
+                { part_number: 2, url: 'https://s3.example.com/upload?part=2', expires_at: '2026-04-18T09:00:00.000Z' },
+                { part_number: 3, url: 'https://s3.example.com/upload?part=3', expires_at: '2026-04-18T09:00:00.000Z' },
+              ],
+            },
+          }),
+        );
+        // Worker A part 2: non-retryable 403 (fails immediately).
+        mockS3Status(403);
+        // Worker B part 3: retryable 500 (enters backoff sleep).
+        mockS3Status(500);
+
+        const client = new GislClient({
+          baseUrl: 'https://api.example.com',
+          apiKey: 'test-key',
+          multipartConcurrency: 2,
+          multipartMaxAttempts: 3,
+          // 5000ms base + Math.random=0.999 produces ~4.995s delay on the
+          // first retry. The wake signal must short-circuit this.
+          multipartRetryBaseMs: 5000,
+        });
+
+        const blob = new Blob([new Uint8Array(DEFAULT_MULTIPART_FIRST_CHUNK_SIZE + 2 * TAIL_CHUNK_SIZE)]);
+        const start = Date.now();
+        await expect(client.uploadFile(blob)).rejects.toThrow(/403/);
+        const elapsed = Date.now() - start;
+        // 1000ms is generous headroom on slow CI; a broken wake signal
+        // would force a ~5000ms wait.
+        expect(elapsed).toBeLessThan(1000);
+      } finally {
+        randomSpy.mockRestore();
+      }
+    });
+  });
+
+  // -----------------------------------------------------------------------
   // SSE streaming
   // -----------------------------------------------------------------------
 
