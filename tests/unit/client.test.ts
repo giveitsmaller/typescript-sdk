@@ -1,6 +1,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { GislClient, DEFAULT_MULTIPART_FIRST_CHUNK_SIZE } from '../../src/client.js';
-import { GislAbortError, GislApiError, GislValidationError, GislTimeoutError } from '../../src/errors.js';
+import {
+  GislAbortError,
+  GislApiError,
+  GislAuthError,
+  GislBalanceExhaustedError,
+  GislFeatureNotAvailableError,
+  GislFeatureTierRestrictedError,
+  GislTierRestrictedError,
+  GislTimeoutError,
+  GislValidationError,
+  GislWorkflowExpiredError,
+} from '../../src/errors.js';
 
 function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -1543,6 +1554,392 @@ describe('GislClient', () => {
 
       expect(events).toHaveLength(1);
       expect(events[0].event).toBe('operation.progress');
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Structured error dispatch (T6 — GDOmZO16)
+  //
+  // Each test asserts handleResponse() routes the wire envelope to the
+  // correct typed subclass based on (status, error_type) and threads the
+  // payload through the generated FromJSON helper (snake_case → camelCase).
+  // The transport here is getWorkflowStatus — a GET that exercises the
+  // shared handleResponse() error path without requiring a body.
+  // -----------------------------------------------------------------------
+
+  describe('error dispatch', () => {
+    it('401 invalid_api_key → GislAuthError with typed payload', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'Invalid API key',
+            error_type: 'api_key_invalid',
+            message_key: 'error.api_key_invalid',
+            locale: 'en-GB',
+          },
+          401,
+        ),
+      );
+
+      try {
+        await client.getWorkflowStatus('wf-1');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislAuthError);
+        expect(err).toBeInstanceOf(GislApiError);
+        const authErr = err as GislAuthError;
+        expect(authErr.statusCode).toBe(401);
+        expect(authErr.payload.errorType).toBe('api_key_invalid');
+        expect(authErr.messageKey).toBe('error.api_key_invalid');
+        expect(authErr.locale).toBe('en-GB');
+      }
+    });
+
+    it('403 account_locked → GislAuthError (401 OR 403 status path)', async () => {
+      // Auth dispatch covers both 401 and 403 — account_locked / account_disabled
+      // realistically arrive at 403, not 401. Regression guard against the
+      // dispatch dropping the `|| 403` branch.
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'Account locked',
+            error_type: 'account_locked',
+          },
+          403,
+        ),
+      );
+
+      try {
+        await client.getWorkflowStatus('wf-1');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislAuthError);
+        const authErr = err as GislAuthError;
+        expect(authErr.statusCode).toBe(403);
+        expect(authErr.payload.errorType).toBe('account_locked');
+      }
+    });
+
+    it('402 balance_exhausted → GislBalanceExhaustedError with required_action + links', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'Balance exhausted',
+            error_type: 'balance_exhausted',
+            required_action: 'add_credits',
+            links: {
+              upgrade: 'https://gisl.example/upgrade',
+              top_up: 'https://gisl.example/top-up',
+            },
+            message_key: 'error.balance_exhausted.add_credits',
+            locale: 'en-GB',
+            message_params: { feature: 'compress' },
+          },
+          402,
+        ),
+      );
+
+      try {
+        await client.getWorkflowStatus('wf-1');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislBalanceExhaustedError);
+        const balanceErr = err as GislBalanceExhaustedError;
+        expect(balanceErr.statusCode).toBe(402);
+        expect(balanceErr.payload.errorType).toBe('balance_exhausted');
+        expect(balanceErr.payload.requiredAction).toBe('add_credits');
+        // FromJSON converts snake_case top_up to camelCase topUp.
+        expect(balanceErr.payload.links?.upgrade).toBe('https://gisl.example/upgrade');
+        expect(balanceErr.payload.links?.topUp).toBe('https://gisl.example/top-up');
+        // i18n triple comes straight from wire snake_case keys.
+        expect(balanceErr.messageKey).toBe('error.balance_exhausted.add_credits');
+        expect(balanceErr.locale).toBe('en-GB');
+        expect(balanceErr.messageParams).toEqual({ feature: 'compress' });
+      }
+    });
+
+    it('403 tier_restriction → GislTierRestrictedError with restriction_kind + tiers', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'File too large for tier',
+            error_type: 'tier_restriction',
+            restriction_kind: 'file_size',
+            current_tier: 'free',
+            required_tier: 'pro',
+          },
+          403,
+        ),
+      );
+
+      try {
+        await client.getWorkflowStatus('wf-1');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislTierRestrictedError);
+        const tierErr = err as GislTierRestrictedError;
+        expect(tierErr.statusCode).toBe(403);
+        expect(tierErr.payload.errorType).toBe('tier_restriction');
+        expect(tierErr.payload.restrictionKind).toBe('file_size');
+        expect(tierErr.payload.currentTier).toBe('free');
+        expect(tierErr.payload.requiredTier).toBe('pro');
+      }
+    });
+
+    it('403 feature_tier_restricted → GislFeatureTierRestrictedError with violations[]', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'Feature requires upgrade',
+            error_type: 'feature_tier_restricted',
+            violations: [
+              {
+                feature: 'operation.compress.option.codec.av1',
+                availability: 'stable',
+                required_tier: 'pro',
+              },
+              {
+                feature: 'operation.merge.mime_group.video',
+                availability: 'stable',
+                required_tier: 'enterprise',
+              },
+            ],
+          },
+          403,
+        ),
+      );
+
+      try {
+        await client.getWorkflowStatus('wf-1');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislFeatureTierRestrictedError);
+        const featErr = err as GislFeatureTierRestrictedError;
+        expect(featErr.statusCode).toBe(403);
+        expect(featErr.payload.errorType).toBe('feature_tier_restricted');
+        expect(featErr.payload.violations).toHaveLength(2);
+        // FromJSON for FeatureViolation converts required_tier → requiredTier.
+        expect(featErr.payload.violations[0].feature).toBe(
+          'operation.compress.option.codec.av1',
+        );
+        expect(featErr.payload.violations[0].requiredTier).toBe('pro');
+        expect(featErr.payload.violations[1].requiredTier).toBe('enterprise');
+      }
+    });
+
+    it('422 feature_not_available → GislFeatureNotAvailableError with violations[]', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'Feature not available',
+            error_type: 'feature_not_available',
+            violations: [
+              {
+                feature: 'operation.image_watermark',
+                availability: 'planned',
+                eta: '2026-Q3',
+              },
+            ],
+          },
+          422,
+        ),
+      );
+
+      try {
+        await client.getWorkflowStatus('wf-1');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislFeatureNotAvailableError);
+        const featErr = err as GislFeatureNotAvailableError;
+        expect(featErr.statusCode).toBe(422);
+        expect(featErr.payload.errorType).toBe('feature_not_available');
+        expect(featErr.payload.violations).toHaveLength(1);
+        expect(featErr.payload.violations[0].feature).toBe('operation.image_watermark');
+        expect(featErr.payload.violations[0].availability).toBe('planned');
+        expect(featErr.payload.violations[0].eta).toBe('2026-Q3');
+      }
+    });
+
+    it('422 workflow_expired → GislWorkflowExpiredError with expired_at as Date', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'Workflow expired',
+            error_type: 'workflow_expired',
+            expired_at: '2026-04-20T12:00:00.000Z',
+          },
+          422,
+        ),
+      );
+
+      try {
+        await client.getWorkflowStatus('wf-1');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislWorkflowExpiredError);
+        const expErr = err as GislWorkflowExpiredError;
+        expect(expErr.statusCode).toBe(422);
+        expect(expErr.payload.errorType).toBe('workflow_expired');
+        // FromJSON converts the ISO-8601 string to a Date instance.
+        expect(expErr.payload.expiredAt).toBeInstanceOf(Date);
+        expect(expErr.payload.expiredAt.toISOString()).toBe(
+          '2026-04-20T12:00:00.000Z',
+        );
+      }
+    });
+
+    it('422 array-shape details (no error_type) still throws GislValidationError (backcompat)', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'Validation failed',
+            details: [
+              { field: 'jobs[0].file_id', message: 'must be a UUID' },
+            ],
+          },
+          422,
+        ),
+      );
+
+      try {
+        await client.getWorkflowStatus('wf-1');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislValidationError);
+        // The new typed subclasses are NOT a superset — validation must NOT
+        // be misclassified as feature_not_available / workflow_expired.
+        expect(err).not.toBeInstanceOf(GislFeatureNotAvailableError);
+        expect(err).not.toBeInstanceOf(GislWorkflowExpiredError);
+        const valErr = err as GislValidationError;
+        expect(valErr.details).toHaveLength(1);
+        expect(valErr.details[0].field).toBe('jobs[0].file_id');
+      }
+    });
+
+    it('500 with no error_type falls through to base GislApiError; payload + messageKey populated', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'Internal server error',
+            message_key: 'error.server.unexpected',
+            locale: 'en-GB',
+          },
+          500,
+        ),
+      );
+
+      try {
+        await client.getWorkflowStatus('wf-1');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislApiError);
+        // Must NOT be one of the typed subclasses.
+        expect(err).not.toBeInstanceOf(GislAuthError);
+        expect(err).not.toBeInstanceOf(GislBalanceExhaustedError);
+        expect(err).not.toBeInstanceOf(GislWorkflowExpiredError);
+        const apiErr = err as GislApiError;
+        expect(apiErr.statusCode).toBe(500);
+        expect(apiErr.messageKey).toBe('error.server.unexpected');
+        expect(apiErr.locale).toBe('en-GB');
+        // Raw envelope is preserved on payload for unknown shapes.
+        expect(apiErr.payload).toMatchObject({
+          success: false,
+          error: 'Internal server error',
+          message_key: 'error.server.unexpected',
+        });
+      }
+    });
+
+    it('422 workflow_expired with missing expired_at falls through to base GislApiError (FromJSON validation)', async () => {
+      // Defense-in-depth: FromJSON does not throw on missing required fields —
+      // it produces sentinel values like `new Date(undefined)` => Invalid Date.
+      // The dispatch must validate the constructed payload and fall through
+      // when required typed fields are not well-formed, rather than handing
+      // the caller a silently-corrupted GislWorkflowExpiredError.
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'Workflow expired',
+            error_type: 'workflow_expired',
+            // expired_at: <missing>
+          },
+          422,
+        ),
+      );
+
+      try {
+        await client.getWorkflowStatus('wf-1');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislApiError);
+        expect(err).not.toBeInstanceOf(GislWorkflowExpiredError);
+        const apiErr = err as GislApiError;
+        expect(apiErr.statusCode).toBe(422);
+      }
+    });
+
+    it('402 balance_exhausted with missing required_action falls through to base GislApiError', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'Balance exhausted',
+            error_type: 'balance_exhausted',
+            // required_action: <missing>
+            links: { upgrade: 'https://example.com' },
+          },
+          402,
+        ),
+      );
+
+      try {
+        await client.getWorkflowStatus('wf-1');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislApiError);
+        expect(err).not.toBeInstanceOf(GislBalanceExhaustedError);
+      }
+    });
+
+    it('500 with unknown error_type falls through to base GislApiError (no crash)', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'Some new error',
+            error_type: 'never_heard_of_this',
+          },
+          500,
+        ),
+      );
+
+      try {
+        await client.getWorkflowStatus('wf-1');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislApiError);
+        // Specifically NOT a subclass — unknown discriminators must not crash
+        // the FromJSON helper or be misrouted.
+        expect(err).not.toBeInstanceOf(GislAuthError);
+        expect(err).not.toBeInstanceOf(GislBalanceExhaustedError);
+        expect(err).not.toBeInstanceOf(GislTierRestrictedError);
+        expect(err).not.toBeInstanceOf(GislFeatureTierRestrictedError);
+        expect(err).not.toBeInstanceOf(GislFeatureNotAvailableError);
+        expect(err).not.toBeInstanceOf(GislWorkflowExpiredError);
+        const apiErr = err as GislApiError;
+        expect(apiErr.statusCode).toBe(500);
+        expect(apiErr.errorMessage).toBe('Some new error');
+      }
     });
   });
 });

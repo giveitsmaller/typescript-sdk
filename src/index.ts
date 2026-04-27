@@ -23,9 +23,16 @@ export {
   GislError,
   GislApiError,
   GislValidationError,
+  GislBalanceExhaustedError,
+  GislTierRestrictedError,
+  GislFeatureTierRestrictedError,
+  GislFeatureNotAvailableError,
+  GislWorkflowExpiredError,
+  GislAuthError,
   GislTimeoutError,
   GislAbortError,
 } from './errors.js';
+export type { GislApiErrorOptions } from './errors.js';
 
 // Re-export key contract types so users only need @giveitsmaller/sdk
 export type {

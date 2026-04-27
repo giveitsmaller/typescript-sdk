@@ -13,6 +13,16 @@ import {
   OperationsSchemaResponseFromJSON,
   RetryResponseFromJSON,
   WorkflowStatus,
+  AuthErrorResponseFromJSON,
+  AuthErrorType,
+  BalanceExhaustedResponseFromJSON,
+  BalanceExhaustedResponseRequiredActionEnum,
+  FeatureNotAvailableResponseFromJSON,
+  FeatureTierRestrictedResponseFromJSON,
+  TierRestrictionKind,
+  TierRestrictionResponseFromJSON,
+  UserTier,
+  WorkflowExpiredResponseFromJSON,
 } from '@giveitsmaller/contracts/openapi';
 
 import type {
@@ -28,7 +38,20 @@ import type {
   RetryResponse,
 } from '@giveitsmaller/contracts/openapi';
 
-import { GislAbortError, GislApiError, GislError, GislTimeoutError, GislValidationError } from './errors.js';
+import {
+  GislAbortError,
+  GislApiError,
+  type GislApiErrorOptions,
+  GislAuthError,
+  GislBalanceExhaustedError,
+  GislError,
+  GislFeatureNotAvailableError,
+  GislFeatureTierRestrictedError,
+  GislTierRestrictedError,
+  GislTimeoutError,
+  GislValidationError,
+  GislWorkflowExpiredError,
+} from './errors.js';
 import { parseSseStream } from './sse.js';
 import type {
   GislClientConfig,
@@ -58,16 +81,30 @@ const TERMINAL_STATUSES: ReadonlySet<string> = new Set([
   WorkflowStatus.partially_failed,
 ]);
 
-function isValidationDetails(
-  value: unknown,
-): value is Array<{ field: string; message: string }> {
+// Wire-shape guard for ValidationErrorEnvelopeDetailsInner. The v2 contract
+// only requires `message`; `field` / `operation` / `option` are all optional
+// (per `compression_contracts/openapi/api.yaml` -- a cross-field validation
+// error may identify the violation by `operation` + `option` alone). Earlier
+// versions of this guard required `field` too, which silently misrouted
+// per-option validation envelopes to the base `GislApiError`.
+export interface ValidationDetail {
+  message: string;
+  field?: string;
+  operation?: string;
+  option?: string;
+  messageKey?: string;
+  locale?: string;
+  messageParams?: Record<string, unknown>;
+}
+
+function isValidationDetails(value: unknown): value is ValidationDetail[] {
   return (
     Array.isArray(value) &&
+    value.length > 0 &&
     value.every(
       (el) =>
         typeof el === 'object' &&
         el !== null &&
-        typeof (el as { field?: unknown }).field === 'string' &&
         typeof (el as { message?: unknown }).message === 'string',
     )
   );
@@ -332,7 +369,20 @@ export class GislClient {
       return undefined as unknown as T;
     }
 
-    let json: { success?: boolean; data?: unknown; error?: string; details?: unknown };
+    // Wire-side fields are snake_case (raw response.json() — never run through
+    // FromJSON helpers here). The structured-error subclasses receive a typed
+    // payload built via the per-envelope FromJSON helper, which handles the
+    // snake_case -> camelCase conversion for nested fields.
+    let json: {
+      success?: boolean;
+      data?: unknown;
+      error?: string;
+      details?: unknown;
+      error_type?: string;
+      message_key?: string;
+      locale?: string;
+      message_params?: Record<string, unknown>;
+    };
     try {
       json = await response.json();
     } catch {
@@ -349,24 +399,152 @@ export class GislClient {
 
     // Standard envelope: { success, data } or { success, error, details }
     if (!response.ok || json.success === false) {
+      // Localisation triple per ticket I26 — surfaced on every typed error so
+      // consumers can drive client-side i18n catalogs without unwrapping the
+      // typed payload. Field names are wire snake_case here; the typed payload
+      // (built via FromJSON below) carries camelCase copies.
+      const i18n: GislApiErrorOptions = {
+        messageKey: json.message_key,
+        locale: json.locale,
+        messageParams: json.message_params,
+      };
+
+      // Validation-details branch first — preserve existing shape so callers
+      // matching on `instanceof GislValidationError` keep working.
       if (isValidationDetails(json.details)) {
         throw new GislValidationError(
           response.status,
           json.error ?? 'Validation error',
           json.details,
           path,
+          i18n,
         );
       }
+
+      // Dispatch by (status, error_type) onto the structured envelope shapes
+      // emitted by the v2 contracts. Each branch builds the typed payload via
+      // the generated FromJSON helper so consumers reading e.g.
+      // `error.payload.errorType` see camelCase fields rather than the raw
+      // wire snake_case.
+      //
+      // Defense-in-depth: if a malformed wire envelope causes the FromJSON
+      // helper to throw or coerce a required field to a sentinel value
+      // (e.g. `expired_at` missing -> `new Date(undefined)` => Invalid Date),
+      // fall through to the base `GislApiError` rather than handing the
+      // caller silently-corrupted typed metadata.
+      const errorType = json.error_type;
+      const status = response.status;
+      const errorMessage = json.error ?? 'Unknown error';
+
+      // Build the typed payload via FromJSON, then validate that all
+      // required typed fields are well-formed. FromJSON does not throw on
+      // missing required fields — for example `workflow_expired` without
+      // `expired_at` produces `new Date(undefined)` => Invalid Date with
+      // `getTime() === NaN`. Without an explicit validity check the error
+      // would surface a silently-corrupted typed payload instead of falling
+      // through to the generic base class.
+      const tryThrowStructured = <T>(
+        construct: (raw: unknown) => T,
+        ErrorClass: new (
+          status: number,
+          msg: string,
+          payload: T,
+          path?: string,
+          extra?: Omit<GislApiErrorOptions, 'payload'>,
+        ) => GislApiError,
+        validate?: (payload: T) => boolean,
+      ): never | undefined => {
+        let payload: T;
+        try {
+          payload = construct(json);
+        } catch {
+          return undefined;
+        }
+        if (validate && !validate(payload)) {
+          return undefined;
+        }
+        throw new ErrorClass(status, errorMessage, payload, path, i18n);
+      };
+
+      const isValidDate = (d: unknown): d is Date =>
+        d instanceof Date && !Number.isNaN(d.getTime());
+
+      if (status === 401 || status === 403) {
+        if (errorType && this.isAuthErrorType(errorType)) {
+          tryThrowStructured(
+            AuthErrorResponseFromJSON,
+            GislAuthError,
+            (p) => typeof p.errorType === 'string',
+          );
+        }
+      }
+
+      const isInEnum = (value: unknown, members: Readonly<Record<string, string>>): boolean =>
+        typeof value === 'string' && Object.values(members).includes(value);
+
+      const isFeatureViolation = (v: unknown): boolean =>
+        typeof v === 'object' && v !== null
+          && typeof (v as { feature?: unknown }).feature === 'string';
+
+      if (status === 402 && errorType === 'balance_exhausted') {
+        tryThrowStructured(
+          BalanceExhaustedResponseFromJSON,
+          GislBalanceExhaustedError,
+          (p) => isInEnum(p.requiredAction, BalanceExhaustedResponseRequiredActionEnum),
+        );
+      }
+
+      if (status === 403 && errorType === 'tier_restriction') {
+        tryThrowStructured(
+          TierRestrictionResponseFromJSON,
+          GislTierRestrictedError,
+          (p) => isInEnum(p.restrictionKind, TierRestrictionKind)
+            && isInEnum(p.currentTier, UserTier),
+        );
+      }
+
+      if (status === 403 && errorType === 'feature_tier_restricted') {
+        tryThrowStructured(
+          FeatureTierRestrictedResponseFromJSON,
+          GislFeatureTierRestrictedError,
+          (p) => Array.isArray(p.violations) && p.violations.every(isFeatureViolation),
+        );
+      }
+
+      if (status === 422 && errorType === 'feature_not_available') {
+        tryThrowStructured(
+          FeatureNotAvailableResponseFromJSON,
+          GislFeatureNotAvailableError,
+          (p) => Array.isArray(p.violations) && p.violations.every(isFeatureViolation),
+        );
+      }
+
+      if (status === 422 && errorType === 'workflow_expired') {
+        tryThrowStructured(
+          WorkflowExpiredResponseFromJSON,
+          GislWorkflowExpiredError,
+          (p) => isValidDate(p.expiredAt),
+        );
+      }
+
       throw new GislApiError(
-        response.status,
-        json.error ?? 'Unknown error',
+        status,
+        errorMessage,
         path,
         json.details,
+        { ...i18n, payload: json },
       );
     }
 
     const data = json.data ?? json;
     return deserialize ? deserialize(data) : (data as T);
+  }
+
+  // Membership check for the AuthErrorType discriminator. Reads the generated
+  // enum object directly so a future contract addition lands here without a
+  // hand-edit. The bundle cost is one tiny `as const` literal map (8 entries).
+  private isAuthErrorType(value: string): boolean {
+    return Object.values(AuthErrorType).includes(value as AuthErrorType);
   }
 
   // -----------------------------------------------------------------------
