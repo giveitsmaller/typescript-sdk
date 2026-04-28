@@ -64,6 +64,8 @@ export type {
   CreditsBalanceResponse,
   CreditsUsageResponse,
   CreditTransaction,
+  ExternalImportCreatedResponse,
+  ExternalImportRequest,
   LoginUserRequest,
   LoginUser200ResponseData,
   LoginUser200ResponseDataUser,
@@ -96,6 +98,7 @@ export type {
 export {
   AudioWatermarkDecodeRequestMethodHintEnum,
   AudioWatermarkDecodeResponseMethodEnum,
+  ExternalImportRequestProviderHintEnum,
   ContactSubject,
   CreditTransactionSourceBucket,
   UploadProbeStatus,

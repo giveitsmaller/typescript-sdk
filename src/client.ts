@@ -4,6 +4,8 @@ import { basename } from 'node:path';
 import {
   AudioWatermarkDecodeRequestToJSON,
   AudioWatermarkDecodeResponseFromJSON,
+  ExternalImportCreatedResponseFromJSON,
+  ExternalImportRequestToJSON,
   LoginUser200ResponseDataFromJSON,
   CreditsBalanceResponseFromJSON,
   CreditsUsageResponseFromJSON,
@@ -40,6 +42,8 @@ import {
 import type {
   AudioWatermarkDecodeRequest,
   AudioWatermarkDecodeResponse,
+  ExternalImportCreatedResponse,
+  ExternalImportRequest,
   LoginUserRequest,
   LoginUser200ResponseData,
   ContactRequest,
@@ -1268,6 +1272,38 @@ export class GislClient {
       }
       throw err;
     }
+  }
+
+  // -----------------------------------------------------------------------
+  // External imports
+  // -----------------------------------------------------------------------
+
+  /**
+   * Register a one-shot bearer URL (S3 presigned, GCS signed, Azure
+   * SAS, Dropbox shared link, public HTTPS) and receive an opaque
+   * `externalSourceId` handle. Subsequent workflows reference the
+   * handle via `WorkflowSource` of `type: external_import` —
+   * compose with the [`externalImportSource()`](./types.ts) factory.
+   *
+   * Per ADR-0005 §"SSRF posture": the server validates 8 rules at
+   * registration time AND again at fetch time. HTTPS-only;
+   * private/loopback/cloud-metadata IPs are rejected (403). The
+   * original URL + password are encrypted at rest and never
+   * returned in any response.
+   *
+   * Currently `availability: planned` — the runtime endpoint returns
+   * 422 `feature_not_available` (or 404, per the cross-repo rollout)
+   * until the external-import infrastructure ships. The method
+   * exists today so consumers can write the integration ahead of
+   * time.
+   */
+  async createExternalImport(
+    payload: ExternalImportRequest,
+  ): Promise<ExternalImportCreatedResponse> {
+    return this.request('POST', '/api/external-imports', {
+      body: ExternalImportRequestToJSON(payload) as unknown as Record<string, unknown>,
+      deserialize: ExternalImportCreatedResponseFromJSON,
+    });
   }
 
   // -----------------------------------------------------------------------

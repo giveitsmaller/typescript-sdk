@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { GislClient, DEFAULT_MULTIPART_FIRST_CHUNK_SIZE } from '../../src/client.js';
-import { uploadSource } from '../../src/types.js';
+import { externalImportSource, uploadSource } from '../../src/types.js';
 import type { GislSseEvent } from '../../src/types.js';
 import {
   GislAbortError,
@@ -792,6 +792,93 @@ describe('GislClient', () => {
         expect(valErr.statusCode).toBe(422);
         expect(valErr.path).toBe('/api/contact');
       }
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // External imports
+  // -----------------------------------------------------------------------
+
+  describe('createExternalImport', () => {
+    it('POSTs the JSON payload to /api/external-imports and decodes the handle', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            external_source_id: '019539ab-2222-7000-8000-000000000001',
+            expires_at: '2026-04-26T15:00:00Z',
+            provider: 's3_presigned',
+          },
+        }),
+      );
+
+      const handle = await client.createExternalImport({
+        url: 'https://bucket.s3.example.com/file?X-Amz-Signature=...',
+        providerHint: 's3_presigned',
+      });
+
+      expect(handle.externalSourceId).toBe('019539ab-2222-7000-8000-000000000001');
+      expect(handle.expiresAt).toBeInstanceOf(Date);
+      expect(handle.provider).toBe('s3_presigned');
+
+      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('https://api.example.com/api/external-imports');
+      expect(init.method).toBe('POST');
+      // Wire body is snake_case (camelCase request type is converted via
+      // ExternalImportRequestToJSON before sending).
+      expect(JSON.parse(init.body as string)).toEqual({
+        url: 'https://bucket.s3.example.com/file?X-Amz-Signature=...',
+        provider_hint: 's3_presigned',
+      });
+    });
+
+    it('throws GislFeatureNotAvailableError on 422 planned response', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'External-imports endpoint is not yet available',
+            error_type: 'feature_not_available',
+            violations: [
+              { feature: 'external_imports', availability: 'planned' },
+            ],
+          },
+          422,
+        ),
+      );
+
+      try {
+        await client.createExternalImport({ url: 'https://example.com/asset.mp4' });
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislFeatureNotAvailableError);
+      }
+    });
+
+    it('returns a handle composable into externalImportSource() factory', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            external_source_id: 'eit_handle_123',
+            expires_at: '2026-04-26T15:00:00Z',
+            provider: 'public_https',
+          },
+        }),
+      );
+
+      const handle = await client.createExternalImport({
+        url: 'https://cdn.example.com/clip.mp4',
+      });
+
+      // The handle's externalSourceId round-trips into the WorkflowSource
+      // factory used by createWorkflow — pinning the integration shape so
+      // a regen that renames externalSourceId fails this test.
+      const source = externalImportSource(handle.externalSourceId);
+      expect(source).toEqual({
+        type: 'external_import',
+        external_source_id: 'eit_handle_123',
+      });
     });
   });
 
