@@ -11,6 +11,7 @@ import {
   type WorkflowCreatePayload,
   type ExternalDestinationPayload,
 } from '../../src/types.js';
+import { OperationType } from '../../src/index.js';
 
 // ---------------------------------------------------------------------------
 // Source factories — wire-format snake_case, `type`-discriminated.
@@ -432,6 +433,23 @@ describe('WorkflowProcessingPayload.class_hint coverage', () => {
       expect(payload.processing?.class_hint).toBe(classHint);
     },
   );
+});
+
+describe('OperationType v2 thumbnail sub-type exposure', () => {
+  // Per spike doc §3 / I12 BREAKING — V1 monolithic `thumbnail` is split into
+  // four routing sub-types in v2's OperationType enum. The legacy `thumbnail`
+  // value stays valid during the publisher-migration window. This test pins
+  // the SDK's public surface so a regen that drops a sub-type fails here.
+  it('re-exports the four thumbnail sub-type values via the public SDK entrypoint', () => {
+    expect(OperationType.thumbnail_image).toBe('thumbnail_image');
+    expect(OperationType.thumbnail_video).toBe('thumbnail_video');
+    expect(OperationType.thumbnail_document).toBe('thumbnail_document');
+    expect(OperationType.thumbnail_office).toBe('thumbnail_office');
+  });
+
+  it('still exposes the legacy `thumbnail` value during the migration window', () => {
+    expect(OperationType.thumbnail).toBe('thumbnail');
+  });
 });
 
 describe('JobDefinitionPayload XOR permissiveness', () => {
