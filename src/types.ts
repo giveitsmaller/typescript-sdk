@@ -23,6 +23,19 @@ export interface GislClientConfig {
   apiKey?: string;
   headers?: Record<string, string>;
   timeout?: number;
+  /**
+   * Send credentials (cookies) on every fetch — required in browsers when
+   * authenticating via the session cookie issued by `POST /api/auth/login`
+   * (Symfony firewall). Default `false` — the SDK ships in API-key mode by
+   * default. Set to `true` for browser SPAs that drive the auth flow via
+   * `client.login()` / `client.logout()` so the session cookie persists
+   * across requests.
+   *
+   * Node session persistence (cookie-jar across processes) is out of scope —
+   * this flag only flips fetch's `credentials` option; cookie storage is the
+   * environment's responsibility.
+   */
+  useSessionCookie?: boolean;
   /** Threshold in bytes above which multipart upload is used (default: 10MB) */
   multipartThreshold?: number;
   /** Max concurrent chunk uploads for multipart (default: 4) */

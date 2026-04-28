@@ -4,6 +4,7 @@ import { basename } from 'node:path';
 import {
   AudioWatermarkDecodeRequestToJSON,
   AudioWatermarkDecodeResponseFromJSON,
+  LoginUser200ResponseDataFromJSON,
   CreditsBalanceResponseFromJSON,
   CreditsUsageResponseFromJSON,
   UploadResponseFromJSON,
@@ -39,6 +40,8 @@ import {
 import type {
   AudioWatermarkDecodeRequest,
   AudioWatermarkDecodeResponse,
+  LoginUserRequest,
+  LoginUser200ResponseData,
   ContactRequest,
   CreditsBalanceResponse,
   CreditsUsageResponse,
@@ -313,10 +316,12 @@ export class GislClient {
   private readonly multipartConcurrency: number;
   private readonly multipartMaxAttempts: number;
   private readonly multipartRetryBaseMs: number;
+  private readonly useSessionCookie: boolean;
 
   constructor(config: GislClientConfig) {
     this.baseUrl = config.baseUrl.replace(/\/+$/, '');
     this.timeoutMs = config.timeout ?? DEFAULT_TIMEOUT_MS;
+    this.useSessionCookie = config.useSessionCookie ?? false;
     // Floor the threshold at the first-chunk size: the multipart initiate
     // must always carry an 8MB chunk, so routing a sub-8MB file into the
     // multipart path would violate the contract.
@@ -399,6 +404,11 @@ export class GislClient {
         headers,
         body,
         signal: controller.signal,
+        // `credentials: 'include'` on every request when the consumer opts
+        // into cookie-based auth (Symfony session via /api/auth/login).
+        // No-op in Node (fetch ignores the field there); mandatory for
+        // cross-origin browser SPAs to send the session cookie.
+        ...(this.useSessionCookie ? { credentials: 'include' as const } : {}),
       });
     } catch (err: unknown) {
       if (isAbortError(err)) {
@@ -1203,6 +1213,61 @@ export class GislClient {
     return this.request('GET', '/api/v2/credits/balance', {
       deserialize: CreditsBalanceResponseFromJSON,
     });
+  }
+
+  // -----------------------------------------------------------------------
+  // Auth
+  // -----------------------------------------------------------------------
+
+  /**
+   * Authenticate with email/password. On success the server issues a
+   * session cookie via `Set-Cookie`; subsequent requests authenticate
+   * via that cookie when the client is configured with
+   * `useSessionCookie: true`.
+   *
+   * Failure modes per ticket FX6mbTJD:
+   * - **401** `invalid_credentials` (collapsed with unverified
+   *   accounts for anti-enumeration) → `GislAuthError`.
+   * - **403** account-state failures (`account_locked`,
+   *   `account_disabled`, `account_deleted`,
+   *   `account_deletion_expired`) → `GislAuthError`.
+   * - **429** infrastructure rate-limit → `GislApiError` with
+   *   the `Retry-After` header echoed on the response.
+   *
+   * Node session persistence (cookie-jar across processes) is out of
+   * scope — this method only touches the request side.
+   */
+  async login(credentials: LoginUserRequest): Promise<LoginUser200ResponseData> {
+    return this.request('POST', '/api/auth/login', {
+      body: credentials as unknown as Record<string, unknown>,
+      deserialize: LoginUser200ResponseDataFromJSON,
+    });
+  }
+
+  /**
+   * Invalidate the current session.
+   *
+   * Idempotent: calling logout without an active session returns 401,
+   * but the SDK collapses both 200 and 401 into a single "logged out"
+   * outcome — `logout()` resolves to `void` in either case so caller
+   * cleanup code does not need to special-case the not-currently-
+   * authenticated path. Other errors (e.g. 500, network failures)
+   * still throw.
+   */
+  async logout(): Promise<void> {
+    try {
+      await this.request<void>('POST', '/api/auth/logout', {});
+    } catch (err) {
+      // Treat 401 as success (already logged out — idempotent per
+      // contract). Logout 401 is a bare ErrorEnvelope with no
+      // `error_type`, so it surfaces as the base GislApiError rather
+      // than the typed GislAuthError — match on the status code to
+      // capture both shapes.
+      if (err instanceof GislApiError && err.statusCode === 401) {
+        return;
+      }
+      throw err;
+    }
   }
 
   // -----------------------------------------------------------------------

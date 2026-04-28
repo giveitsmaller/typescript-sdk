@@ -796,6 +796,153 @@ describe('GislClient', () => {
   });
 
   // -----------------------------------------------------------------------
+  // Auth
+  // -----------------------------------------------------------------------
+
+  describe('login', () => {
+    it('POSTs credentials to /api/auth/login and returns the user envelope', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            user: {
+              id: '019539ab-1111-7000-8000-000000000001',
+              email: 'jane@example.com',
+              name: 'Jane Doe',
+              tier: 'free',
+            },
+          },
+        }),
+      );
+
+      const result = await client.login({
+        email: 'jane@example.com',
+        password: 'hunter2',
+      });
+
+      expect(result.user.email).toBe('jane@example.com');
+      expect(result.user.tier).toBe('free');
+
+      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('https://api.example.com/api/auth/login');
+      expect(init.method).toBe('POST');
+      expect(JSON.parse(init.body as string)).toEqual({
+        email: 'jane@example.com',
+        password: 'hunter2',
+      });
+    });
+
+    it('surfaces 401 invalid_credentials as GislAuthError', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'Invalid credentials.',
+            error_type: 'invalid_credentials',
+          },
+          401,
+        ),
+      );
+
+      try {
+        await client.login({ email: 'jane@example.com', password: 'wrong' });
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislAuthError);
+      }
+    });
+
+    it('surfaces 403 account_locked as GislAuthError', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'Account is temporarily locked.',
+            error_type: 'account_locked',
+          },
+          403,
+        ),
+      );
+
+      try {
+        await client.login({ email: 'locked@example.com', password: 'x' });
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislAuthError);
+      }
+    });
+  });
+
+  describe('logout', () => {
+    it('POSTs /api/auth/logout and resolves on 200', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({ success: true, data: {} }),
+      );
+
+      const result = await client.logout();
+      expect(result).toBeUndefined();
+
+      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('https://api.example.com/api/auth/logout');
+      expect(init.method).toBe('POST');
+    });
+
+    it('treats 401 (no active session) as success — does not throw', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          { success: false, error: 'No active session' },
+          401,
+        ),
+      );
+
+      // Must not throw — idempotent per contract.
+      await expect(client.logout()).resolves.toBeUndefined();
+    });
+
+    it('still throws on 500', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({ success: false, error: 'Internal' }, 500),
+      );
+
+      await expect(client.logout()).rejects.toBeInstanceOf(GislApiError);
+    });
+  });
+
+  describe('useSessionCookie config', () => {
+    it('sends fetch with credentials: include when enabled', async () => {
+      const cookieClient = new GislClient({
+        baseUrl: 'https://api.example.com',
+        useSessionCookie: true,
+      });
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: { user: { id: '01', email: 'x@example.com' } },
+        }),
+      );
+
+      await cookieClient.login({ email: 'x@example.com', password: 'p' });
+
+      const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      expect(init.credentials).toBe('include');
+    });
+
+    it('omits credentials field when disabled (default API-key mode)', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: { user: { id: '01', email: 'x@example.com' } },
+        }),
+      );
+
+      await client.login({ email: 'x@example.com', password: 'p' });
+
+      const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      expect(init.credentials).toBeUndefined();
+    });
+  });
+
+  // -----------------------------------------------------------------------
   // Audio watermark decode
   // -----------------------------------------------------------------------
 

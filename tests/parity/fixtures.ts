@@ -136,6 +136,8 @@ export const KNOWN_SDK_METHODS: ReadonlySet<string> = new Set([
   'getCreditsUsage',
   'getMetadata',
   'getSchema',
+  'login',
+  'logout',
   'preflightClips',
   'probeUpload',
   'retryOperation',
