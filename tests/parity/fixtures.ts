@@ -129,6 +129,8 @@ export const KNOWN_SDK_METHODS: ReadonlySet<string> = new Set([
   'waitForWorkflow',
   'getWorkflowDownloads',
   'streamEvents',
+  'getCreditsBalance',
+  'getCreditsUsage',
   'getMetadata',
   'getSchema',
   'retryOperation',

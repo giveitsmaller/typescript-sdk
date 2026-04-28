@@ -2,6 +2,8 @@ import { readFileSync, statSync } from 'node:fs';
 import { basename } from 'node:path';
 
 import {
+  CreditsBalanceResponseFromJSON,
+  CreditsUsageResponseFromJSON,
   UploadResponseFromJSON,
   MultipartInitiateResponseFromJSON,
   MultipartInitiateRequestMetadataHintToJSON,
@@ -31,6 +33,8 @@ import {
 
 import type {
   ContactRequest,
+  CreditsBalanceResponse,
+  CreditsUsageResponse,
   UploadResponse,
   MultipartInitiateResponse,
   MultipartCompleteResponse,
@@ -58,6 +62,7 @@ import {
 } from './errors.js';
 import { parseSseStream } from './sse.js';
 import type {
+  CreditsUsageOptions,
   GetSchemaOptions,
   GetSchemaResult,
   GislClientConfig,
@@ -1114,6 +1119,42 @@ export class GislClient {
   async submitContact(payload: ContactRequest): Promise<void> {
     await this.request<void>('POST', '/api/contact', {
       body: payload as unknown as Record<string, unknown>,
+    });
+  }
+
+  // -----------------------------------------------------------------------
+  // Credits / billing
+  // -----------------------------------------------------------------------
+
+  /**
+   * Get a snapshot of the caller's current credit position. The canonical
+   * billing-state surface — `BalanceExhaustedResponse` (402) on workflow
+   * creation includes pre-error counters for context, but UIs should drive
+   * spend-now affordances and tier-upgrade prompts off this endpoint, not
+   * off the error envelope.
+   */
+  async getCreditsBalance(): Promise<CreditsBalanceResponse> {
+    return this.request('GET', '/api/v2/credits/balance', {
+      deserialize: CreditsBalanceResponseFromJSON,
+    });
+  }
+
+  /**
+   * Get a paginated page of credit transaction history for the caller.
+   * Server defaults: `limit=20`, `offset=0`. Most-recent-first.
+   */
+  async getCreditsUsage(options: CreditsUsageOptions = {}): Promise<CreditsUsageResponse> {
+    const params = new URLSearchParams();
+    if (options.limit !== undefined) params.set('limit', String(options.limit));
+    if (options.offset !== undefined) params.set('offset', String(options.offset));
+    const query = params.toString();
+    // String concatenation (not template) so the contract-drift path scanner
+    // picks up the literal path. See getSchema for the same pattern.
+    const path = query.length > 0
+      ? '/api/v2/credits/usage' + '?' + query
+      : '/api/v2/credits/usage';
+    return this.request('GET', path, {
+      deserialize: CreditsUsageResponseFromJSON,
     });
   }
 }

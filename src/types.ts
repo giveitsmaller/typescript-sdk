@@ -287,6 +287,20 @@ export type GetSchemaResult =
     };
 
 // ---------------------------------------------------------------------------
+// Credits / billing
+// ---------------------------------------------------------------------------
+
+export interface CreditsUsageOptions {
+  /**
+   * Page size. Server defaults to 20 and rejects values outside `[1, 100]`
+   * with a 400 validation envelope.
+   */
+  limit?: number;
+  /** Page offset (zero-based). Server default is 0. */
+  offset?: number;
+}
+
+// ---------------------------------------------------------------------------
 // Polling options
 // ---------------------------------------------------------------------------
 

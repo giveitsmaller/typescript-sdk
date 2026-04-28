@@ -5,6 +5,7 @@ export { parseSseStream } from './sse.js';
 
 // SDK types and factories
 export type {
+  CreditsUsageOptions,
   GetSchemaOptions,
   GetSchemaResult,
   GislClientConfig,
@@ -56,6 +57,9 @@ export type { GislApiErrorOptions } from './errors.js';
 // Re-export key contract types so users only need @giveitsmaller/sdk
 export type {
   ContactRequest,
+  CreditsBalanceResponse,
+  CreditsUsageResponse,
+  CreditTransaction,
   UploadResponse,
   WorkflowCreateResponse,
   WorkflowStatusResponse,
@@ -78,6 +82,7 @@ export type {
 
 export {
   ContactSubject,
+  CreditTransactionSourceBucket,
   WorkflowStatus,
   OperationType,
   SseEventType,

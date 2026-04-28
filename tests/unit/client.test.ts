@@ -620,6 +620,119 @@ describe('GislClient', () => {
   });
 
   // -----------------------------------------------------------------------
+  // Credits
+  // -----------------------------------------------------------------------
+
+  describe('getCreditsBalance', () => {
+    it('GETs /api/v2/credits/balance and decodes snake_case fields', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            monthly_balance: 1200,
+            purchased_balance: 5000,
+            overdraft_limit: 500,
+            overdraft_debt: 0,
+            available_credits: 6700,
+            monthly_allowance: 2000,
+            tier: 'pro',
+          },
+        }),
+      );
+
+      const balance = await client.getCreditsBalance();
+      expect(balance.monthlyBalance).toBe(1200);
+      expect(balance.purchasedBalance).toBe(5000);
+      expect(balance.overdraftLimit).toBe(500);
+      expect(balance.overdraftDebt).toBe(0);
+      expect(balance.availableCredits).toBe(6700);
+      expect(balance.monthlyAllowance).toBe(2000);
+      expect(balance.tier).toBe('pro');
+
+      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('https://api.example.com/api/v2/credits/balance');
+      expect(init.method).toBe('GET');
+    });
+  });
+
+  describe('getCreditsUsage', () => {
+    it('GETs /api/v2/credits/usage with no query when options omitted', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: { transactions: [], total: 0, limit: 20, offset: 0 },
+        }),
+      );
+
+      const page = await client.getCreditsUsage();
+      expect(page.transactions).toEqual([]);
+      expect(page.total).toBe(0);
+
+      const [url] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('https://api.example.com/api/v2/credits/usage');
+    });
+
+    it('forwards limit + offset as querystring params', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            transactions: [
+              {
+                id: '019539ad-3333-7000-8000-aaaaaaaaaa01',
+                type: 'reservation',
+                amount: -45,
+                monthly_balance_before: 1000,
+                monthly_balance_after: 955,
+                purchased_balance_before: 4975,
+                purchased_balance_after: 4975,
+                source_bucket: 'monthly',
+                monthly_amount: -45,
+                purchased_amount: 0,
+                pricing_version: 'v3.2.0',
+                description: 'Workflow reservation',
+                reference_type: 'workflow',
+                reference_id: '019539ac-2222-7000-8000-000000000001',
+                created_at: '2026-04-26T13:55:00Z',
+              },
+            ],
+            total: 7,
+            limit: 5,
+            offset: 5,
+          },
+        }),
+      );
+
+      const page = await client.getCreditsUsage({ limit: 5, offset: 5 });
+      expect(page.limit).toBe(5);
+      expect(page.offset).toBe(5);
+      expect(page.transactions).toHaveLength(1);
+      expect(page.transactions[0].monthlyBalanceAfter).toBe(955);
+      expect(page.transactions[0].sourceBucket).toBe('monthly');
+
+      const [url] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      expect(url).toContain('/api/v2/credits/usage?');
+      expect(url).toContain('limit=5');
+      expect(url).toContain('offset=5');
+    });
+
+    it('omits absent params (does not coerce to defaults client-side)', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: { transactions: [], total: 0, limit: 20, offset: 12 },
+        }),
+      );
+
+      await client.getCreditsUsage({ offset: 12 });
+
+      const [url] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      expect(url).toContain('/api/v2/credits/usage?offset=12');
+      expect(url).not.toContain('limit=');
+    });
+  });
+
+  // -----------------------------------------------------------------------
   // Single upload
   // -----------------------------------------------------------------------
 
