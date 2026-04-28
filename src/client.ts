@@ -30,6 +30,7 @@ import {
 } from '@giveitsmaller/contracts/openapi';
 
 import type {
+  ContactRequest,
   UploadResponse,
   MultipartInitiateResponse,
   MultipartCompleteResponse,
@@ -388,6 +389,13 @@ export class GislClient {
 
     if (opts.rawResponse) {
       return response as unknown as T;
+    }
+
+    // 204 No Content — contracted success status for endpoints that return
+    // no body (e.g. POST /api/contact). Short-circuit before handleResponse
+    // so an empty body never trips the JSON parser.
+    if (response.status === 204) {
+      return undefined as unknown as T;
     }
 
     return this.handleResponse(response, path, opts.deserialize);
@@ -1089,6 +1097,23 @@ export class GislClient {
   async retryOperation(operationId: string): Promise<RetryResponse> {
     return this.request('POST', `/api/operations/${encodeURIComponent(operationId)}/retry`, {
       deserialize: RetryResponseFromJSON,
+    });
+  }
+
+  // -----------------------------------------------------------------------
+  // Contact
+  // -----------------------------------------------------------------------
+
+  /**
+   * Submit a contact-form message. The endpoint returns 204 No Content on
+   * success, so this method resolves to `void`.
+   *
+   * Validation errors (e.g. missing `email`, non-empty honeypot `website`)
+   * surface as `GislValidationError` from the standard error envelope.
+   */
+  async submitContact(payload: ContactRequest): Promise<void> {
+    await this.request<void>('POST', '/api/contact', {
+      body: payload as unknown as Record<string, unknown>,
     });
   }
 }

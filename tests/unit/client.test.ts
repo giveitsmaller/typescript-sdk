@@ -558,6 +558,68 @@ describe('GislClient', () => {
   });
 
   // -----------------------------------------------------------------------
+  // Contact
+  // -----------------------------------------------------------------------
+
+  describe('submitContact', () => {
+    it('POSTs the JSON payload to /api/contact and resolves to undefined on 204', async () => {
+      // 204 No Content — empty body, no content-type header. The request
+      // helper must short-circuit before the JSON parser would otherwise
+      // throw on an empty body.
+      fetchSpy.mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+      const result = await client.submitContact({
+        name: 'Ada Lovelace',
+        email: 'ada@example.test',
+        subject: 'general_enquiry',
+        message: 'Hello, world.',
+      });
+
+      expect(result).toBeUndefined();
+
+      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('https://api.example.com/api/contact');
+      expect(init.method).toBe('POST');
+      expect(JSON.parse(init.body as string)).toEqual({
+        name: 'Ada Lovelace',
+        email: 'ada@example.test',
+        subject: 'general_enquiry',
+        message: 'Hello, world.',
+      });
+    });
+
+    it('throws GislValidationError on validation envelope (e.g. honeypot tripped)', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'Validation failed',
+            details: [
+              { field: 'website', message: 'must be empty' },
+            ],
+          },
+          422,
+        ),
+      );
+
+      try {
+        await client.submitContact({
+          email: 'spam@example.test',
+          subject: 'general_enquiry',
+          message: 'spam',
+          website: 'http://spam.example',
+        });
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislValidationError);
+        const valErr = err as GislValidationError;
+        expect(valErr.statusCode).toBe(422);
+        expect(valErr.path).toBe('/api/contact');
+      }
+    });
+  });
+
+  // -----------------------------------------------------------------------
   // Single upload
   // -----------------------------------------------------------------------
 

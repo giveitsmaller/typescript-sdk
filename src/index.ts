@@ -55,6 +55,7 @@ export type { GislApiErrorOptions } from './errors.js';
 
 // Re-export key contract types so users only need @giveitsmaller/sdk
 export type {
+  ContactRequest,
   UploadResponse,
   WorkflowCreateResponse,
   WorkflowStatusResponse,
@@ -76,6 +77,7 @@ export type {
 } from '@giveitsmaller/contracts/openapi';
 
 export {
+  ContactSubject,
   WorkflowStatus,
   OperationType,
   SseEventType,

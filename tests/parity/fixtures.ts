@@ -132,6 +132,7 @@ export const KNOWN_SDK_METHODS: ReadonlySet<string> = new Set([
   'getMetadata',
   'getSchema',
   'retryOperation',
+  'submitContact',
   // Webhook mode invokes verifyWebhook() directly; it is not a GislClient method.
   'verifyWebhook',
 ]);
