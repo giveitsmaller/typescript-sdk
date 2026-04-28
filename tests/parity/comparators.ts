@@ -360,6 +360,15 @@ export function compareValue(
   path: string,
 ): ParityDiff {
   if (expected === undefined && actual === undefined) return passing();
+  // Date coercion: openapi-generator's FromJSON helpers emit `Date` objects
+  // for ISO-8601 wire fields (e.g. `createdAt`, `expiresAt`). YAML cannot
+  // express Date — fixtures author these as quoted ISO strings. Coerce
+  // before the typeof check so a Date on the actual side compares cleanly
+  // against a string on the expected side. Both sides treated symmetrically
+  // so a fixture written with a Date literal (rare; legacy update-mode
+  // output) still works.
+  if (expected instanceof Date) expected = expected.toISOString() as FixtureValue;
+  if (actual instanceof Date) actual = actual.toISOString() as FixtureValue;
   if (expected === null && actual === null) return passing();
   if (expected === null || actual === null) {
     return fail(path, `expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);

@@ -235,6 +235,36 @@ describe('compareValue — token-aware string positions', () => {
   });
 });
 
+describe('compareValue — Date coercion (T16)', () => {
+  // openapi-generator FromJSON helpers emit `Date` objects for ISO-8601
+  // wire fields. YAML cannot express Date — fixtures author them as
+  // quoted ISO strings. The comparator coerces `instanceof Date` to its
+  // ISO string before comparison so the typeof check matches.
+  it('treats a Date actual as equal to its ISO string expected', () => {
+    const exp = '2026-04-26T13:00:00.000Z' as unknown as FixtureValue;
+    const act = new Date('2026-04-26T13:00:00.000Z') as unknown as FixtureValue;
+    expect(compareValue(exp, act, '$').ok).toBe(true);
+  });
+
+  it('treats nested Date actuals consistently', () => {
+    const exp = {
+      createdAt: '2026-04-26T13:00:00.000Z',
+      updatedAt: '2026-04-26T13:05:00.000Z',
+    } as unknown as FixtureValue;
+    const act = {
+      createdAt: new Date('2026-04-26T13:00:00.000Z'),
+      updatedAt: new Date('2026-04-26T13:05:00.000Z'),
+    } as unknown as FixtureValue;
+    expect(compareValue(exp, act, '$').ok).toBe(true);
+  });
+
+  it('fails when the Date actual does not match the expected ISO string', () => {
+    const exp = '2026-04-26T13:00:00.000Z' as unknown as FixtureValue;
+    const act = new Date('2026-05-01T00:00:00.000Z') as unknown as FixtureValue;
+    expect(compareValue(exp, act, '$').ok).toBe(false);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // compareRequests — request-level diffs
 // ---------------------------------------------------------------------------
