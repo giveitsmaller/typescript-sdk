@@ -5,6 +5,8 @@ export { parseSseStream } from './sse.js';
 
 // SDK types and factories
 export type {
+  GetSchemaOptions,
+  GetSchemaResult,
   GislClientConfig,
   GislSseEvent,
   UploadOptions,

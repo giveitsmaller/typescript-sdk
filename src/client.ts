@@ -38,7 +38,6 @@ import type {
   WorkflowStatusResponse,
   WorkflowDownloadResponse,
   MetadataResponse,
-  OperationsSchemaResponse,
   RetryResponse,
 } from '@giveitsmaller/contracts/openapi';
 
@@ -58,6 +57,8 @@ import {
 } from './errors.js';
 import { parseSseStream } from './sse.js';
 import type {
+  GetSchemaOptions,
+  GetSchemaResult,
   GislClientConfig,
   GislSseEvent,
   UploadOptions,
@@ -329,6 +330,7 @@ export class GislClient {
       deserialize?: (raw: unknown) => T;
       rawResponse?: boolean;
       signal?: AbortSignal;
+      headers?: Record<string, string>;
     } = {},
   ): Promise<T> {
     // Fast-fail on a pre-aborted user signal before building the request.
@@ -337,7 +339,7 @@ export class GislClient {
     }
 
     const url = `${this.baseUrl}${path}`;
-    const headers: Record<string, string> = { ...this.headers };
+    const headers: Record<string, string> = { ...this.headers, ...opts.headers };
     let body: BodyInit | undefined;
 
     if (opts.json !== false && opts.body && !(opts.body instanceof FormData)) {
@@ -423,14 +425,6 @@ export class GislClient {
       json = await response.json();
     } catch {
       throw new GislApiError(response.status, 'Invalid JSON response', path);
-    }
-
-    // Schema endpoint returns raw JSON (no envelope)
-    if (path === '/api/operations/schema') {
-      if (!response.ok) {
-        throw new GislApiError(response.status, json.error ?? 'Unknown error', path);
-      }
-      return deserialize ? deserialize(json) : (json as T);
     }
 
     // Standard envelope: { success, data } or { success, error, details }
@@ -1033,12 +1027,60 @@ export class GislClient {
 
   /**
    * Get the operations schema (available types, options, constraints).
-   * This endpoint returns raw JSON (no envelope) and is CDN-cacheable.
+   *
+   * Returns raw JSON (no envelope). The response is **per-tier private**
+   * (cache key includes the caller's `user_tier`); CDN-style public
+   * caching is not used. Pass `ifNoneMatch` / `ifModifiedSince` from a
+   * previous response to revalidate — a 304 surfaces as
+   * `{ notModified: true, etag, lastModified }` so callers can keep
+   * using their cached copy.
    */
-  async getSchema(): Promise<OperationsSchemaResponse> {
-    return this.request('GET', '/api/operations/schema', {
-      deserialize: OperationsSchemaResponseFromJSON,
+  async getSchema(
+    options: GetSchemaOptions = {},
+  ): Promise<GetSchemaResult> {
+    const params = new URLSearchParams();
+    if (options.mimeType !== undefined) params.set('mime_type', options.mimeType);
+    if (options.operation !== undefined) params.set('operation', options.operation);
+    const query = params.toString();
+    // The contract-drift test (tests/unit/contract-drift.test.ts) scans this
+    // file for path literals via a regex that picks up both single-quoted
+    // strings AND backtick templates. Embedding the querystring in a single
+    // template would normalise to a path-with-querystring that no contract
+    // path matches. Compose with concatenation so only the bare path appears
+    // as a literal.
+    const path = '/api/operations/schema' + (query ? '?' + query : '');
+
+    const headers: Record<string, string> = {};
+    if (options.ifNoneMatch !== undefined) headers['If-None-Match'] = options.ifNoneMatch;
+    if (options.ifModifiedSince !== undefined) headers['If-Modified-Since'] = options.ifModifiedSince;
+
+    const response = await this.request<Response>('GET', path, {
+      rawResponse: true,
+      signal: options.signal,
+      ...(Object.keys(headers).length > 0 ? { headers } : {}),
     });
+
+    const etag = response.headers.get('etag') ?? undefined;
+    const lastModified = response.headers.get('last-modified') ?? undefined;
+
+    if (response.status === 304) {
+      return { notModified: true, etag, lastModified };
+    }
+
+    if (!response.ok) {
+      let errorMessage = 'Unknown error';
+      try {
+        const errJson = (await response.json()) as { error?: string };
+        if (errJson.error) errorMessage = errJson.error;
+      } catch {
+        // Non-JSON body — keep generic message.
+      }
+      throw new GislApiError(response.status, errorMessage, path);
+    }
+
+    const raw: unknown = await response.json();
+    const data = OperationsSchemaResponseFromJSON(raw);
+    return { notModified: false, data, etag, lastModified };
   }
 
   /**

@@ -1,5 +1,6 @@
 import type {
   OperationType,
+  OperationsSchemaResponse,
   CallbackEventType,
   SseEventType,
   SseOperationProgressData,
@@ -246,6 +247,44 @@ type _WorkflowCreatePayloadDrift =
 type _AssertTrue<T extends true> = T;
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 type _WorkflowCreatePayloadDriftAssertion = _AssertTrue<_WorkflowCreatePayloadDrift>;
+
+// ---------------------------------------------------------------------------
+// Schema fetch options
+// ---------------------------------------------------------------------------
+
+export interface GetSchemaOptions {
+  /** Filter the schema to operations that accept this MIME type (e.g. `image/jpeg`). */
+  mimeType?: string;
+  /** Filter the schema to a single operation type. */
+  operation?: OperationType;
+  /**
+   * Conditional revalidation: send the previously-received `ETag` value to
+   * receive a 304-not-modified sentinel when the cached response is still
+   * fresh. Strong-ETag comparison.
+   */
+  ifNoneMatch?: string;
+  /**
+   * Conditional revalidation: send the previously-received `Last-Modified`
+   * value (HTTP-date) to receive a 304-not-modified sentinel when the
+   * cached response is still fresh.
+   */
+  ifModifiedSince?: string;
+  /** Cancel an in-flight schema fetch. Surfaces as `GislAbortError`. */
+  signal?: AbortSignal;
+}
+
+export type GetSchemaResult =
+  | {
+      notModified: false;
+      data: OperationsSchemaResponse;
+      etag?: string;
+      lastModified?: string;
+    }
+  | {
+      notModified: true;
+      etag?: string;
+      lastModified?: string;
+    };
 
 // ---------------------------------------------------------------------------
 // Polling options

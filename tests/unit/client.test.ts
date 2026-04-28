@@ -421,24 +421,113 @@ describe('GislClient', () => {
   // -----------------------------------------------------------------------
 
   describe('getSchema', () => {
-    it('handles raw JSON response (no envelope)', async () => {
+    function schemaJson(): Record<string, unknown> {
+      return {
+        schema_version: '2.0.0',
+        operations: {
+          compress: {
+            description: 'Compress files',
+            input_model: 'single',
+            mime_groups: {},
+            options: {},
+          },
+        },
+      };
+    }
+
+    function schemaResponse(
+      status: number,
+      headers: Record<string, string>,
+      body: unknown = null,
+    ): Response {
+      const merged: HeadersInit = {
+        'Content-Type': 'application/json',
+        ...headers,
+      };
+      return new Response(body === null ? null : JSON.stringify(body), {
+        status,
+        headers: merged,
+      });
+    }
+
+    it('returns parsed schema with ETag/Last-Modified surfaced (200 path)', async () => {
       fetchSpy.mockResolvedValueOnce(
-        jsonResponse({
-          schema_version: '2.0.0',
-          operations: {
-            compress: {
-              description: 'Compress files',
-              input_model: 'single',
-              mime_groups: {},
-              options: {},
-            },
+        schemaResponse(
+          200,
+          { ETag: '"v2-pro-47"', 'Last-Modified': 'Sun, 26 Apr 2026 09:00:00 GMT' },
+          schemaJson(),
+        ),
+      );
+
+      const result = await client.getSchema();
+      if (result.notModified) throw new Error('expected notModified=false');
+      expect(result.data.schemaVersion).toBe('2.0.0');
+      expect(result.data.operations).toHaveProperty('compress');
+      expect(result.etag).toBe('"v2-pro-47"');
+      expect(result.lastModified).toBe('Sun, 26 Apr 2026 09:00:00 GMT');
+    });
+
+    it('forwards mimeType + operation filters as querystring', async () => {
+      fetchSpy.mockResolvedValueOnce(schemaResponse(200, { ETag: '"v2-pro-47"' }, schemaJson()));
+
+      await client.getSchema({ mimeType: 'image/jpeg', operation: 'compress' as never });
+
+      const [url] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      expect(url).toContain('/api/operations/schema?');
+      expect(url).toContain('mime_type=image%2Fjpeg');
+      expect(url).toContain('operation=compress');
+    });
+
+    it('omits the querystring when no filters are passed', async () => {
+      fetchSpy.mockResolvedValueOnce(schemaResponse(200, {}, schemaJson()));
+
+      await client.getSchema();
+
+      const [url] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('https://api.example.com/api/operations/schema');
+    });
+
+    it('forwards ifNoneMatch + ifModifiedSince as request headers', async () => {
+      fetchSpy.mockResolvedValueOnce(schemaResponse(200, {}, schemaJson()));
+
+      await client.getSchema({
+        ifNoneMatch: '"v2-pro-47"',
+        ifModifiedSince: 'Sun, 26 Apr 2026 09:00:00 GMT',
+      });
+
+      const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      const headers = init.headers as Record<string, string>;
+      expect(headers['If-None-Match']).toBe('"v2-pro-47"');
+      expect(headers['If-Modified-Since']).toBe('Sun, 26 Apr 2026 09:00:00 GMT');
+    });
+
+    it('returns the notModified sentinel on 304 with no body', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        new Response(null, {
+          status: 304,
+          headers: {
+            ETag: '"v2-pro-47"',
+            'Last-Modified': 'Sun, 26 Apr 2026 09:00:00 GMT',
           },
         }),
       );
 
-      const schema = await client.getSchema();
-      expect(schema.schemaVersion).toBe('2.0.0');
-      expect(schema.operations).toHaveProperty('compress');
+      const result = await client.getSchema({ ifNoneMatch: '"v2-pro-47"' });
+      expect(result.notModified).toBe(true);
+      if (!result.notModified) throw new Error('unreachable');
+      expect(result.etag).toBe('"v2-pro-47"');
+      expect(result.lastModified).toBe('Sun, 26 Apr 2026 09:00:00 GMT');
+    });
+
+    it('throws GislApiError on 5xx without unwrapping the 304 sentinel path', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: 'Schema unavailable' }), {
+          status: 503,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+
+      await expect(client.getSchema()).rejects.toThrow(GislApiError);
     });
   });
 
