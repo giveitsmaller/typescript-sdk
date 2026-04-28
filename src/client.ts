@@ -2,6 +2,8 @@ import { readFileSync, statSync } from 'node:fs';
 import { basename } from 'node:path';
 
 import {
+  AudioWatermarkDecodeRequestToJSON,
+  AudioWatermarkDecodeResponseFromJSON,
   CreditsBalanceResponseFromJSON,
   CreditsUsageResponseFromJSON,
   UploadResponseFromJSON,
@@ -33,6 +35,8 @@ import {
 } from '@giveitsmaller/contracts/openapi';
 
 import type {
+  AudioWatermarkDecodeRequest,
+  AudioWatermarkDecodeResponse,
   ContactRequest,
   CreditsBalanceResponse,
   CreditsUsageResponse,
@@ -1140,6 +1144,38 @@ export class GislClient {
   async getCreditsBalance(): Promise<CreditsBalanceResponse> {
     return this.request('GET', '/api/v2/credits/balance', {
       deserialize: CreditsBalanceResponseFromJSON,
+    });
+  }
+
+  // -----------------------------------------------------------------------
+  // Audio watermark
+  // -----------------------------------------------------------------------
+
+  /**
+   * Decode a previously-embedded steganographic audio watermark
+   * (per ticket I20). Pairs with the `audio_watermark` operation —
+   * the operation embeds; this endpoint decodes.
+   *
+   * **Enterprise tier only.** Free / pro callers receive
+   * `GislFeatureTierRestrictedError` (403).
+   *
+   * **Own watermarks only.** The decoder will refuse to extract from
+   * media the caller did not mark themselves — mismatches return 404
+   * (rather than leaking that *some* watermark was detected).
+   *
+   * Currently `availability: planned` — calls return
+   * `GislFeatureNotAvailableError` (422) until the cross-repo Lambda
+   * support ships. Decode requests are rate-limited independently
+   * from workflow-create.
+   */
+  async decodeAudioWatermark(
+    payload: AudioWatermarkDecodeRequest,
+  ): Promise<AudioWatermarkDecodeResponse> {
+    // The generated request type is camelCase; convert to snake_case wire
+    // shape before sending. Mirrors the multipart complete pattern.
+    return this.request('POST', '/api/audio-watermark/decode', {
+      body: AudioWatermarkDecodeRequestToJSON(payload) as unknown as Record<string, unknown>,
+      deserialize: AudioWatermarkDecodeResponseFromJSON,
     });
   }
 

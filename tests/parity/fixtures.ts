@@ -125,6 +125,7 @@ export function isToken(value: string): boolean {
 export const KNOWN_SDK_METHODS: ReadonlySet<string> = new Set([
   'uploadFile',
   'createWorkflow',
+  'decodeAudioWatermark',
   'getWorkflowStatus',
   'waitForWorkflow',
   'getWorkflowDownloads',

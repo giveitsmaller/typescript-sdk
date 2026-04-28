@@ -58,6 +58,8 @@ export type { GislApiErrorOptions } from './errors.js';
 
 // Re-export key contract types so users only need @giveitsmaller/sdk
 export type {
+  AudioWatermarkDecodeRequest,
+  AudioWatermarkDecodeResponse,
   ContactRequest,
   CreditsBalanceResponse,
   CreditsUsageResponse,
@@ -85,6 +87,8 @@ export type {
 } from '@giveitsmaller/contracts/openapi';
 
 export {
+  AudioWatermarkDecodeRequestMethodHintEnum,
+  AudioWatermarkDecodeResponseMethodEnum,
   ContactSubject,
   CreditTransactionSourceBucket,
   UploadProbeStatus,

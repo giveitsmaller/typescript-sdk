@@ -620,6 +620,101 @@ describe('GislClient', () => {
   });
 
   // -----------------------------------------------------------------------
+  // Audio watermark decode
+  // -----------------------------------------------------------------------
+
+  describe('decodeAudioWatermark', () => {
+    it('POSTs the JSON payload to /api/audio-watermark/decode and decodes the response', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            watermark_id: '019539ab-2222-7000-8000-bbbbbbbbbbbb',
+            payload: 'license-key-abc-123',
+            confidence: 0.94,
+            method: 'psychoacoustic',
+            detected_at: '2026-04-26T13:50:00Z',
+          },
+        }),
+      );
+
+      const result = await client.decodeAudioWatermark({
+        fileId: '019539ab-1111-7000-8000-000000000aa1',
+        methodHint: 'auto',
+      });
+
+      expect(result.watermarkId).toBe('019539ab-2222-7000-8000-bbbbbbbbbbbb');
+      expect(result.payload).toBe('license-key-abc-123');
+      expect(result.confidence).toBeCloseTo(0.94);
+      expect(result.method).toBe('psychoacoustic');
+
+      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('https://api.example.com/api/audio-watermark/decode');
+      expect(init.method).toBe('POST');
+      // Wire body is snake_case (camelCase request type is converted via
+      // AudioWatermarkDecodeRequestToJSON before sending).
+      expect(JSON.parse(init.body as string)).toEqual({
+        file_id: '019539ab-1111-7000-8000-000000000aa1',
+        method_hint: 'auto',
+      });
+    });
+
+    it('throws GislFeatureTierRestrictedError on 403 (free / pro caller)', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'Audio-watermark decode requires the enterprise tier',
+            error_type: 'feature_tier_restricted',
+            violations: [
+              {
+                feature: 'audio_watermark.decode',
+                required_tier: 'enterprise',
+                current_tier: 'pro',
+              },
+            ],
+          },
+          403,
+        ),
+      );
+
+      try {
+        await client.decodeAudioWatermark({
+          fileId: '019539ab-1111-7000-8000-000000000aa1',
+        });
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislFeatureTierRestrictedError);
+      }
+    });
+
+    it('throws GislFeatureNotAvailableError on 422 planned response', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'Audio-watermark decode is not yet available',
+            error_type: 'feature_not_available',
+            violations: [
+              { feature: 'audio_watermark.decode', availability: 'planned' },
+            ],
+          },
+          422,
+        ),
+      );
+
+      try {
+        await client.decodeAudioWatermark({
+          fileId: '019539ab-1111-7000-8000-000000000aa1',
+        });
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislFeatureNotAvailableError);
+      }
+    });
+  });
+
+  // -----------------------------------------------------------------------
   // Upload probe
   // -----------------------------------------------------------------------
 
