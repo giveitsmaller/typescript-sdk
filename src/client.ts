@@ -5,6 +5,7 @@ import {
   CreditsBalanceResponseFromJSON,
   CreditsUsageResponseFromJSON,
   UploadResponseFromJSON,
+  UploadProbeResponseFromJSON,
   MultipartInitiateResponseFromJSON,
   MultipartInitiateRequestMetadataHintToJSON,
   MultipartCompleteResponseFromJSON,
@@ -36,6 +37,7 @@ import type {
   CreditsBalanceResponse,
   CreditsUsageResponse,
   UploadResponse,
+  UploadProbeResponse,
   MultipartInitiateResponse,
   MultipartCompleteResponse,
   MultipartCompleteRequest,
@@ -67,6 +69,8 @@ import type {
   GetSchemaResult,
   GislClientConfig,
   GislSseEvent,
+  PreflightClipError,
+  PreflightClipsResult,
   UploadOptions,
   WaitOptions,
   WorkflowCreatePayload,
@@ -1137,6 +1141,59 @@ export class GislClient {
     return this.request('GET', '/api/v2/credits/balance', {
       deserialize: CreditsBalanceResponseFromJSON,
     });
+  }
+
+  // -----------------------------------------------------------------------
+  // Upload probe / preflight
+  // -----------------------------------------------------------------------
+
+  /**
+   * Probe an uploaded file for workflow-readiness — detects corruption,
+   * unsupported codecs, and pre-assigns the processing class the server
+   * would route the file to. Designed for the long-form merge edge case
+   * where a single bad input would fail the whole workflow.
+   *
+   * Currently `availability: planned` — calls return
+   * `GislFeatureNotAvailableError` (422) until the cross-repo Lambda
+   * support ships. Idempotent: probing the same `fileId` twice returns
+   * the cached result.
+   */
+  async probeUpload(fileId: string): Promise<UploadProbeResponse> {
+    return this.request('POST', `/api/uploads/${encodeURIComponent(fileId)}/probe`, {
+      deserialize: UploadProbeResponseFromJSON,
+    });
+  }
+
+  /**
+   * Probe N uploaded files in parallel and partition the results by
+   * outcome. Returns `{ ok, rejected, errors }` so the caller can
+   * cleanly drop bad clips before submitting a long-form merge
+   * workflow. Probe-call failures (including the
+   * `feature_not_available` 422 returned while the endpoint is
+   * `availability: planned`) land in `errors` rather than throwing,
+   * so a partially-successful batch still yields useful aggregation.
+   */
+  async preflightClips(fileIds: string[]): Promise<PreflightClipsResult> {
+    const settled = await Promise.allSettled(
+      fileIds.map((fileId) => this.probeUpload(fileId)),
+    );
+    const ok: UploadProbeResponse[] = [];
+    const rejected: UploadProbeResponse[] = [];
+    const errors: PreflightClipError[] = [];
+    for (let i = 0; i < settled.length; i++) {
+      const result = settled[i];
+      const fileId = fileIds[i];
+      if (result.status === 'fulfilled') {
+        if (result.value.probeStatus === 'ok') {
+          ok.push(result.value);
+        } else {
+          rejected.push(result.value);
+        }
+      } else {
+        errors.push({ fileId, error: result.reason });
+      }
+    }
+    return { ok, rejected, errors };
   }
 
   /**

@@ -10,6 +10,7 @@ import type {
   SseJobFailedData,
   SseWorkflowTerminalData,
   MultipartInitiateRequestMetadataHint,
+  UploadProbeResponse,
 } from '@giveitsmaller/contracts/openapi';
 import type { JobInputV2RoleEnum } from '@giveitsmaller/contracts/openapi';
 
@@ -298,6 +299,43 @@ export interface CreditsUsageOptions {
   limit?: number;
   /** Page offset (zero-based). Server default is 0. */
   offset?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Upload probe / preflight
+// ---------------------------------------------------------------------------
+
+/**
+ * Aggregated result of a `preflightClips()` batch probe — N parallel calls
+ * to `POST /api/uploads/{id}/probe`, partitioned by outcome so the caller
+ * can drop bad clips before submitting a long-form merge workflow (per
+ * plan v5 round 10 / F11). Aggregation is structural — `ok` is everything
+ * the server marked workflow-ready, `rejected` is everything else with a
+ * typed probe response, and `errors` carries probe-call failures (e.g.
+ * the 422 `feature_not_available` envelope returned while the endpoint is
+ * still `availability: planned`).
+ */
+export interface PreflightClipsResult {
+  /** Probes that returned `probe_status: 'ok'`. Safe to include in a workflow. */
+  ok: UploadProbeResponse[];
+  /**
+   * Probes that returned a non-`ok` `probe_status` (`corrupt`,
+   * `unsupported_codec`, `missing_metadata`). The caller should exclude
+   * these or convert them first.
+   */
+  rejected: UploadProbeResponse[];
+  /**
+   * Probe calls that themselves failed. Includes the
+   * `feature_not_available` (422) responses returned while the endpoint
+   * is `availability: planned` — narrow on `instanceof
+   * GislFeatureNotAvailableError` to detect that case.
+   */
+  errors: PreflightClipError[];
+}
+
+export interface PreflightClipError {
+  fileId: string;
+  error: unknown;
 }
 
 // ---------------------------------------------------------------------------

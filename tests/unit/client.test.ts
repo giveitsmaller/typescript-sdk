@@ -620,6 +620,121 @@ describe('GislClient', () => {
   });
 
   // -----------------------------------------------------------------------
+  // Upload probe
+  // -----------------------------------------------------------------------
+
+  describe('probeUpload', () => {
+    it('POSTs /api/uploads/{id}/probe and decodes the snake_case response', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            file_id: '019539ab-1111-7000-8000-000000000001',
+            probe_status: 'ok',
+            media_metadata: {
+              duration_seconds: 187,
+              width: 1920,
+              height: 1080,
+              codec: 'h264',
+              container: 'mp4',
+              audio_layout: 'stereo',
+              probed_at: '2026-04-26T13:50:00Z',
+            },
+            processing_class_pre_assignment: 'short_form',
+          },
+        }),
+      );
+
+      const result = await client.probeUpload('019539ab-1111-7000-8000-000000000001');
+      expect(result.fileId).toBe('019539ab-1111-7000-8000-000000000001');
+      expect(result.probeStatus).toBe('ok');
+      expect(result.processingClassPreAssignment).toBe('short_form');
+
+      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('https://api.example.com/api/uploads/019539ab-1111-7000-8000-000000000001/probe');
+      expect(init.method).toBe('POST');
+    });
+
+    it('throws GislFeatureNotAvailableError on 422 planned response', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'Probe endpoint is not yet available',
+            error_type: 'feature_not_available',
+            violations: [
+              { feature: 'upload.probe', availability: 'planned' },
+            ],
+          },
+          422,
+        ),
+      );
+
+      try {
+        await client.probeUpload('019539ab-1111-7000-8000-000000000001');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislFeatureNotAvailableError);
+      }
+    });
+  });
+
+  describe('preflightClips', () => {
+    it('partitions ok / rejected / errors across N parallel probes', async () => {
+      // Three probes: one ok, one corrupt, one 422 planned.
+      fetchSpy
+        .mockResolvedValueOnce(
+          jsonResponse({
+            success: true,
+            data: {
+              file_id: 'aaa',
+              probe_status: 'ok',
+              media_metadata: { duration_seconds: 30, probed_at: '2026-04-26T13:50:00Z' },
+              processing_class_pre_assignment: 'short_form',
+            },
+          }),
+        )
+        .mockResolvedValueOnce(
+          jsonResponse({
+            success: true,
+            data: {
+              file_id: 'bbb',
+              probe_status: 'corrupt',
+              media_metadata: { probed_at: '2026-04-26T13:50:00Z' },
+              processing_class_pre_assignment: 'blocked',
+            },
+          }),
+        )
+        .mockResolvedValueOnce(
+          jsonResponse(
+            {
+              success: false,
+              error: 'planned',
+              error_type: 'feature_not_available',
+              violations: [{ feature: 'upload.probe', availability: 'planned' }],
+            },
+            422,
+          ),
+        );
+
+      const result = await client.preflightClips(['aaa', 'bbb', 'ccc']);
+      expect(result.ok).toHaveLength(1);
+      expect(result.ok[0].fileId).toBe('aaa');
+      expect(result.rejected).toHaveLength(1);
+      expect(result.rejected[0].probeStatus).toBe('corrupt');
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].fileId).toBe('ccc');
+      expect(result.errors[0].error).toBeInstanceOf(GislFeatureNotAvailableError);
+    });
+
+    it('returns empty partitions for an empty input', async () => {
+      const result = await client.preflightClips([]);
+      expect(result).toEqual({ ok: [], rejected: [], errors: [] });
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  // -----------------------------------------------------------------------
   // Credits
   // -----------------------------------------------------------------------
 

@@ -133,6 +133,8 @@ export const KNOWN_SDK_METHODS: ReadonlySet<string> = new Set([
   'getCreditsUsage',
   'getMetadata',
   'getSchema',
+  'preflightClips',
+  'probeUpload',
   'retryOperation',
   'submitContact',
   // Webhook mode invokes verifyWebhook() directly; it is not a GislClient method.
