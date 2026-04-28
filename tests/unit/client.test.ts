@@ -414,6 +414,182 @@ describe('GislClient', () => {
 
       expect(statuses).toEqual(['pending', 'completed']);
     });
+
+    it.each(['cancelled', 'expired'] as const)(
+      'returns immediately on terminal lifecycle status %s',
+      async (status) => {
+        fetchSpy.mockResolvedValueOnce(
+          jsonResponse({
+            success: true,
+            data: { workflow_id: 'wf-1', status, jobs: [] },
+          }),
+        );
+
+        const result = await client.waitForWorkflow('wf-1', {
+          intervalMs: 10,
+          timeoutMs: 5000,
+        });
+
+        expect(result.status).toBe(status);
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    it('returns immediately on paused_insufficient_credits with pausedDetail accessible', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            workflow_id: 'wf-1',
+            status: 'paused_insufficient_credits',
+            jobs: [],
+            paused_detail: {
+              paused_at: '2026-04-26T13:55:00Z',
+              expires_at: '2026-05-03T13:55:00Z',
+              required_action: 'add_credits',
+              message_key: 'workflow.paused.insufficient_credits',
+              locale: 'en-GB',
+              links: {
+                top_up: 'https://example.com/billing/top-up',
+                resume: '/api/workflows/wf-1/resume',
+                check_balance: '/api/v2/credits/balance',
+              },
+            },
+          },
+        }),
+      );
+
+      const result = await client.waitForWorkflow('wf-1', {
+        intervalMs: 10,
+        timeoutMs: 5000,
+      });
+
+      expect(result.status).toBe('paused_insufficient_credits');
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(result.pausedDetail).toBeDefined();
+      expect(result.pausedDetail?.requiredAction).toBe('add_credits');
+      expect(result.pausedDetail?.pausedAt).toBeInstanceOf(Date);
+      expect(result.pausedDetail?.expiresAt).toBeInstanceOf(Date);
+      expect(result.pausedDetail?.links.topUp).toBe('https://example.com/billing/top-up');
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Workflow lifecycle (cancel / resume)
+  // -----------------------------------------------------------------------
+
+  describe('cancelWorkflow', () => {
+    it('POSTs /api/workflows/{id}/cancel and decodes the response', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            workflow_id: 'wf-1',
+            status: 'cancelled',
+            cancelled_at: '2026-04-26T14:00:00Z',
+            billing_effect: 'unspent_reservation_released',
+          },
+        }),
+      );
+
+      const result = await client.cancelWorkflow('wf-1');
+      expect(result.workflowId).toBe('wf-1');
+      expect(result.status).toBe('cancelled');
+      expect(result.billingEffect).toBe('unspent_reservation_released');
+      expect(result.cancelledAt).toBeInstanceOf(Date);
+
+      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('https://api.example.com/api/workflows/wf-1/cancel');
+      expect(init.method).toBe('POST');
+    });
+
+    it('idempotent re-cancel returns billing_effect: none', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            workflow_id: 'wf-1',
+            status: 'cancelled',
+            cancelled_at: '2026-04-26T13:55:00Z',
+            billing_effect: 'none',
+          },
+        }),
+      );
+
+      const result = await client.cancelWorkflow('wf-1');
+      expect(result.billingEffect).toBe('none');
+    });
+  });
+
+  describe('resumeWorkflow', () => {
+    it('POSTs /api/workflows/{id}/resume and returns the in_progress envelope', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            workflow_id: 'wf-1',
+            status: 'in_progress',
+            resumed_at: '2026-04-26T14:00:00Z',
+          },
+        }),
+      );
+
+      const result = await client.resumeWorkflow('wf-1');
+      expect(result.workflowId).toBe('wf-1');
+      expect(result.status).toBe('in_progress');
+      expect(result.resumedAt).toBeInstanceOf(Date);
+
+      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('https://api.example.com/api/workflows/wf-1/resume');
+      expect(init.method).toBe('POST');
+    });
+
+    it('throws GislBalanceExhaustedError on 402 (top-up still insufficient)', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'BALANCE_EXHAUSTED',
+            error_type: 'balance_exhausted',
+            required_action: 'add_credits',
+            links: {
+              top_up: 'https://example.com/billing/top-up',
+              upgrade: 'https://example.com/billing/plans',
+              check_balance: '/api/v2/credits/balance',
+            },
+          },
+          402,
+        ),
+      );
+
+      try {
+        await client.resumeWorkflow('wf-1');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislBalanceExhaustedError);
+      }
+    });
+
+    it('throws GislWorkflowExpiredError on 422 workflow_expired', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'Workflow expired and cannot be resumed.',
+            error_type: 'workflow_expired',
+            expired_at: '2026-04-26T14:00:00Z',
+          },
+          422,
+        ),
+      );
+
+      try {
+        await client.resumeWorkflow('wf-1');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislWorkflowExpiredError);
+      }
+    });
   });
 
   // -----------------------------------------------------------------------

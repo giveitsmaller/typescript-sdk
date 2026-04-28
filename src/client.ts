@@ -12,7 +12,9 @@ import {
   MultipartInitiateRequestMetadataHintToJSON,
   MultipartCompleteResponseFromJSON,
   MultipartCompleteRequestToJSON,
+  WorkflowCancelResponseFromJSON,
   WorkflowCreateResponseFromJSON,
+  WorkflowResumeResponseFromJSON,
   WorkflowStatusResponseFromJSON,
   WorkflowDownloadResponseFromJSON,
   MetadataResponseFromJSON,
@@ -45,7 +47,9 @@ import type {
   MultipartInitiateResponse,
   MultipartCompleteResponse,
   MultipartCompleteRequest,
+  WorkflowCancelResponse,
   WorkflowCreateResponse,
+  WorkflowResumeResponse,
   WorkflowStatusResponse,
   WorkflowDownloadResponse,
   MetadataResponse,
@@ -126,10 +130,19 @@ export const DEFAULT_MULTIPART_FIRST_CHUNK_SIZE = 8 * 1024 * 1024; // 8 MB
 const DEFAULT_POLL_INTERVAL_MS = 2_000;
 const DEFAULT_POLL_TIMEOUT_MS = 300_000; // 5 min
 
+// Statuses that waitForWorkflow() returns immediately on. Per ticket I24,
+// `cancelled` and `expired` are terminal (a workflow cannot leave either
+// state). `paused_insufficient_credits` is a soft-pause: not terminal, but
+// polling blindly is the wrong behaviour because the workflow only resumes
+// on caller action (top-up + resume). The SDK returns immediately so the
+// caller can inspect `pausedDetail` and drive the resume flow.
 const TERMINAL_STATUSES: ReadonlySet<string> = new Set([
   WorkflowStatus.completed,
   WorkflowStatus.failed,
   WorkflowStatus.partially_failed,
+  WorkflowStatus.cancelled,
+  WorkflowStatus.expired,
+  WorkflowStatus.paused_insufficient_credits,
 ]);
 
 // Wire-shape guard for ValidationErrorEnvelopeDetailsInner. The v2 contract
@@ -1000,6 +1013,51 @@ export class GislClient {
 
       await new Promise((resolve) => setTimeout(resolve, intervalMs));
     }
+  }
+
+  /**
+   * Cancel a workflow. Idempotent — cancelling an already-cancelled
+   * workflow returns 200 with the same shape (and the original
+   * `cancelledAt`). Cancelling a `completed` / `failed` /
+   * `partially_failed` / `expired` workflow returns 409.
+   *
+   * The response's `billingEffect` field tells the caller what
+   * happened to outstanding reservations:
+   * - `unspent_reservation_released` — workflow was active or paused
+   *   and the unspent portion of the reservation has been refunded.
+   *   The refund appears as a separate `CreditTransaction` with
+   *   `type: refund`.
+   * - `none` — no refund (all reserved credits were already consumed
+   *   by completed jobs, or this is an idempotent re-cancel).
+   *
+   * In-flight operations may continue running briefly after the
+   * cancel response while their Lambda processes terminate; the
+   * response is the binding "no further reservations will be made"
+   * signal.
+   */
+  async cancelWorkflow(workflowId: string): Promise<WorkflowCancelResponse> {
+    return this.request('POST', `/api/workflows/${encodeURIComponent(workflowId)}/cancel`, {
+      deserialize: WorkflowCancelResponseFromJSON,
+    });
+  }
+
+  /**
+   * Resume a workflow that is in `paused_insufficient_credits`.
+   *
+   * Resume succeeds only when `availableCredits` covers the next
+   * reservation. If the balance is still insufficient, throws
+   * `GislBalanceExhaustedError` (402, same envelope as the workflow-
+   * create 402 path) and the workflow stays paused. If the workflow
+   * is past its `expiresAt` (default 7-day TTL from `pausedAt`),
+   * throws `GislWorkflowExpiredError` (422) and the workflow has
+   * transitioned to `expired` — callers cannot un-expire a workflow.
+   * Resuming a workflow that is not in `paused_insufficient_credits`
+   * is a 409 (no-op).
+   */
+  async resumeWorkflow(workflowId: string): Promise<WorkflowResumeResponse> {
+    return this.request('POST', `/api/workflows/${encodeURIComponent(workflowId)}/resume`, {
+      deserialize: WorkflowResumeResponseFromJSON,
+    });
   }
 
   /**
