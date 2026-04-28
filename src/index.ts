@@ -3,6 +3,13 @@ export { GislClient, DEFAULT_MULTIPART_FIRST_CHUNK_SIZE } from './client.js';
 export { verifyWebhook } from './webhook.js';
 export { parseSseStream } from './sse.js';
 
+// Note: the public-API completeness audit gate lives at
+// `./_audit.ts`. It is NOT re-exported — `tsconfig.json`'s
+// `include: ["src/**/*.ts"]` already pulls it into `tsc --noEmit`,
+// so the gate fires without polluting the public surface. Shipping
+// the audit module to consumers would inflate bundle size and
+// expose an internal symbol as breaking-change-bound API.
+
 // SDK types and factories
 export type {
   CreditsUsageOptions,
@@ -77,11 +84,27 @@ export type {
   UploadConstraintsApplied,
   UploadProbeResponse,
   UploadProbeMediaMetadata,
+  // Multipart-upload option type — surfaced via UploadOptions.metadataHint
+  // on the public uploadFile() method.
+  MultipartInitiateRequestMetadataHint,
   WorkflowCreateResponse,
   WorkflowStatusResponse,
   WorkflowDownloadResponse,
   MetadataResponse,
+  // Nested metadata shapes reachable from getMetadata() return value —
+  // consumers reading exif / dimensions / GPS need these to type their
+  // helpers without deep imports.
+  MetadataResponseDimensions,
+  MetadataResponseExif,
+  MetadataResponseExifGps,
   OperationsSchemaResponse,
+  // Nested schema types reachable from OperationsSchemaResponse.operations
+  // — consumers building dynamic UIs that discover available operations
+  // type their form-renderer helpers as `(opt: OptionSchema) => …` etc.
+  OperationSchemaDefinition,
+  MimeGroupSchema,
+  OptionSchema,
+  PerValueAvailabilityEntry,
   RetryResponse,
   JobDownload,
   OperationDownload,
@@ -90,6 +113,8 @@ export type {
   JobResponse,
   OperationResponse,
   OperationResult,
+  // Per-operation metrics surfaced on OperationResult.metrics.
+  OperationResultMetrics,
   ExternalDestination,
   Delivery,
   DeliveryPlan,
@@ -101,6 +126,14 @@ export type {
   WorkflowWarning,
   JobInputV2,
   WorkflowSource,
+  // Response-side WorkflowSource union members — needed when consumers
+  // narrow on `source.type` and want to type a helper as
+  // `(source: UploadSource) => …`. Distinct from the SDK's hand-written
+  // *Payload variants (request-side, snake_case wire shape).
+  UploadSource,
+  JobOutputSource,
+  ConnectionSource,
+  ExternalImportToken,
   // Typed error payload types — paired with the GislApiError subclasses
   // exported above. Consumers narrow on `error instanceof Gisl<X>Error`
   // and read `error.payload` typed as the corresponding response shape.
@@ -117,6 +150,11 @@ export type {
 export {
   AudioWatermarkDecodeRequestMethodHintEnum,
   AudioWatermarkDecodeResponseMethodEnum,
+  // OperationInputModel — value-bearing enum (`single` | `multi`).
+  // Surfaced on OperationSchemaDefinition.inputModel so form-renderers
+  // can decide whether to render a single-file picker or a multi-file
+  // input list.
+  OperationInputModel,
   ExternalImportRequestProviderHintEnum,
   ContactSubject,
   CreditTransactionSourceBucket,
@@ -141,6 +179,15 @@ export {
   BalanceExhaustedResponseRequiredActionEnum,
   ProcessingClassReason,
   DeliveryPlanReason,
+  // UserTier + ProcessingClass — value-bearing forms (typeof const +
+  // type alias). Sourced from openapi so consumers can do
+  // `Object.values(UserTier)` for tier dropdowns or
+  // `if (tier === UserTier.enterprise)` for narrowing typed error
+  // payloads. The operations metadata-types versions are pure type
+  // aliases (no runtime value); the openapi versions carry both the
+  // string-union type and a const map. Per audit follow-up.
+  UserTier,
+  ProcessingClass,
 } from '@giveitsmaller/contracts/openapi';
 
 export type {
@@ -240,7 +287,10 @@ export type {
   FeatureEntry,
   MimeGroupMetadata,
   OptionMetadata,
-  ProcessingClass,
   ProcessingClassConstraints,
-  UserTier,
+  // UserTier + ProcessingClass moved to the openapi value-bearing
+  // re-export above (per audit follow-up). The operations versions are
+  // pure type aliases — switching to the openapi source gives consumers
+  // both the type AND the runtime const map without changing the wire
+  // shape (verified identical by the audit).
 } from '@giveitsmaller/contracts/operations';
