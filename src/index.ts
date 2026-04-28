@@ -74,6 +74,7 @@ export type {
   WorkflowPausedDetail,
   WorkflowPausedDetailLinks,
   UploadResponse,
+  UploadConstraintsApplied,
   UploadProbeResponse,
   UploadProbeMediaMetadata,
   WorkflowCreateResponse,
@@ -85,14 +86,32 @@ export type {
   JobDownload,
   OperationDownload,
   WebhookPayload,
+  WebhookOperationContext,
   JobResponse,
   OperationResponse,
   OperationResult,
   ExternalDestination,
   Delivery,
+  DeliveryPlan,
+  DeliveryPlanOutput,
   WorkflowProcessing,
+  ProcessingPlan,
+  ProcessingPlanJob,
+  WorkflowEdge,
+  WorkflowWarning,
   JobInputV2,
   WorkflowSource,
+  // Typed error payload types — paired with the GislApiError subclasses
+  // exported above. Consumers narrow on `error instanceof Gisl<X>Error`
+  // and read `error.payload` typed as the corresponding response shape.
+  BalanceExhaustedResponse,
+  BalanceExhaustedResponseAllOfLinks,
+  TierRestrictionResponse,
+  FeatureTierRestrictedResponse,
+  FeatureNotAvailableResponse,
+  FeatureViolation,
+  WorkflowExpiredResponse,
+  AuthErrorResponse,
 } from '@giveitsmaller/contracts/openapi';
 
 export {
@@ -106,12 +125,22 @@ export {
   WorkflowCancelBillingEffect,
   WorkflowPauseRequiredAction,
   WorkflowStatus,
+  WarningType,
+  WorkflowWarningSeverity,
   OperationType,
   SseEventType,
   CallbackEventType,
   OperationStatus,
   JobStatus,
   JobInputV2RoleEnum,
+  // Error-payload discriminator enums — pair with the typed payload
+  // types above for narrowing inside `error instanceof Gisl<X>Error`
+  // branches.
+  AuthErrorType,
+  TierRestrictionKind,
+  BalanceExhaustedResponseRequiredActionEnum,
+  ProcessingClassReason,
+  DeliveryPlanReason,
 } from '@giveitsmaller/contracts/openapi';
 
 export type {
