@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { GislClient, DEFAULT_MULTIPART_FIRST_CHUNK_SIZE } from '../../src/client.js';
+import {
+  GislClient,
+  DEFAULT_MULTIPART_FIRST_CHUNK_SIZE,
+  MULTIPART_CONCURRENCY_DEFAULT,
+} from '../../src/client.js';
 import { externalImportSource, uploadSource } from '../../src/types.js';
 import type { GislSseEvent } from '../../src/types.js';
 import {
@@ -3275,6 +3279,151 @@ describe('GislClient', () => {
       });
       // `null` wire value normalises to undefined post-FromJSON.
       expect(result.constraintsApplied.maxDurationSeconds).toBeUndefined();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // multipartConcurrency sanitisation
+  // -----------------------------------------------------------------------
+
+  describe('multipartConcurrency sanitisation', () => {
+    const TAIL_CHUNK_SIZE = 2 * 1024 * 1024 + 1;
+
+    function effectiveConcurrency(c: GislClient): number {
+      // The field is `private readonly` (client.ts:320). The cast here is
+      // the documented escape hatch for sanitiser-contract assertions —
+      // direct access would not typecheck.
+      return (c as unknown as { multipartConcurrency: number }).multipartConcurrency;
+    }
+
+    function makeClient(value: number | undefined): GislClient {
+      return new GislClient({
+        baseUrl: 'https://api.example.com',
+        apiKey: 'test-key',
+        multipartConcurrency: value,
+      });
+    }
+
+    it('snaps undefined to default', () => {
+      expect(effectiveConcurrency(makeClient(undefined))).toBe(MULTIPART_CONCURRENCY_DEFAULT);
+    });
+
+    it('snaps 0 to default (zero workers would ship an incomplete parts array)', () => {
+      expect(effectiveConcurrency(makeClient(0))).toBe(MULTIPART_CONCURRENCY_DEFAULT);
+    });
+
+    it('snaps -1 to default', () => {
+      expect(effectiveConcurrency(makeClient(-1))).toBe(MULTIPART_CONCURRENCY_DEFAULT);
+    });
+
+    it('floors 1.5 to 1', () => {
+      expect(effectiveConcurrency(makeClient(1.5))).toBe(1);
+    });
+
+    it('floors 4.7 to 4', () => {
+      expect(effectiveConcurrency(makeClient(4.7))).toBe(4);
+    });
+
+    it('snaps Number.MIN_VALUE to default (positive but Math.floor=0; pins the floored<1 branch)', () => {
+      expect(effectiveConcurrency(makeClient(Number.MIN_VALUE))).toBe(
+        MULTIPART_CONCURRENCY_DEFAULT,
+      );
+    });
+
+    it('snaps -0.5 to default (negative fractional must not pass through Math.floor=-1)', () => {
+      expect(effectiveConcurrency(makeClient(-0.5))).toBe(MULTIPART_CONCURRENCY_DEFAULT);
+    });
+
+    it('snaps -0 to default', () => {
+      expect(effectiveConcurrency(makeClient(-0))).toBe(MULTIPART_CONCURRENCY_DEFAULT);
+    });
+
+    it('snaps NaN to default', () => {
+      expect(effectiveConcurrency(makeClient(Number.NaN))).toBe(MULTIPART_CONCURRENCY_DEFAULT);
+    });
+
+    it('snaps Infinity to default (previously this was bounded only by queue length — silent behaviour change)', () => {
+      expect(effectiveConcurrency(makeClient(Number.POSITIVE_INFINITY))).toBe(
+        MULTIPART_CONCURRENCY_DEFAULT,
+      );
+    });
+
+    it('snaps -Infinity to default', () => {
+      expect(effectiveConcurrency(makeClient(Number.NEGATIVE_INFINITY))).toBe(
+        MULTIPART_CONCURRENCY_DEFAULT,
+      );
+    });
+
+    it('passes through a normal positive integer (3)', () => {
+      expect(effectiveConcurrency(makeClient(3))).toBe(3);
+    });
+
+    it('multipartConcurrency: 0 still uploads all parts (silent-corruption regression test)', async () => {
+      // Two tail chunks (parts 2 and 3). Pre-fix: 0 workers, queue is never
+      // drained, /multipart/complete would be called with parts: []. Post-fix:
+      // the sanitiser snaps 0 to default (4), so Math.min(4, 2) = 2 workers,
+      // both tail PUTs land, /complete sees parts: [{2, etag}, {3, etag}].
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            upload_id: 'upload-mp-zero-conc',
+            mime_type: 'application/octet-stream',
+            first_chunk_etag: '"etag-part-1"',
+            first_chunk_size_bytes: DEFAULT_MULTIPART_FIRST_CHUNK_SIZE,
+            total_parts: 3,
+            recommended_chunk_size: TAIL_CHUNK_SIZE,
+            presigned_urls: [
+              {
+                part_number: 2,
+                url: 'https://s3.example.com/upload?part=2',
+                expires_at: '2026-04-18T09:00:00.000Z',
+              },
+              {
+                part_number: 3,
+                url: 'https://s3.example.com/upload?part=3',
+                expires_at: '2026-04-18T09:00:00.000Z',
+              },
+            ],
+          },
+        }),
+      );
+      fetchSpy.mockResolvedValueOnce(
+        new Response('', { status: 200, headers: { etag: '"etag-part-2"' } }),
+      );
+      fetchSpy.mockResolvedValueOnce(
+        new Response('', { status: 200, headers: { etag: '"etag-part-3"' } }),
+      );
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          { success: true, data: { upload_id: 'upload-mp-zero-conc', status: 'completed' } },
+          201,
+        ),
+      );
+
+      const zeroConcClient = new GislClient({
+        baseUrl: 'https://api.example.com',
+        apiKey: 'test-key',
+        multipartConcurrency: 0,
+      });
+
+      const blob = new Blob([
+        new Uint8Array(DEFAULT_MULTIPART_FIRST_CHUNK_SIZE + 2 * TAIL_CHUNK_SIZE),
+      ]);
+      const result = await zeroConcClient.uploadFile(blob);
+
+      expect(result.fileId).toBe('upload-mp-zero-conc');
+      // initiate + 2 S3 PUTs + complete = 4 calls.
+      expect(fetchSpy.mock.calls).toHaveLength(4);
+
+      const [completeUrl, completeOpts] = fetchSpy.mock.calls[3] as [string, RequestInit];
+      expect(completeUrl).toContain('/multipart/complete');
+      const completeBody = JSON.parse(completeOpts.body as string);
+      expect(completeBody.parts).toHaveLength(2);
+      const partNumbers = completeBody.parts.map(
+        (p: { part_number: number }) => p.part_number,
+      );
+      expect(partNumbers).toEqual([2, 3]);
     });
   });
 });

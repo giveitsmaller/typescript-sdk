@@ -102,7 +102,7 @@ const SINGLE_SHOT_MAX_BYTES =
   UploadThresholdsSingleShotMaxBytesEnum.NUMBER_10000000 satisfies number;
 const MULTIPART_CHUNK_SIZE =
   UploadThresholdsMultipartChunkSizeEnum.NUMBER_5242880 satisfies number;
-const MULTIPART_CONCURRENCY_DEFAULT =
+export const MULTIPART_CONCURRENCY_DEFAULT =
   UploadThresholdsMultipartConcurrencyDefaultEnum.NUMBER_4 satisfies number;
 
 // Compile-time drift guards: pin the literal value of each constant so a
@@ -245,6 +245,18 @@ function sanitiseBaseMs(value: number | undefined, fallback: number): number {
   return Math.max(0, Math.floor(value));
 }
 
+// Reject NaN/Infinity and snap to fallback for any value below 1. Diverges
+// from sanitiseAttempts (which floors at 1) because zero workers here is
+// not a "fail-fast once" semantic — `Math.min(0, queue.length) = 0` at the
+// worker fan-out site below produces zero S3 PUTs, so /multipart/complete
+// is then called with an incomplete `parts` array (silent corruption).
+// Garbage input almost certainly meant "use the default", not "send no parts".
+function sanitiseConcurrency(value: number | undefined, fallback: number): number {
+  if (value === undefined || !Number.isFinite(value)) return fallback;
+  const floored = Math.floor(value);
+  return floored < 1 ? fallback : floored;
+}
+
 // Cancellable sleep. Resolves after `ms` ms, rejects with GislAbortError if
 // the caller's signal aborts, or resolves early (without throwing) if the
 // internal `wakeSignal` fires — that path lets a sibling worker's terminal
@@ -333,7 +345,10 @@ export class GislClient {
       config.multipartThreshold ?? SINGLE_SHOT_MAX_BYTES,
       DEFAULT_MULTIPART_FIRST_CHUNK_SIZE,
     );
-    this.multipartConcurrency = config.multipartConcurrency ?? MULTIPART_CONCURRENCY_DEFAULT;
+    this.multipartConcurrency = sanitiseConcurrency(
+      config.multipartConcurrency,
+      MULTIPART_CONCURRENCY_DEFAULT,
+    );
     // Sanitise: reject NaN/Infinity (the former would cause `attempt < NaN`
     // to be perpetually false, skipping every PUT; the latter would retry
     // unboundedly). Floor at 1 so a misconfigured 0/negative still attempts

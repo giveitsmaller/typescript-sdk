@@ -38,7 +38,13 @@ export interface GislClientConfig {
   useSessionCookie?: boolean;
   /** Threshold in bytes above which multipart upload is used (default: 10MB) */
   multipartThreshold?: number;
-  /** Max concurrent chunk uploads for multipart (default: 4) */
+  /**
+   * Max concurrent chunk uploads for multipart (default: 4). Non-finite or
+   * fractional values are coerced via `Math.floor`; `NaN`/`Infinity` and
+   * non-positive values fall back to the default. Zero workers would produce
+   * a multipart-complete with an incomplete parts array (silent corruption),
+   * so the sanitiser snaps below-1 to default rather than to 1.
+   */
   multipartConcurrency?: number;
   /**
    * Max total attempts per multipart S3 PUT, including the first try
