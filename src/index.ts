@@ -199,6 +199,62 @@ export type {
   SseWorkflowTerminalData,
 } from '@giveitsmaller/contracts/openapi';
 
+// AsyncAPI multi-output completion envelopes (ADR-0009 §D2). Surfaced
+// here so consumers of SSE/webhook payloads can type-narrow `outputs[]`
+// access on convert PDF -> image and other multi-output workflows.
+//
+// Note: the AsyncAPI `OperationResult` (an untagged discriminated union
+// over Single/Multi/Failure per the v2.7.0 reshape) is NOT re-exported
+// here — its name collides with the OpenAPI HTTP-side `OperationResult`
+// (a flat response shape, re-exported above from `/openapi`). Consumers
+// narrow event payloads via the three subtype shapes directly.
+export type {
+  MultiOutputCompletion,
+  PageIndexed,
+  PositionIndexed,
+  Unindexed,
+} from '@giveitsmaller/contracts/asyncapi';
+
+// SDK-side ergonomic alias for `MultiOutputCompletion.outputs[]` entries.
+// The AsyncAPI spec inlines this union inside `MultiOutputCompletion`,
+// so it isn't a named TS type today; the Rust crate already names it
+// (`OperationResultOutputEntry` in `generated/rust/asyncapi/`). A
+// contracts follow-up will name the union in `asyncapi/events.yaml`
+// (matching the JobInputRole / ReEncodeDecision precedent); the
+// drift-assertion below makes the alias auto-fail at `tsc --noEmit`
+// when the generator catches up, so the alias can be deleted cleanly.
+import type {
+  MultiOutputCompletion as _MultiOutputCompletion,
+  PageIndexed as _PageIndexed,
+  PositionIndexed as _PositionIndexed,
+  Unindexed as _Unindexed,
+} from '@giveitsmaller/contracts/asyncapi';
+export type OperationResultOutputEntry = _MultiOutputCompletion['outputs'][number];
+
+// Drift assertion — must live in `src/` (not `tests/`) so `tsc --noEmit`
+// actually checks it: the package's `tsconfig.json` excludes `tests/`
+// and `vitest.config.ts` doesn't enable `test.typecheck`, so a
+// type-equality assertion in a vitest case is a runtime no-op (memory:
+// T20/PR #49). This pattern mirrors `_WorkflowCreatePayloadDriftAssertion`
+// in `./types.ts`.
+type _OperationResultOutputEntryExpected = _PageIndexed | _PositionIndexed | _Unindexed;
+type _OperationResultOutputEntryExtraAlias = Exclude<
+  OperationResultOutputEntry,
+  _OperationResultOutputEntryExpected
+>;
+type _OperationResultOutputEntryMissingAlias = Exclude<
+  _OperationResultOutputEntryExpected,
+  OperationResultOutputEntry
+>;
+type _OperationResultOutputEntryDrift = [_OperationResultOutputEntryExtraAlias] extends [never]
+  ? [_OperationResultOutputEntryMissingAlias] extends [never]
+    ? true
+    : ['DRIFT: OperationResultOutputEntry is missing arms vs PageIndexed|PositionIndexed|Unindexed', _OperationResultOutputEntryMissingAlias]
+  : ['DRIFT: OperationResultOutputEntry has arms not in PageIndexed|PositionIndexed|Unindexed', _OperationResultOutputEntryExtraAlias];
+type _AssertTrue<T extends true> = T;
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+type _OperationResultOutputEntryDriftAssertion = _AssertTrue<_OperationResultOutputEntryDrift>;
+
 // Re-export all operation option types
 export type {
   CompressImageOptions,

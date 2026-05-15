@@ -222,6 +222,56 @@ describe('JobDefinitionPayload composition', () => {
       deliver: false,
     });
   });
+
+  it('preserves the per-job `skip_compression` opt-out for non-compress-terminated chains', () => {
+    // Convert PDF -> PNG fan-out per ADR-0009 §D2: a chain that ends in
+    // `convert` (not `compress`) must set skip_compression so the server
+    // doesn't reject the chain at validateChainOrdering.
+    const job: JobDefinitionPayload = {
+      id: 'pdf_to_pngs',
+      source: uploadSource('upl_pdf'),
+      operations: [{ type: 'convert', options: { format: 'png', pages: '1-3' } }],
+      skip_compression: true,
+    };
+
+    expect(job.skip_compression).toBe(true);
+    expect(job).toEqual({
+      id: 'pdf_to_pngs',
+      source: { type: 'upload', file_id: 'upl_pdf' },
+      operations: [{ type: 'convert', options: { format: 'png', pages: '1-3' } }],
+      skip_compression: true,
+    });
+  });
+
+  it('omits skip_compression entirely when not set (no `: undefined` entry)', () => {
+    const job: JobDefinitionPayload = {
+      source: uploadSource('upl_abc'),
+      operations: [{ type: 'compress' }],
+    };
+
+    expect('skip_compression' in job).toBe(false);
+  });
+
+  it('preserves skip_compression on a multi-input (inputs[]) job', () => {
+    // skip_compression is structurally orthogonal to source/inputs:
+    // ADR-0009 §D2's PDF fan-out example is single-source, but a
+    // multi-input merge chain skipping the compress gate is also valid.
+    // Pin: skip_compression must land on the wire alongside `inputs`, not
+    // be branch-suppressed inside a source-only code path.
+    const job: JobDefinitionPayload = {
+      id: 'merge_without_compress',
+      inputs: [
+        { source: uploadSource('upl_a') },
+        { source: uploadSource('upl_b') },
+      ],
+      operations: [{ type: 'merge', options: { format: 'pdf' } }],
+      skip_compression: true,
+    };
+
+    expect(job.skip_compression).toBe(true);
+    expect(job.inputs).toHaveLength(2);
+    expect('source' in job).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -449,6 +499,51 @@ describe('OperationType v2 thumbnail sub-type exposure', () => {
 
   it('still exposes the legacy `thumbnail` value during the migration window', () => {
     expect(OperationType.thumbnail).toBe('thumbnail');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AsyncAPI multi-output re-exports (ADR-0009 §D2)
+// ---------------------------------------------------------------------------
+
+describe('AsyncAPI multi-output re-exports', () => {
+  // The load-bearing shape-equality drift guard for OperationResultOutputEntry
+  // lives in src/index.ts (`_OperationResultOutputEntryDriftAssertion`) — it
+  // MUST live in src/ to be reached by `tsc --noEmit`, because tests/ is
+  // excluded from tsconfig and vitest typecheck is disabled in this package.
+  // The cases below are runtime smoke checks that the values reachable
+  // through the SDK barrel exist and that a concrete MultiOutputCompletion
+  // value can be assigned through the public surface.
+
+  it('reaches the asyncapi re-exports through the public SDK entrypoint at runtime', async () => {
+    // Import the SDK module dynamically so a missing re-export at runtime
+    // surfaces as a module-load failure here. Type-level resolution is
+    // pinned separately by `_audit.ts` (existence) + the drift assertion
+    // in src/index.ts (shape).
+    const mod = await import('../../src/index.js');
+    // Smoke-anchor: at least one non-type re-export must be reachable
+    // (asyncapi types are type-only, so we can't inspect them at runtime;
+    // OperationType lives next door and proves the import resolved).
+    expect(mod.OperationType).toBeDefined();
+  });
+
+  it('admits a concrete PageIndexed shape through OperationResultOutputEntry', () => {
+    type Page = import('../../src/index.js').PageIndexed;
+    type Entry = import('../../src/index.js').OperationResultOutputEntry;
+
+    // Construct a PageIndexed-shaped value and assign it as the alias.
+    // The src/-side drift assertion in `index.ts` is the load-bearing
+    // shape gate (tests/ is excluded from tsc); this runtime case
+    // anchors the contract for human reviewers and exercises the
+    // dynamic-import path through the SDK barrel.
+    const page: Page = {
+      output_key: 'page-001',
+      output_size_bytes: 1024,
+      page_index: 1,
+    };
+    const entry: Entry = page;
+    expect(entry.output_key).toBe('page-001');
+    expect((entry as Page).page_index).toBe(1);
   });
 });
 

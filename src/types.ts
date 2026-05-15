@@ -166,6 +166,20 @@ export interface JobDefinitionPayload {
   operations: OperationDef[];
   /** Per-job hide-intermediates promotion flag per ADR-0003. */
   deliver?: boolean;
+  /**
+   * Per-job opt-out of the "compress required in every chain" gate.
+   * When `true`, the server accepts a chain that doesn't terminate in a
+   * `compress` operation — required for chains that observe multi-output
+   * fan-out (e.g. convert PDF -> N images per ADR-0009 §D2) without
+   * collapsing the N outputs through a trailing chained compress.
+   *
+   * Accepted by the API at `compression/src/Jobs/.../JobDefinition.php`
+   * (`skipCompression`) and validated against the chain-ordering rule at
+   * `Job::validateChainOrdering`. Currently undocumented in
+   * `contracts/openapi/api.yaml` JobDefinition schema — spec follow-up
+   * pending; the SDK exposes the field to unblock e2e A8-FLIP.
+   */
+  skip_compression?: boolean;
 }
 
 // ---------------------------------------------------------------------------

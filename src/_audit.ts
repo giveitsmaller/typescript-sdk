@@ -62,6 +62,21 @@ import type {
   OperationInputModel,
 } from '@giveitsmaller/contracts/openapi';
 
+// AsyncAPI multi-output completion envelopes (ADR-0009 §D2, ticket
+// ghYWnXF7). Re-exported from `index.ts` so consumers of SSE/webhook
+// payloads can type-narrow `outputs[]` on multi-output workflows.
+import type {
+  MultiOutputCompletion,
+  PageIndexed,
+  PositionIndexed,
+  Unindexed,
+} from '@giveitsmaller/contracts/asyncapi';
+
+// SDK-side ergonomic alias for `MultiOutputCompletion.outputs[]` entries.
+// The alias is defined in `index.ts`; the audit gate pins its presence
+// on the public surface.
+import type { OperationResultOutputEntry } from './index.js';
+
 function accept<T>(_value?: T): void {
   // intentionally empty — type-presence is the assertion
 }
@@ -103,4 +118,9 @@ export function _runAudit(): void {
   accept<OptionSchema>();
   accept<PerValueAvailabilityEntry>();
   accept<OperationInputModel>();
+  accept<MultiOutputCompletion>();
+  accept<PageIndexed>();
+  accept<PositionIndexed>();
+  accept<Unindexed>();
+  accept<OperationResultOutputEntry>();
 }
