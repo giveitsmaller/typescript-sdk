@@ -1101,19 +1101,114 @@ export class GislClient {
   /**
    * Stream SSE events for a workflow. Returns an async iterable.
    */
-  async streamEvents(workflowId: string): Promise<AsyncGenerator<GislSseEvent>> {
+  async streamEvents(
+    workflowId: string,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<AsyncGenerator<GislSseEvent>> {
     const eventsPath = `/api/workflows/${encodeURIComponent(workflowId)}/events`;
-    const response = await this.request<Response>(
-      'GET',
-      eventsPath,
-      { rawResponse: true },
-    );
 
-    if (!response.ok) {
-      await this.handleResponse(response, eventsPath);
+    // SSE-lifetime AbortController. `request()` builds its own controller
+    // and tears it down (`clearTimeout(timer); unbind()`) in its `finally`
+    // the instant the response headers arrive — BEFORE the SSE body
+    // streams — so that controller cannot cancel a long-lived stream.
+    // `streamEvents` must own a controller for the stream's whole lifetime.
+    // We pass its signal to `request()` too, so a pre-aborted signal /
+    // connect-phase abort still fast-fails. After headers, the live socket
+    // is freed only by `reader.cancel()` inside `parseSseStream` — driven
+    // by aborting this controller from the iterator wrapper's
+    // `return()`/`throw()` (a generator's own `return()` is unreachable
+    // while suspended at `await reader.read()`; canonical pattern:
+    // openai-node `Stream[Symbol.asyncIterator]` + PR #1314).
+    const controller = new AbortController();
+    // Compose an optional consumer-supplied signal onto our controller.
+    // The teardown MUST run (normal completion, error, OR early return)
+    // or a long-lived consumer AbortController leaks listeners.
+    const releaseConsumerSignal = bindAbortSignal(opts.signal, controller);
+
+    let response: Response;
+    try {
+      response = await this.request<Response>('GET', eventsPath, {
+        rawResponse: true,
+        signal: controller.signal,
+      });
+    } catch (err) {
+      releaseConsumerSignal();
+      throw err;
     }
 
-    return parseSseStream(response);
+    if (!response.ok) {
+      try {
+        await this.handleResponse(response, eventsPath); // always throws
+      } finally {
+        releaseConsumerSignal();
+      }
+    }
+
+    const inner = parseSseStream(response, { signal: controller.signal });
+    let started = false;
+    let settled = false;
+    // Idempotent teardown. `abort` only on consumer-driven early
+    // termination (return/throw) — NOT on normal completion or stream
+    // error, where aborting would be a spurious "aborted though it
+    // wasn't" signal (openai-node#194). If the consumer disposes the
+    // iterator before ever pulling an event, the inner generator never
+    // ran, so its `finally` won't cancel the body — cancel it here as a
+    // backstop (the body is still unlocked: no reader was acquired).
+    const cleanup = (abort: boolean): void => {
+      if (settled) return;
+      settled = true;
+      if (abort) controller.abort();
+      if (!started) void response.body?.cancel().catch(() => {});
+      releaseConsumerSignal();
+    };
+
+    // Abort-before-first-pull backstop. If the consumer aborts (their
+    // signal, composed onto `controller`) and then drops the iterator
+    // WITHOUT ever calling next()/return()/throw(), nothing else frees the
+    // already-fetched body: `request()` unbound its fetch controller at
+    // header receipt, and `parseSseStream` only attaches its reader +
+    // abort listener once iteration starts. `cleanup`'s `!started` branch
+    // only runs from the wrapper methods, so it never fires on a pure
+    // abort-and-drop. Cancel the (still-unlocked) body directly here.
+    // Once started, `parseSseStream` owns the locked reader and cancels
+    // via its own abort listener, so this no-ops.
+    controller.signal.addEventListener(
+      'abort',
+      () => {
+        if (!started) void response.body?.cancel().catch(() => {});
+      },
+      { once: true },
+    );
+
+    const wrapper: AsyncGenerator<GislSseEvent> = {
+      async next(
+        ...args: [] | [unknown]
+      ): Promise<IteratorResult<GislSseEvent>> {
+        started = true;
+        try {
+          const result = await inner.next(...(args as []));
+          if (result.done) cleanup(false);
+          return result;
+        } catch (err) {
+          cleanup(false);
+          throw err;
+        }
+      },
+      async return(
+        value?: unknown,
+      ): Promise<IteratorResult<GislSseEvent>> {
+        cleanup(true);
+        return inner.return(value as never);
+      },
+      async throw(err?: unknown): Promise<IteratorResult<GislSseEvent>> {
+        cleanup(true);
+        return inner.throw(err);
+      },
+      [Symbol.asyncIterator](): AsyncGenerator<GislSseEvent> {
+        return this;
+      },
+    };
+    return wrapper;
   }
 
   // -----------------------------------------------------------------------

@@ -2566,6 +2566,257 @@ describe('GislClient', () => {
         throw new Error(`expected operation.progress, got ${ev.event}`);
       }
     });
+
+    // MqhQwiCi: early-termination must promptly cancel the connection.
+    // Helper: a never-closing body with an observable cancel() as the
+    // deterministic sync point (no wall-clock — that would reintroduce the
+    // very 300s hang the ticket describes).
+    function neverEndingSseResponse(firstChunk: string): {
+      response: Response;
+      cancelled: Promise<unknown>;
+      wasCancelled: () => boolean;
+    } {
+      const encoder = new TextEncoder();
+      let resolveCancel!: (reason: unknown) => void;
+      const cancelled = new Promise<unknown>((res) => {
+        resolveCancel = res;
+      });
+      let flag = false;
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode(firstChunk));
+        },
+        cancel(reason) {
+          flag = true;
+          resolveCancel(reason);
+        },
+      });
+      return {
+        response: new Response(stream, {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        }),
+        cancelled,
+        wasCancelled: () => flag,
+      };
+    }
+
+    it('gen.return() on a quiet socket promptly cancels the connection (MqhQwiCi)', async () => {
+      const { response, cancelled, wasCancelled } = neverEndingSseResponse(
+        'event: operation.progress\ndata: {"progress":10}\n\n',
+      );
+      fetchSpy.mockResolvedValueOnce(response);
+
+      const gen = await client.streamEvents('wf-1');
+      const first = await gen.next();
+      expect(first.done).toBe(false);
+
+      await gen.return(undefined); // must NOT hang
+      await cancelled; // resolves only if the underlying stream was cancelled
+      expect(wasCancelled()).toBe(true);
+    }, 2000);
+
+    it('for await … break promptly cancels (the e2e canary pattern)', async () => {
+      const { response, cancelled, wasCancelled } = neverEndingSseResponse(
+        'event: operation.progress\ndata: {"progress":20}\n\n',
+      );
+      fetchSpy.mockResolvedValueOnce(response);
+
+      const gen = await client.streamEvents('wf-1');
+      for await (const _ev of gen) {
+        break; // triggers wrapper.return() → controller.abort() → reader.cancel()
+      }
+      await cancelled;
+      expect(wasCancelled()).toBe(true);
+    }, 2000);
+
+    it('a consumer-supplied AbortSignal cancels a quiet stream', async () => {
+      const { response, cancelled, wasCancelled } = neverEndingSseResponse(
+        'event: operation.progress\ndata: {"progress":30}\n\n',
+      );
+      fetchSpy.mockResolvedValueOnce(response);
+
+      const ac = new AbortController();
+      const gen = await client.streamEvents('wf-1', { signal: ac.signal });
+      const first = await gen.next();
+      expect(first.done).toBe(false);
+
+      ac.abort();
+      await cancelled;
+      expect(wasCancelled()).toBe(true);
+      expect((await gen.next()).done).toBe(true);
+    }, 2000);
+
+    it('normal completion consumes all events without spurious failure', async () => {
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(
+            encoder.encode('event: operation.progress\ndata: {"progress":1}\n\n'),
+          );
+          controller.enqueue(
+            encoder.encode('event: workflow.completed\ndata: {"workflow_id":"w"}\n\n'),
+          );
+          controller.close();
+        },
+      });
+      fetchSpy.mockResolvedValueOnce(
+        new Response(stream, {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        }),
+      );
+
+      const gen = await client.streamEvents('wf-1');
+      const events: GislSseEvent[] = [];
+      for await (const ev of gen) events.push(ev);
+
+      expect(events.map((e) => e.event)).toEqual([
+        'operation.progress',
+        'workflow.completed',
+      ]);
+      // Idempotent terminal state after normal completion.
+      expect((await gen.next()).done).toBe(true);
+    });
+
+    // --- Coverage hardening (test-reviewer: exit-path + listener-leak gaps) ---
+
+    it('cancels the body when disposed before the first next() (!started backstop)', async () => {
+      const { response, cancelled, wasCancelled } = neverEndingSseResponse(
+        'event: operation.progress\ndata: {"progress":1}\n\n',
+      );
+      fetchSpy.mockResolvedValueOnce(response);
+
+      const gen = await client.streamEvents('wf-1');
+      // Never pull an event: the inner generator never runs, so only the
+      // streamEvents `!started` backstop (response.body.cancel()) can free
+      // the still-unlocked body.
+      await gen.return(undefined);
+      await cancelled;
+      expect(wasCancelled()).toBe(true);
+    }, 2000);
+
+    it('removes the consumer-signal listener on normal completion (no listener leak)', async () => {
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream<Uint8Array>({
+        start(c) {
+          c.enqueue(encoder.encode('event: x\ndata: {}\n\n'));
+          c.close();
+        },
+      });
+      fetchSpy.mockResolvedValueOnce(
+        new Response(stream, {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        }),
+      );
+      const ac = new AbortController();
+      const removeSpy = vi.spyOn(ac.signal, 'removeEventListener');
+
+      const gen = await client.streamEvents('wf-1', { signal: ac.signal });
+      for await (const _ev of gen) {
+        /* consume to completion */
+      }
+      // bindAbortSignal's teardown (releaseConsumerSignal) must run on the
+      // normal-completion path too, or a long-lived consumer AbortController
+      // accumulates listeners across many streams.
+      expect(removeSpy).toHaveBeenCalled();
+    });
+
+    it('removes the consumer-signal listener on early return (no listener leak)', async () => {
+      const { response, cancelled } = neverEndingSseResponse(
+        'event: x\ndata: {}\n\n',
+      );
+      fetchSpy.mockResolvedValueOnce(response);
+      const ac = new AbortController();
+      const removeSpy = vi.spyOn(ac.signal, 'removeEventListener');
+
+      const gen = await client.streamEvents('wf-1', { signal: ac.signal });
+      await gen.next();
+      await gen.return(undefined);
+      await cancelled;
+      expect(removeSpy).toHaveBeenCalled();
+    }, 2000);
+
+    it('releases the consumer-signal listener when the response is not OK', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          { success: false, error: 'gone', error_type: 'not_found' },
+          404,
+        ),
+      );
+      const ac = new AbortController();
+      const removeSpy = vi.spyOn(ac.signal, 'removeEventListener');
+
+      await expect(
+        client.streamEvents('wf-1', { signal: ac.signal }),
+      ).rejects.toThrow();
+      // The !response.ok try/finally must still tear the listener down.
+      expect(removeSpy).toHaveBeenCalled();
+    });
+
+    it('fast-fails with GislAbortError on a pre-aborted signal without leaking a listener', async () => {
+      const ac = new AbortController();
+      ac.abort();
+      const addSpy = vi.spyOn(ac.signal, 'addEventListener');
+
+      await expect(
+        client.streamEvents('wf-1', { signal: ac.signal }),
+      ).rejects.toBeInstanceOf(GislAbortError);
+      // bindAbortSignal's pre-aborted branch aborts synchronously and adds
+      // NO listener (its teardown is a no-op), so nothing can leak — and
+      // request() fast-fails before fetch (fetchSpy untouched).
+      expect(addSpy).not.toHaveBeenCalled();
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('propagates a mid-stream error and releases the consumer-signal listener', async () => {
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream<Uint8Array>({
+        start(c) {
+          c.enqueue(encoder.encode('event: x\ndata: {}\n\n'));
+          c.error(new Error('boom'));
+        },
+      });
+      fetchSpy.mockResolvedValueOnce(
+        new Response(stream, {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        }),
+      );
+      const ac = new AbortController();
+      const removeSpy = vi.spyOn(ac.signal, 'removeEventListener');
+
+      const gen = await client.streamEvents('wf-1', { signal: ac.signal });
+      await expect(
+        (async () => {
+          for await (const _ev of gen) {
+            /* drains until the stream errors */
+          }
+        })(),
+      ).rejects.toThrow();
+      // next()'s catch → cleanup(false): no spurious abort, but the
+      // consumer-signal listener must still be released.
+      expect(removeSpy).toHaveBeenCalled();
+    }, 2000);
+
+    it('cancels the body when the consumer aborts and drops the iterator before pulling (codex 476a574c)', async () => {
+      const { response, cancelled, wasCancelled } = neverEndingSseResponse(
+        'event: x\ndata: {}\n\n',
+      );
+      fetchSpy.mockResolvedValueOnce(response);
+      const ac = new AbortController();
+
+      const gen = await client.streamEvents('wf-1', { signal: ac.signal });
+      // Pure abort-and-drop: never call next()/return()/throw(). Only the
+      // controller.signal abort backstop can free the already-fetched body
+      // (request() unbound its controller at headers; parseSseStream never
+      // started, so it has no reader/listener).
+      ac.abort();
+      await cancelled;
+      expect(wasCancelled()).toBe(true);
+      void gen;
+    }, 2000);
   });
 
   // -----------------------------------------------------------------------
