@@ -109,7 +109,7 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const SINGLE_SHOT_MAX_BYTES =
   UploadThresholdsSingleShotMaxBytesEnum.NUMBER_10000000 satisfies number;
 const MULTIPART_CHUNK_SIZE =
-  UploadThresholdsMultipartChunkSizeEnum.NUMBER_5242880 satisfies number;
+  UploadThresholdsMultipartChunkSizeEnum.NUMBER_16777216 satisfies number;
 export const MULTIPART_CONCURRENCY_DEFAULT =
   UploadThresholdsMultipartConcurrencyDefaultEnum.NUMBER_4 satisfies number;
 
@@ -122,10 +122,14 @@ type _SingleShotMaxBytesIsTenMillion =
   typeof SINGLE_SHOT_MAX_BYTES extends 10_000_000 ? true : false;
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 type _AssertSingleShotMaxBytes = _AssertTrue<_SingleShotMaxBytesIsTenMillion>;
-type _MultipartChunkSizeIsFiveMiB =
-  typeof MULTIPART_CHUNK_SIZE extends 5_242_880 ? true : false;
+// Raised 5 MiB -> 16 MiB by CON-1 (contracts z4GDTUMx): 16 MiB keeps a
+// 120 GiB Enterprise upload at 7,680 parts, inside the S3 10,000-part hard
+// limit. SDK-2 (Y5WRf5nV) realigns this guard; ships as a
+// non-independently-mergeable pair with CON-1.
+type _MultipartChunkSizeIsSixteenMiB =
+  typeof MULTIPART_CHUNK_SIZE extends 16_777_216 ? true : false;
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-type _AssertMultipartChunkSize = _AssertTrue<_MultipartChunkSizeIsFiveMiB>;
+type _AssertMultipartChunkSize = _AssertTrue<_MultipartChunkSizeIsSixteenMiB>;
 type _MultipartConcurrencyDefaultIsFour =
   typeof MULTIPART_CONCURRENCY_DEFAULT extends 4 ? true : false;
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
