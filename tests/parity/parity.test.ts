@@ -22,6 +22,24 @@ if (UPDATE_MODE && process.env.CI === 'true') {
   );
 }
 
+// Cross-SDK known divergences (mirrors packages/php/tests/parity/ParityTest
+// KNOWN_DIVERGENCES). These shared fixtures pin a sub-contract-minimum
+// `recommended_chunk_size` (~2 MB) to keep the binary payload compact. The
+// PHP SDK already skips them (its strict generated model rejects
+// recommendedChunkSize below the contract minimum). The TS SDK now enforces
+// the SAME contract-range guard (codex review — closing the previously lax
+// TS path), so it skips the same fixtures for the same reason. The
+// happy-path multipart wire shape is covered by tests/unit/client.test.ts
+// and upload-streaming.test.ts with contract-valid chunk sizes.
+const KNOWN_DIVERGENCES: Record<string, string> = {
+  upload_multipart:
+    'SDK rejects recommendedChunkSize below the contract minimum; fixture pins ~2 MB for a compact payload. Covered by client.test.ts/upload-streaming.test.ts with valid chunk sizes.',
+  upload_metadata_hint:
+    'Same sub-minimum recommendedChunkSize as upload_multipart.',
+  upload_boundary_multipart:
+    'Same sub-minimum recommendedChunkSize as upload_multipart.',
+};
+
 const fixtures = loadFixtures();
 
 describe('cross-SDK parity', () => {
@@ -36,7 +54,10 @@ describe('cross-SDK parity', () => {
   });
 
   describe.each(fixtures)('$name', (fixture: Fixture) => {
-    it(fixture.description ?? fixture.name, async () => {
+    it(fixture.description ?? fixture.name, async (ctx) => {
+      if (fixture.name in KNOWN_DIVERGENCES) {
+        ctx.skip();
+      }
       if (fixture.mode === 'webhook') {
         // Webhook mode makes no HTTP calls; invoke directly.
         const { returnValue } = await invokeFixture(fixture);

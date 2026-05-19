@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from 'node:fs';
+import { open, stat } from 'node:fs/promises';
 import { basename } from 'node:path';
 
 import {
@@ -34,6 +34,8 @@ import {
   TierRestrictionResponseFromJSON,
   UserTier,
   WorkflowExpiredResponseFromJSON,
+  UploadSizeExceedsTierResponseFromJSON,
+  UploadDurationExceedsTierResponseFromJSON,
   UploadThresholdsSingleShotMaxBytesEnum,
   UploadThresholdsMultipartChunkSizeEnum,
   UploadThresholdsMultipartConcurrencyDefaultEnum,
@@ -54,6 +56,8 @@ import type {
   MultipartInitiateResponse,
   MultipartCompleteResponse,
   MultipartCompleteRequest,
+  UploadSizeExceedsTierResponse,
+  UploadDurationExceedsTierResponse,
   WorkflowCancelResponse,
   WorkflowCreateResponse,
   WorkflowResumeResponse,
@@ -72,8 +76,12 @@ import {
   GislError,
   GislFeatureNotAvailableError,
   GislFeatureTierRestrictedError,
+  GislMultipartPartCountError,
+  GislMultipartPartError,
   GislTierRestrictedError,
   GislTimeoutError,
+  GislUploadCapExceededError,
+  type GislUploadCapKind,
   GislValidationError,
   GislWorkflowExpiredError,
 } from './errors.js';
@@ -134,6 +142,37 @@ const DEFAULT_MULTIPART_RETRY_BASE_MS = 500;
 // TODO(58nBQLWQ): replace with UploadThresholdsMultipartFirstChunkSizeEnum
 // once contracts ticket promotes this to a typed const (v2.3.1 follow-up).
 export const DEFAULT_MULTIPART_FIRST_CHUNK_SIZE = 8 * 1024 * 1024; // 8 MB
+
+// The ~2 GB wall on a single Node file read is NOT a Buffer-size limit
+// (modern 64-bit `buffer.constants.MAX_LENGTH` is ~8 PiB). It is libuv's
+// hard-coded INT32_MAX (2 147 483 647) ceiling on one `uv_fs_read` — some
+// platforms reject I/O larger than INT32_MAX bytes per call, so libuv caps
+// every read at it (github.com/nodejs/node/issues/55864). The streaming
+// upload path never approaches this (server chunk size is bounded to
+// <=100 MiB and the first chunk is fixed 8 MiB), but `fileByteSource`
+// asserts it per read so any future caller that requests an oversized range
+// fails loudly here instead of getting a silently short read from libuv.
+const LIBUV_MAX_SINGLE_READ_BYTES = 0x7fffffff; // INT32_MAX
+
+// S3 hard limit: a multipart upload may have at most 10 000 parts. The
+// server computes the part plan and returns `total_parts`; the SDK trusts
+// that value (Model A) but guards the ceiling so an out-of-contract server
+// response or a chunk-size regression surfaces as a typed error rather than
+// a doomed run of presigned PUTs ending in a rejected /multipart/complete.
+const S3_MAX_MULTIPART_PARTS = 10_000;
+
+// Contract bound on `MultipartInitiateResponse.recommended_chunk_size`
+// (compression_contracts/openapi api.yaml — `maximum: 104857600`). The
+// minimum is `multipart_chunk_size` (== MULTIPART_CHUNK_SIZE, drift-guarded
+// above). The generated TS `FromJSON` does NO runtime validation (unlike the
+// strict PHP generated model, which rejects out-of-range values at
+// deserialize), so the TS SDK must enforce this range itself — otherwise a
+// malformed/hostile server `recommended_chunk_size` would pass the
+// part-count guard and drive `fileByteSource` into an unbounded
+// `Buffer.allocUnsafe(length)` (the exact memory-blowup class this SDK
+// exists to prevent). codex review (high).
+const RECOMMENDED_CHUNK_SIZE_MAX_BYTES = 104_857_600; // 100 MiB
+
 const DEFAULT_POLL_INTERVAL_MS = 2_000;
 const DEFAULT_POLL_TIMEOUT_MS = 300_000; // 5 min
 
@@ -322,6 +361,84 @@ function bindAbortSignal(
   };
   external.addEventListener('abort', onAbort, { once: true });
   return () => external.removeEventListener('abort', onAbort);
+}
+
+// A lazy, re-readable view over the upload payload. `slice(start, end)`
+// returns ONLY the requested byte range — it never materialises the whole
+// file. Both implementations are safe to call concurrently and repeatedly
+// for the same range (multipart workers run in parallel; the retry loop
+// re-PUTs the same part).
+interface ByteSource {
+  readonly size: number;
+  slice(start: number, end: number): Promise<Blob>;
+}
+
+// Blob/File input is already lazy: `Blob.slice()` is a zero-copy view and a
+// `File` from a browser picker is disk-backed, so this branch never buffered
+// the whole file. Left structurally identical to the pre-streaming-rewrite
+// behaviour.
+function blobByteSource(blob: Blob): ByteSource {
+  return {
+    size: blob.size,
+    // Pass `blob.type` as the 3rd arg: `Blob.slice()` defaults the slice's
+    // content-type to '' otherwise, which would strip the MIME type off the
+    // single-shot FormData part (the pre-streaming code appended the original
+    // typed Blob directly). Parity fixtures pin this content-type.
+    slice: (start, end) =>
+      Promise.resolve(blob.slice(start, end, blob.type)),
+  };
+}
+
+// File-path input. The pre-rewrite code did `readFileSync(path)` →
+// `new Blob([whole file])`, which (a) OOMs on multi-GB files and (b) cannot
+// even be attempted above ~2 GB because a single libuv `uv_fs_read` is capped
+// at INT32_MAX (see LIBUV_MAX_SINGLE_READ_BYTES). This source instead does a
+// positioned (POSIX pread-semantics) read of ONLY the requested range, with a
+// fresh fd per call so concurrent multipart workers never share a FileHandle
+// (overlapping reads on one handle are unsafe per the Node fs contract) and
+// the fd is always closed in `finally`.
+//
+// Divergence from the old Blob-from-readFileSync behaviour (deliberate, in
+// scope only for streaming): the old path snapshotted the whole file at t0,
+// so every part was point-in-time consistent. Streaming reads each part at
+// the time it is uploaded, so a file truncated/rewritten mid-upload now
+// yields parts from different instants. Truncation is caught by the
+// short-read guard below; full point-in-time snapshotting would require
+// resumable/staged upload and is out of scope (SDK-3, Wb6ebOMM).
+function fileByteSource(path: string, size: number): ByteSource {
+  return {
+    size,
+    async slice(start, end) {
+      const length = end - start;
+      if (length <= 0) return new Blob([]);
+      // Per-read tripwire for the libuv INT32_MAX ceiling. Unreachable on the
+      // normal path (chunk size <=100 MiB) — exists so a future oversized
+      // caller fails here loudly instead of getting a silent short read.
+      if (length > LIBUV_MAX_SINGLE_READ_BYTES) {
+        throw new GislError(
+          `Refusing to read ${length} bytes in one operation: exceeds the ` +
+            `libuv single-read ceiling (${LIBUV_MAX_SINGLE_READ_BYTES}). ` +
+            'Reads must be chunked below INT32_MAX.',
+        );
+      }
+      const handle = await open(path, 'r');
+      try {
+        const buffer = Buffer.allocUnsafe(length);
+        const { bytesRead } = await handle.read(buffer, 0, length, start);
+        if (bytesRead !== length) {
+          // Short read = the file shrank/was truncated under us. Mirrors the
+          // PHP SDK's readChunk short-read guard (GislClient.php readChunk).
+          throw new GislError(
+            `Short read on ${path}: expected ${length} bytes at offset ` +
+              `${start}, got ${bytesRead}. File changed during upload.`,
+          );
+        }
+        return new Blob([buffer]);
+      } finally {
+        await handle.close();
+      }
+    },
+  };
 }
 
 export class GislClient {
@@ -620,6 +737,73 @@ export class GislClient {
         );
       }
 
+      // Upload cap errors. `GislUploadCapExceededError` takes an extra `kind`
+      // arg so it cannot use `tryThrowStructured` (whose ErrorClass signature
+      // is fixed) — this local helper applies the SAME defense-in-depth
+      // discipline: construct via FromJSON, validate required typed fields,
+      // fall through to the generic `GislApiError` on any malformed envelope.
+      const tryThrowCap = <T>(
+        construct: (raw: unknown) => T,
+        kind: GislUploadCapKind,
+        validate: (payload: T) => boolean,
+      ): never | undefined => {
+        let payload: T;
+        try {
+          payload = construct(json);
+        } catch {
+          return undefined;
+        }
+        if (!validate(payload)) {
+          return undefined;
+        }
+        throw new GislUploadCapExceededError(
+          status,
+          errorMessage,
+          kind,
+          payload as
+            | UploadSizeExceedsTierResponse
+            | UploadDurationExceedsTierResponse,
+          path,
+          i18n,
+        );
+      };
+
+      if (status === 422 && errorType === 'upload_size_exceeds_tier') {
+        tryThrowCap(
+          UploadSizeExceedsTierResponseFromJSON,
+          'size_tier',
+          (p) =>
+            isInEnum(p.currentTier, UserTier) &&
+            typeof p.maxSizeBytes === 'number',
+        );
+      }
+
+      if (status === 422 && errorType === 'upload_duration_exceeds_tier') {
+        tryThrowCap(
+          UploadDurationExceedsTierResponseFromJSON,
+          'duration_tier',
+          (p) =>
+            isInEnum(p.currentTier, UserTier) &&
+            typeof p.maxDurationSeconds === 'number',
+        );
+      }
+
+      // 413 = the absolute across-tier cap. The contract models 413 as a
+      // plain `ErrorEnvelope` (no `error_type` discriminator, no typed
+      // payload — api.yaml), so dispatch purely on status with no FromJSON
+      // and an undefined payload (the `absolute_413` kind tells the caller
+      // there is intentionally no structured envelope to read).
+      if (status === 413) {
+        throw new GislUploadCapExceededError(
+          status,
+          errorMessage,
+          'absolute_413',
+          undefined,
+          path,
+          i18n,
+        );
+      }
+
       throw new GislApiError(
         status,
         errorMessage,
@@ -655,42 +839,49 @@ export class GislClient {
     file: string | Blob,
     options?: UploadOptions,
   ): Promise<UploadResponse> {
-    // Pre-abort check: bail before statSync/readFileSync buffers the whole
-    // file into memory when the caller has already cancelled.
+    // Pre-abort check: bail before touching the filesystem when the caller
+    // has already cancelled.
     if (options?.signal?.aborted) {
       throw new GislAbortError('Upload aborted before start');
     }
 
-    let blob: Blob;
+    let source: ByteSource;
     let fileName: string;
-    let fileSize: number;
 
     if (typeof file === 'string') {
-      const stat = statSync(file);
-      fileSize = stat.size;
+      // `stat` for the size only — the bytes are NEVER read up front. The old
+      // path did `readFileSync(file)` which OOMs on multi-GB files and is
+      // impossible above the libuv INT32_MAX single-read ceiling regardless
+      // of available memory (see fileByteSource / LIBUV_MAX_SINGLE_READ_BYTES).
+      const stats = await stat(file);
       fileName = basename(file);
-      const content = readFileSync(file);
-      blob = new Blob([content]);
+      source = fileByteSource(file, stats.size);
     } else {
-      blob = file;
       fileName = (file as File).name ?? 'upload';
-      fileSize = file.size;
+      source = blobByteSource(file);
     }
 
-    if (fileSize > this.multipartThreshold) {
-      return this.multipartUpload(blob, fileName, fileSize, options);
+    if (source.size > this.multipartThreshold) {
+      return this.multipartUpload(source, fileName, source.size, options);
     }
 
-    return this.singleUpload(blob, fileName, options);
+    return this.singleUpload(source, fileName, options);
   }
 
   private async singleUpload(
-    blob: Blob,
+    source: ByteSource,
     fileName: string,
     options?: UploadOptions,
   ): Promise<UploadResponse> {
     const form = new FormData();
-    form.append('file', blob, fileName);
+    // Single-shot is gated to <= single_shot_max_bytes (10 MB) by the router
+    // above, so this one bounded read is trivially under the libuv ceiling
+    // and a non-issue for memory. `slice` returns a Blob (the file-path
+    // source wraps the bounded Buffer) so FormData.append is unchanged —
+    // multipart never wraps a whole-file Blob, only this <=10 MB single-shot
+    // path ever holds a full payload Blob.
+    const body = await source.slice(0, source.size);
+    form.append('file', body, fileName);
 
     return this.request('POST', '/api/uploads', {
       body: form,
@@ -712,14 +903,14 @@ export class GislClient {
    * post-upload metadata callers should use getMetadata(fileId).
    */
   private async multipartUpload(
-    blob: Blob,
+    source: ByteSource,
     fileName: string,
     totalSize: number,
     options?: UploadOptions,
   ): Promise<UploadResponse> {
     // Step 1: Initiate with first chunk
     const firstChunkSize = Math.min(totalSize, DEFAULT_MULTIPART_FIRST_CHUNK_SIZE);
-    const firstChunk = blob.slice(0, firstChunkSize);
+    const firstChunk = await source.slice(0, firstChunkSize);
 
     const initiateForm = new FormData();
     initiateForm.append('file', firstChunk, fileName);
@@ -759,6 +950,112 @@ export class GislClient {
     const etags: Array<{ partNumber: number; etag: string }> = [];
     const presignedUrls = initResponse.presignedUrls;
     const chunkSize = initResponse.recommendedChunkSize;
+    // MultipartInitiateResponseFromJSON does NO runtime validation (unlike
+    // the strict PHP generated model, which rejects these at deserialize —
+    // the documented lax-TS-vs-strict-PHP divergence). The TS SDK must
+    // therefore enforce, before any chunk read/PUT, what PHP gets for free
+    // from its generated model + its explicit pre-loop guards (codex review):
+    //
+    // (a) uploadId must be a non-empty string. `FromJSON` assigns
+    //     `json['upload_id']` directly, so a malformed initiate could
+    //     otherwise produce a typed GislMultipartPartError whose `uploadId`
+    //     is `undefined` and synthesise a bogus UploadResponse.fileId —
+    //     mirrors the PHP pre-loop `is_string && !== ''` guard.
+    if (
+      typeof initResponse.uploadId !== 'string' ||
+      initResponse.uploadId === ''
+    ) {
+      throw new GislError(
+        'Multipart initiate response missing or empty upload_id.',
+      );
+    }
+    // (b) recommendedChunkSize must be a finite number INSIDE the contract
+    //     range [MULTIPART_CHUNK_SIZE, RECOMMENDED_CHUNK_SIZE_MAX_BYTES]. The
+    //     old `>= 1` check let a malformed/hostile huge value pass the
+    //     part-count guard and drive `fileByteSource` into an unbounded
+    //     `Buffer.allocUnsafe(length)` — the memory-blowup class this SDK
+    //     exists to prevent. PHP's strict generated model already rejects
+    //     out-of-range values at deserialize; this is the TS equivalent.
+    if (
+      typeof chunkSize !== 'number' ||
+      !Number.isInteger(chunkSize) ||
+      chunkSize < MULTIPART_CHUNK_SIZE ||
+      chunkSize > RECOMMENDED_CHUNK_SIZE_MAX_BYTES
+    ) {
+      // `Number.isInteger` also rejects NaN/Infinity and a fractional
+      // `recommended_chunk_size` (e.g. 5242880.5) that would otherwise
+      // reach `Buffer.allocUnsafe(fractional)` and fail later as a
+      // misleading part-read error (codex review).
+      throw new GislError(
+        'Multipart initiate response recommendedChunkSize is missing or ' +
+          `outside the contract range [${MULTIPART_CHUNK_SIZE}, ` +
+          `${RECOMMENDED_CHUNK_SIZE_MAX_BYTES}]: got ${String(chunkSize)}.`,
+      );
+    }
+
+    // S3 <=10 000-part ceiling guard (Model A). The server computes and
+    // returns `totalParts`; we trust it (consistent with how the SDK already
+    // trusts `recommendedChunkSize`/`presignedUrls` from the same envelope)
+    // but assert the ceiling, cross-checked against a client-side recompute
+    // from the same `chunkSize`. This necessarily fires AFTER the initiate
+    // round-trip + 8 MiB first-chunk upload — `totalParts` and `chunkSize`
+    // only exist on the initiate response, so a pure pre-flight check is
+    // impossible under Model A (this is the card-mandated trade-off).
+    const remainingBytes = Math.max(0, totalSize - firstChunkSize);
+    const computedParts = 1 + Math.ceil(remainingBytes / chunkSize);
+    const serverParts = initResponse.totalParts;
+    // `FromJSON` passes `total_parts` through unvalidated. Reject a
+    // missing/non-integer value here so the ≤10k guard's
+    // `Math.max(serverParts, computedParts)` cannot surface `NaN` in the
+    // GislMultipartPartCountError (codex review). Mirrors the uploadId /
+    // chunkSize guards above (the lax-TS-vs-strict-PHP-model divergence).
+    if (
+      typeof serverParts !== 'number' ||
+      !Number.isInteger(serverParts) ||
+      serverParts < 1
+    ) {
+      throw new GislError(
+        'Multipart initiate response missing or invalid total_parts: ' +
+          `got ${String(serverParts)}.`,
+      );
+    }
+    if (
+      serverParts > S3_MAX_MULTIPART_PARTS ||
+      computedParts > S3_MAX_MULTIPART_PARTS
+    ) {
+      throw new GislMultipartPartCountError(
+        `Upload requires ${Math.max(serverParts, computedParts)} parts, ` +
+          `exceeding the S3 ${S3_MAX_MULTIPART_PARTS}-part multipart limit ` +
+          `(server reported ${serverParts}, client computed ${computedParts} ` +
+          `at ${chunkSize}-byte chunks). A larger chunk size is required ` +
+          'server-side to upload a file this large.',
+        Math.max(serverParts, computedParts),
+        S3_MAX_MULTIPART_PARTS,
+      );
+    }
+
+    // Plan-consistency guard (codex review). The ≤10k ceiling above only
+    // bounds the count; it does NOT catch an initiate plan that is internally
+    // inconsistent BELOW the cap. Under Model A a contract-compliant server
+    // computes `total_parts` from the same `recommended_chunk_size` it
+    // returns, and emits exactly one presigned URL per remaining part (part 1
+    // is the initiate first chunk). If `total_parts`, the client recompute,
+    // and `presigned_urls.length` disagree, proceeding would PUT the wrong
+    // number of byte ranges (or wrong offsets) and only fail opaquely at
+    // /multipart/complete. Fail fast here with the discrepancy instead.
+    if (
+      !Number.isFinite(serverParts) ||
+      serverParts !== computedParts ||
+      presignedUrls.length !== computedParts - 1
+    ) {
+      throw new GislError(
+        'Multipart initiate plan is internally inconsistent: server ' +
+          `total_parts=${serverParts}, client computed ${computedParts} ` +
+          `from ${chunkSize}-byte chunks, presigned_urls.length=` +
+          `${presignedUrls.length} (expected ${computedParts - 1}). ` +
+          'Refusing to upload a mismatched part plan.',
+      );
+    }
 
     // Internal abort signal that workers use to short-circuit each others'
     // backoff sleeps. When any worker hits a terminal failure it aborts this
@@ -843,11 +1140,35 @@ export class GislClient {
       const part = presignedUrls[index];
       const start = firstChunkSize + index * chunkSize;
       const end = Math.min(start + chunkSize, totalSize);
-      // Blob.slice() returns a new Blob view; the underlying bytes are
-      // immutable so the same `chunk` may be re-sent across retry attempts.
-      // S3 multipart parts are idempotent by partNumber — a re-PUT overwrites,
-      // there is no duplicate-data risk.
-      const chunk = blob.slice(start, end);
+      // Read this part's bytes ONCE here, then reuse the captured chunk
+      // across every retry attempt below — so a retry never re-reads the
+      // file and the re-PUT is byte-identical (S3 parts are idempotent by
+      // partNumber; a re-PUT overwrites, no duplicate-data risk).
+      //
+      // Live-file caveat (streaming divergence from the old
+      // readFileSync→Blob path): the old code snapshotted the whole file at
+      // t0 so every part was point-in-time consistent. Streaming reads each
+      // part at the instant it is first uploaded, so a file mutated
+      // mid-upload yields parts from different instants. Truncation is
+      // caught by fileByteSource's short-read guard; full point-in-time
+      // snapshotting is resumable/staged-upload territory (SDK-3, Wb6ebOMM).
+      // Surface a read failure for THIS part as the typed
+      // GislMultipartPartError (with partNumber + uploadId), consistent with
+      // the PUT-failure path below — a bare GislError from fileByteSource
+      // (short read / libuv ceiling) would otherwise lose the per-part
+      // context (codex review). An abort must stay GislAbortError.
+      let chunk: Blob;
+      try {
+        chunk = await source.slice(start, end);
+      } catch (err) {
+        if (err instanceof GislAbortError) throw err;
+        throw new GislMultipartPartError(
+          `Failed to read bytes for part ${part.partNumber}: ` +
+            (err instanceof Error ? err.message : String(err)),
+          part.partNumber,
+          initResponse.uploadId,
+        );
+      }
       const contentLength = end - start;
 
       let lastErr: unknown = null;
@@ -896,9 +1217,11 @@ export class GislClient {
         );
       }
 
-      throw new GislError(
+      throw new GislMultipartPartError(
         `S3 chunk upload failed for part ${part.partNumber} after ${this.multipartMaxAttempts} attempts: ` +
           (lastErr instanceof Error ? lastErr.message : String(lastErr)),
+        part.partNumber,
+        initResponse.uploadId,
       );
     };
 
@@ -983,7 +1306,9 @@ export class GislClient {
       fileId: completeResp.uploadId,
       originalName: fileName,
       mimeType: initResponse.mimeType,
-      sizeBytes: blob.size,
+      // `totalSize` (from fs.stat / Blob.size) — the streaming path no longer
+      // holds a whole-file Blob to read `.size` off.
+      sizeBytes: totalSize,
       // Preserved from the initiate response: v2 contract makes
       // `constraintsApplied` a REQUIRED field on UploadResponse, and the
       // multipart/complete endpoint does not re-emit it. The first-chunk probe

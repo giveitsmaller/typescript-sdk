@@ -7,7 +7,10 @@ import {
   GislError,
   GislFeatureNotAvailableError,
   GislFeatureTierRestrictedError,
+  GislMultipartPartCountError,
+  GislMultipartPartError,
   GislTierRestrictedError,
+  GislUploadCapExceededError,
   GislValidationError,
   GislWorkflowExpiredError,
 } from '../../src/errors.js';
@@ -115,6 +118,69 @@ describe('error classes', () => {
       expect(err).toBeInstanceOf(GislAuthError);
       expect(err).toBeInstanceOf(GislApiError);
       expect(err.name).toBe('GislAuthError');
+    });
+
+    it('GislUploadCapExceededError extends GislApiError (size_tier kind)', () => {
+      const err = new GislUploadCapExceededError(
+        422,
+        'Too big for your tier',
+        'size_tier',
+        {
+          success: false,
+          error: 'Too big for your tier',
+          errorType: 'upload_size_exceeds_tier',
+          currentTier: 'free',
+          maxSizeBytes: 10485760,
+          requiredTier: 'pro',
+        },
+      );
+      expect(err).toBeInstanceOf(GislUploadCapExceededError);
+      expect(err).toBeInstanceOf(GislApiError);
+      expect(err).toBeInstanceOf(GislError);
+      expect(err.name).toBe('GislUploadCapExceededError');
+      expect(err.kind).toBe('size_tier');
+      expect(err.statusCode).toBe(422);
+    });
+
+    it('GislUploadCapExceededError carries no payload for absolute_413', () => {
+      const err = new GislUploadCapExceededError(
+        413,
+        'File size exceeds maximum allowed',
+        'absolute_413',
+        undefined,
+      );
+      expect(err).toBeInstanceOf(GislUploadCapExceededError);
+      expect(err.kind).toBe('absolute_413');
+      expect(err.payload).toBeUndefined();
+    });
+
+    it('GislMultipartPartError extends GislError (not GislApiError)', () => {
+      const err = new GislMultipartPartError(
+        'part 4 failed after 3 attempts',
+        4,
+        'upload-xyz',
+      );
+      expect(err).toBeInstanceOf(GislMultipartPartError);
+      expect(err).toBeInstanceOf(GislError);
+      expect(err).toBeInstanceOf(Error);
+      expect(err).not.toBeInstanceOf(GislApiError);
+      expect(err.name).toBe('GislMultipartPartError');
+      expect(err.partNumber).toBe(4);
+      expect(err.uploadId).toBe('upload-xyz');
+    });
+
+    it('GislMultipartPartCountError extends GislError (not GislApiError)', () => {
+      const err = new GislMultipartPartCountError(
+        'requires 12345 parts, exceeds 10000',
+        12345,
+        10000,
+      );
+      expect(err).toBeInstanceOf(GislMultipartPartCountError);
+      expect(err).toBeInstanceOf(GislError);
+      expect(err).not.toBeInstanceOf(GislApiError);
+      expect(err.name).toBe('GislMultipartPartCountError');
+      expect(err.requiredParts).toBe(12345);
+      expect(err.maxParts).toBe(10000);
     });
   });
 
