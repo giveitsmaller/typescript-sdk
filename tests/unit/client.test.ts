@@ -1393,11 +1393,12 @@ describe('GislClient', () => {
     // deterministic (queue.length === 1 -> exactly one worker). BLOB_SIZE must
     // be strictly > multipartThreshold (default 10MB) to route through
     // multipartUpload().
-    // 5 MiB + 1 — contract minimum for recommended_chunk_size (the SDK now
+    // 16 MiB + 1 — contract minimum for recommended_chunk_size (the SDK
     // rejects sub-minimum chunk sizes per the codex-flagged range guard;
-    // the old 2 MB+1 value was contract-invalid and only passed under the
-    // pre-fix lax `>= 1` check). Topology (total_parts) is unchanged.
-    const TAIL_CHUNK_SIZE = 5 * 1024 * 1024 + 1;
+    // SDK-2 (#84) raised the minimum from 5 MiB to 16 MiB to keep an
+    // Enterprise 120 GiB upload inside the S3 10000-part hard limit).
+    // Topology (total_parts) is unchanged.
+    const TAIL_CHUNK_SIZE = 16 * 1024 * 1024 + 1;
     const BLOB_SIZE = DEFAULT_MULTIPART_FIRST_CHUNK_SIZE + TAIL_CHUNK_SIZE;
 
     function mockMultipartFlow(): void {
@@ -1598,7 +1599,7 @@ describe('GislClient', () => {
 
   describe('uploadFile cancellation', () => {
     // Reuse the multipart block's flow helper shape.
-    const TAIL_CHUNK_SIZE = 5 * 1024 * 1024 + 1;
+    const TAIL_CHUNK_SIZE = 16 * 1024 * 1024 + 1;
     const BLOB_SIZE = DEFAULT_MULTIPART_FIRST_CHUNK_SIZE + TAIL_CHUNK_SIZE;
 
     it('fails fast with GislAbortError when signal is already aborted on entry', async () => {
@@ -1956,7 +1957,7 @@ describe('GislClient', () => {
   // -----------------------------------------------------------------------
 
   describe('multipart upload retry', () => {
-    const TAIL_CHUNK_SIZE = 5 * 1024 * 1024 + 1; // matches mockMultipartFlow shape
+    const TAIL_CHUNK_SIZE = 16 * 1024 * 1024 + 1; // matches mockMultipartFlow shape
     const BLOB_SIZE = DEFAULT_MULTIPART_FIRST_CHUNK_SIZE + TAIL_CHUNK_SIZE;
 
     function makeRetryClient(overrides?: {
@@ -3275,11 +3276,11 @@ describe('GislClient', () => {
             first_chunk_size_bytes: DEFAULT_MULTIPART_FIRST_CHUNK_SIZE,
             total_parts: 2,
             // Server-chosen recommended_chunk_size is independent of the
-            // actual tail size; pin a contract-valid constant (>= 5 MiB
-            // minimum, the SDK now rejects sub-minimum). All `tailSize`
-            // values used here (<= ~3.4 MB) fit one such chunk, so
-            // total_parts stays 2 (plan-consistent).
-            recommended_chunk_size: 5 * 1024 * 1024,
+            // actual tail size; pin a contract-valid constant (>= 16 MiB
+            // minimum per SDK-2 #84; the SDK rejects sub-minimum). All
+            // `tailSize` values used here (<= ~3.4 MB) fit one such chunk,
+            // so total_parts stays 2 (plan-consistent).
+            recommended_chunk_size: 16 * 1024 * 1024,
             presigned_urls: [
               {
                 part_number: 2,
@@ -3547,7 +3548,7 @@ describe('GislClient', () => {
   // -----------------------------------------------------------------------
 
   describe('multipartConcurrency sanitisation', () => {
-    const TAIL_CHUNK_SIZE = 5 * 1024 * 1024 + 1;
+    const TAIL_CHUNK_SIZE = 16 * 1024 * 1024 + 1;
 
     function effectiveConcurrency(c: GislClient): number {
       // The field is `private readonly` (client.ts:320). The cast here is

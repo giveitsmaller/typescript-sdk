@@ -283,7 +283,7 @@ describe('streaming upload (string-path branch)', () => {
             first_chunk_etag: '"e1"',
             first_chunk_size_bytes: DEFAULT_MULTIPART_FIRST_CHUNK_SIZE,
             total_parts: 10001,
-            recommended_chunk_size: 5 * 1024 * 1024,
+            recommended_chunk_size: 16 * 1024 * 1024,
             presigned_urls: [],
             constraints_applied: { processing_class_pre_assignment: 'short_form' },
           },
@@ -302,7 +302,12 @@ describe('streaming upload (string-path branch)', () => {
     });
 
     it('throws when the client-side recompute exceeds 10000 even if the server under-reports', async () => {
-      const FILE_SIZE = 60 * 1024 * 1024 * 1024; // 60 GiB
+      // 165 GiB / 16 MiB chunk = 10560 parts — client-side recompute
+      // exceeds the S3 10000-part ceiling, even though the server under-
+      // reports total_parts: 5. SDK-2 (#84) raised the min chunk to 16
+      // MiB; this file size keeps the test's intent (client recompute
+      // catches the server lie) intact under the new contract.
+      const FILE_SIZE = 165 * 1024 * 1024 * 1024; // 165 GiB
       installFakeFile(FILE_SIZE, 100 * 1024 * 1024);
       fetchSpy.mockResolvedValueOnce(
         jsonResponse({
@@ -313,7 +318,7 @@ describe('streaming upload (string-path branch)', () => {
             first_chunk_etag: '"e1"',
             first_chunk_size_bytes: DEFAULT_MULTIPART_FIRST_CHUNK_SIZE,
             total_parts: 5, // server lies / under-reports
-            recommended_chunk_size: 5 * 1024 * 1024, // 5 MiB -> ~12288 parts
+            recommended_chunk_size: 16 * 1024 * 1024, // 16 MiB -> ~10560 parts client-recompute
             presigned_urls: [],
             constraints_applied: { processing_class_pre_assignment: 'short_form' },
           },
@@ -617,7 +622,7 @@ describe('streaming upload (string-path branch)', () => {
     });
 
     it('below-minimum recommendedChunkSize rejected by the contract-range guard', async () => {
-      const TINY = 1024 * 1024; // 1 MiB — below the 5 MiB contract minimum
+      const TINY = 1024 * 1024; // 1 MiB — below the 16 MiB contract minimum
       const FILE_SIZE = DEFAULT_MULTIPART_FIRST_CHUNK_SIZE + 4 * 1024 * 1024;
       installFakeFile(FILE_SIZE, 64 * 1024 * 1024);
       mockInitiateThenS3('mp-tiny', TINY, FILE_SIZE);
@@ -633,7 +638,7 @@ describe('streaming upload (string-path branch)', () => {
     it('fractional recommendedChunkSize rejected by the integer guard', async () => {
       const FILE_SIZE = DEFAULT_MULTIPART_FIRST_CHUNK_SIZE + 4 * 1024 * 1024;
       installFakeFile(FILE_SIZE, 64 * 1024 * 1024);
-      mockInitiateThenS3('mp-frac', 5_242_880.5, FILE_SIZE);
+      mockInitiateThenS3('mp-frac', 16_777_216.5, FILE_SIZE);
 
       const err = await client.uploadFile('/tmp/x.bin').catch((e) => e);
       expect(err).toBeInstanceOf(GislError);
@@ -643,8 +648,14 @@ describe('streaming upload (string-path branch)', () => {
 
     // codex round-3 (low): missing total_parts must not surface as `NaN` in
     // GislMultipartPartCountError via Math.max(serverParts, computedParts).
+    // The precise total_parts guard fires BEFORE the count-ceiling guard,
+    // so the count guard's NaN math is short-circuited — file size below
+    // is incidental (16 MiB chunk + 60 GiB = ~3840 computed parts, far
+    // below 10000). The test pins that the missing-total_parts path
+    // surfaces as a precise GislError, not as a `NaN`-bearing
+    // GislMultipartPartCountError.
     it('missing total_parts -> precise GislError, never NaN in the error', async () => {
-      const FILE_SIZE = 60 * 1024 * 1024 * 1024; // computed parts >> 10000
+      const FILE_SIZE = 60 * 1024 * 1024 * 1024;
       installFakeFile(FILE_SIZE, 64 * 1024 * 1024);
       fetchSpy.mockImplementation(async (url: string) => {
         if (url.endsWith('/multipart/initiate')) {
@@ -656,7 +667,7 @@ describe('streaming upload (string-path branch)', () => {
               first_chunk_etag: '"e1"',
               first_chunk_size_bytes: DEFAULT_MULTIPART_FIRST_CHUNK_SIZE,
               // total_parts deliberately omitted (FromJSON passes through)
-              recommended_chunk_size: 5 * 1024 * 1024,
+              recommended_chunk_size: 16 * 1024 * 1024,
               presigned_urls: [],
               constraints_applied: { processing_class_pre_assignment: 'short_form' },
             },

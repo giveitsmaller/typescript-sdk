@@ -356,7 +356,9 @@ describe('SDK-3 uploadFile resume path', () => {
             next_part_number_marker: 1,
             is_truncated: false,
             manifest_expires_at: '2026-05-21T12:00:00Z',
-            // Below MULTIPART_CHUNK_SIZE = 16 MiB.
+            // drift-allow: test asserts the SDK rejects sub-minimum chunk
+            // sizes (the value here is INTENTIONALLY below the 16 MiB
+            // contract minimum to verify the guard fires).
             recommended_chunk_size: 1024 * 1024,
           },
         }),
