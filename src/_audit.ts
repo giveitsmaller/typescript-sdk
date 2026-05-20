@@ -77,6 +77,19 @@ import type {
 // on the public surface.
 import type { OperationResultOutputEntry } from './index.js';
 
+// SDK-3 (Wb6ebOMM) — hand-coded resume-support types in types.ts. The
+// `_Sdk3HandCoded` prefix marks them as transient (replaced on HxUmVr3Y
+// regen). The audit gate pins their presence on the public surface so a
+// rename / drop on regen surfaces as a `tsc --noEmit` failure here.
+import type {
+  MultipartCheckpointState,
+  _Sdk3HandCodedUploadedPart,
+  _Sdk3HandCodedMultipartStatusResult,
+  _Sdk3HandCodedPresignedPart,
+  _Sdk3HandCodedPresignPartsResult,
+  _Sdk3HandCodedKeepaliveResult,
+} from './types.js';
+
 function accept<T>(_value?: T): void {
   // intentionally empty — type-presence is the assertion
 }
@@ -123,4 +136,11 @@ export function _runAudit(): void {
   accept<PositionIndexed>();
   accept<Unindexed>();
   accept<OperationResultOutputEntry>();
+  // SDK-3 (Wb6ebOMM) public-API surface for the 3 resume-support endpoints.
+  accept<MultipartCheckpointState>();
+  accept<_Sdk3HandCodedUploadedPart>();
+  accept<_Sdk3HandCodedMultipartStatusResult>();
+  accept<_Sdk3HandCodedPresignedPart>();
+  accept<_Sdk3HandCodedPresignPartsResult>();
+  accept<_Sdk3HandCodedKeepaliveResult>();
 }

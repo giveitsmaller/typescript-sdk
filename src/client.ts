@@ -36,6 +36,7 @@ import {
   WorkflowExpiredResponseFromJSON,
   UploadSizeExceedsTierResponseFromJSON,
   UploadDurationExceedsTierResponseFromJSON,
+  UploadConstraintsAppliedProcessingClassPreAssignmentEnum,
   UploadThresholdsSingleShotMaxBytesEnum,
   UploadThresholdsMultipartChunkSizeEnum,
   UploadThresholdsMultipartConcurrencyDefaultEnum,
@@ -78,6 +79,9 @@ import {
   GislFeatureTierRestrictedError,
   GislMultipartPartCountError,
   GislMultipartPartError,
+  GislMultipartSessionNotFoundError,
+  GislMultipartSessionOwnershipError,
+  GislMultipartSessionAuthRequiredError,
   GislTierRestrictedError,
   GislTimeoutError,
   GislUploadCapExceededError,
@@ -92,11 +96,17 @@ import type {
   GetSchemaResult,
   GislClientConfig,
   GislSseEvent,
+  MultipartCheckpointState,
   PreflightClipError,
   PreflightClipsResult,
   UploadOptions,
   WaitOptions,
   WorkflowCreatePayload,
+  _Sdk3HandCodedKeepaliveResult,
+  _Sdk3HandCodedMultipartStatusResult,
+  _Sdk3HandCodedPresignPartsResult,
+  _Sdk3HandCodedPresignedPart,
+  _Sdk3HandCodedUploadedPart,
 } from './types.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -808,6 +818,37 @@ export class GislClient {
         );
       }
 
+      // SDK-3 (Wb6ebOMM) resume-support endpoint error codes. API-2 / PR
+      // #283 specced these as plain `ErrorEnvelope` envelopes with the
+      // discriminating string on `error_type`. No typed payload to build —
+      // dispatch on the (status, error_type) tuple. The HxUmVr3Y contract
+      // regen will produce typed responses for these; today the 3 typed
+      // subclasses carry only the localisation triple + raw envelope.
+      if (status === 404 && errorType === 'MULTIPART_SESSION_NOT_FOUND') {
+        throw new GislMultipartSessionNotFoundError(status, errorMessage, path, i18n);
+      }
+      if (status === 403 && errorType === 'MULTIPART_SESSION_OWNERSHIP') {
+        throw new GislMultipartSessionOwnershipError(status, errorMessage, path, i18n);
+      }
+      if (status === 403 && errorType === 'MULTIPART_SESSION_AUTH_REQUIRED') {
+        throw new GislMultipartSessionAuthRequiredError(status, errorMessage, path, i18n);
+      }
+      // 422 `FILE_TOO_LARGE_FOR_MULTIPART` — pre-S3 capacity reject on the
+      // resume-support presign endpoint (more parts than the manifest can
+      // ever accept). No typed payload today (the contract carries no
+      // structured response for this code); `cap_v2_multipart` discriminant
+      // is documented on `GislUploadCapKind`.
+      if (status === 422 && errorType === 'FILE_TOO_LARGE_FOR_MULTIPART') {
+        throw new GislUploadCapExceededError(
+          status,
+          errorMessage,
+          'cap_v2_multipart',
+          undefined,
+          path,
+          i18n,
+        );
+      }
+
       throw new GislApiError(
         status,
         errorMessage,
@@ -863,6 +904,23 @@ export class GislClient {
     } else {
       fileName = (file as File).name ?? 'upload';
       source = blobByteSource(file);
+    }
+
+    if (typeof options?.resumeUploadId === 'string' && options.resumeUploadId !== '') {
+      // SDK-3 (Wb6ebOMM): resume path takes the durable session's
+      // `recommended_chunk_size` from the /status envelope rather than
+      // the initiate envelope (initiate is skipped). Below the multipart
+      // threshold a resume is still meaningful — the original session was
+      // started as multipart, so a sub-threshold file CAN'T be a "resume
+      // target" in practice. Guard explicitly so a confused caller gets a
+      // clear error rather than a 404 on /status.
+      if (source.size <= this.multipartThreshold) {
+        throw new GislError(
+          'uploadFile: resumeUploadId set but file size is at-or-below the multipart ' +
+            `threshold (${this.multipartThreshold} bytes); resume targets must be multipart sessions.`,
+        );
+      }
+      return this.multipartResume(source, fileName, source.size, options.resumeUploadId, options);
     }
 
     if (source.size > this.multipartThreshold) {
@@ -1318,6 +1376,727 @@ export class GislClient {
       // multipart/complete endpoint does not re-emit it. The first-chunk probe
       // result on the initiate envelope is the authoritative source.
       constraintsApplied: initResponse.constraintsApplied,
+    };
+  }
+
+  /**
+   * SDK-3 (Wb6ebOMM): resume an in-progress multipart upload.
+   *
+   * Skips `/multipart/initiate` entirely (the original initiate happened in a
+   * prior process). Walks `/status` for the authoritative list of recorded
+   * parts, re-presigns the missing ones in batches of <=100, PUTs only those,
+   * and finalises with `/complete`. Caller's `source` MUST be byte-identical
+   * to the originally-uploaded file at the same offsets (parts whose etags
+   * don't match server state will fail `/complete`).
+   *
+   * Re-runs the same `uploadId` / `chunkSize` / `totalParts` / plan-consistency
+   * guards as the fresh-upload path (`multipartUpload`), using the /status
+   * envelope as the equivalent of the initiate envelope. Reuses the same
+   * `failureController` sibling-wake + `drainResponseBody` cleanup discipline
+   * as the fresh-upload PUT loop. `onProgress` fires on entry seeded from
+   * (uploadedPartNumbers.length * chunkSize) and again after every successful
+   * PUT. `onCheckpoint` fires OUTSIDE the retry-scoped path after every
+   * successful PUT — a callback-throw must not trigger a duplicate PUT.
+   *
+   * TODO(HxUmVr3Y): replace inline hand-coded request body marshalling on regen.
+   */
+  private async multipartResume(
+    source: ByteSource,
+    fileName: string,
+    totalSize: number,
+    resumeUploadId: string,
+    options?: UploadOptions,
+  ): Promise<UploadResponse> {
+    // Step 1: Walk /status for the authoritative session state.
+    const status = await this.walkUploadStatus(resumeUploadId, {
+      signal: options?.signal,
+    });
+
+    // Validate the /status envelope shape, mirroring the fresh-upload
+    // post-initiate guards (`multipartUpload` lines around the
+    // total_parts / recommendedChunkSize / uploadId validation block).
+    if (
+      typeof status.uploadId !== 'string' ||
+      status.uploadId === '' ||
+      status.uploadId !== resumeUploadId
+    ) {
+      throw new GislError(
+        'multipartResume: /status response uploadId does not match resumeUploadId.',
+      );
+    }
+    const chunkSize = status.recommendedChunkSize;
+    if (
+      typeof chunkSize !== 'number' ||
+      !Number.isInteger(chunkSize) ||
+      chunkSize < MULTIPART_CHUNK_SIZE ||
+      chunkSize > RECOMMENDED_CHUNK_SIZE_MAX_BYTES
+    ) {
+      throw new GislError(
+        'multipartResume: /status recommendedChunkSize missing or outside the contract ' +
+          `range [${MULTIPART_CHUNK_SIZE}, ${RECOMMENDED_CHUNK_SIZE_MAX_BYTES}]: got ${String(chunkSize)}.`,
+      );
+    }
+    if (
+      typeof status.totalParts !== 'number' ||
+      !Number.isInteger(status.totalParts) ||
+      status.totalParts < 1
+    ) {
+      throw new GislError(
+        `multipartResume: /status totalParts missing or invalid: got ${String(status.totalParts)}.`,
+      );
+    }
+    if (status.totalParts > S3_MAX_MULTIPART_PARTS) {
+      throw new GislMultipartPartCountError(
+        `multipartResume: /status totalParts=${status.totalParts} exceeds the S3 ` +
+          `${S3_MAX_MULTIPART_PARTS}-part multipart limit.`,
+        status.totalParts,
+        S3_MAX_MULTIPART_PARTS,
+      );
+    }
+
+    // Sanity-check the caller's byte source against the server's recorded
+    // plan. Mirrors the fresh-upload chunk-plan: part 1 = firstChunkSize
+    // (8 MiB), parts 2..totalParts each consume chunkSize bytes (last part
+    // may be a short tail). Reject a wrong-file resume here — /complete
+    // would otherwise fail on etag mismatch.
+    const firstChunkSize = Math.min(totalSize, DEFAULT_MULTIPART_FIRST_CHUNK_SIZE);
+    const expectedMinBytes =
+      firstChunkSize + Math.max(0, status.totalParts - 2) * chunkSize + (status.totalParts > 1 ? 1 : 0);
+    const expectedMaxBytes =
+      firstChunkSize + Math.max(0, status.totalParts - 1) * chunkSize;
+    if (totalSize < expectedMinBytes || totalSize > expectedMaxBytes) {
+      throw new GislError(
+        `multipartResume: caller file size (${totalSize}) does not match the resumed ` +
+          `session's recorded plan (totalParts=${status.totalParts}, chunkSize=${chunkSize}, ` +
+          `expected ${expectedMinBytes}-${expectedMaxBytes} bytes). Wrong file for this uploadId?`,
+      );
+    }
+
+    // Step 2: Compute missing parts. Server records `uploadedParts` as the
+    // authoritative set; everything in [1, totalParts] not in that set is
+    // still-to-upload. Part 1 was uploaded inline at initiate — if it is
+    // missing from /status the session is unrecoverable (the server rejects
+    // re-presigning part 1 to preserve the recorded etag for /complete).
+    const uploaded = new Map<number, _Sdk3HandCodedUploadedPart>();
+    for (const p of status.uploadedParts) {
+      uploaded.set(p.partNumber, p);
+    }
+    if (!uploaded.has(1)) {
+      throw new GislError(
+        'multipartResume: part 1 (initiate first chunk) is missing from /status. ' +
+          'Part 1 is sealed at initiate and cannot be re-presigned; this session is unrecoverable. ' +
+          'Start a fresh upload (call uploadFile without resumeUploadId).',
+      );
+    }
+    const missingParts: number[] = [];
+    for (let n = 2; n <= status.totalParts; n++) {
+      if (!uploaded.has(n)) missingParts.push(n);
+    }
+
+    // Seed uploadedBytes from already-uploaded parts so onProgress reflects
+    // the true resumption point. Server reports authoritative part sizes
+    // via `sizeBytes`; sum those rather than guessing chunkSize * count
+    // (the last part may be a short tail).
+    let uploadedBytes = 0;
+    for (const p of status.uploadedParts) {
+      uploadedBytes += p.sizeBytes;
+    }
+    options?.onProgress?.(uploadedBytes, totalSize);
+
+    const fireCheckpoint = (extraPartNumber?: number): void => {
+      const all = [...uploaded.keys()];
+      if (extraPartNumber !== undefined) all.push(extraPartNumber);
+      all.sort((a, b) => a - b);
+      const state: MultipartCheckpointState = {
+        uploadId: status.uploadId,
+        totalParts: status.totalParts,
+        uploadedPartNumbers: all,
+        manifestExpiresAt: status.manifestExpiresAt,
+      };
+      // Callback fires OUTSIDE retry-scope. A throw here propagates and
+      // fails the upload but cannot trigger a duplicate PUT.
+      options?.onCheckpoint?.(state);
+    };
+    // Fire an entry checkpoint so callers can persist the resumed state
+    // even before any new PUT lands. Useful when the missing-parts list is
+    // empty (everything already uploaded except /complete) — see below.
+    fireCheckpoint();
+
+    // Short-circuit: every part is already uploaded. Skip presign + PUT
+    // and go straight to /complete with the etags the server has on file.
+    const newEtags: Array<{ partNumber: number; etag: string }> = [];
+    if (missingParts.length === 0) {
+      // No PUTs to run; proceed to /complete below with just the recorded parts.
+    } else {
+      // Step 3: For each batch of <=100 missing parts, re-presign + PUT.
+      // We process batches sequentially (presign call) but PUTs within each
+      // batch run concurrently up to multipartConcurrency, mirroring the
+      // fresh-upload worker-pool semantics.
+      const failureController = new AbortController();
+
+      const putOne = async (
+        part: _Sdk3HandCodedPresignedPart,
+      ): Promise<void> => {
+        // Offset math mirrors the fresh-upload path
+        // (`multipartUpload`'s `uploadChunk`): part 1 is the initiate's 8 MiB
+        // first chunk, parts 2..N each consume chunkSize bytes starting at
+        // firstChunkSize. The resume path never PUTs part 1 (rejected
+        // earlier as unrecoverable), so partNumber here is always >= 2.
+        const firstChunkSize = Math.min(totalSize, DEFAULT_MULTIPART_FIRST_CHUNK_SIZE);
+        const start = firstChunkSize + (part.partNumber - 2) * chunkSize;
+        const end = Math.min(start + chunkSize, totalSize);
+        const contentLength = end - start;
+
+        let chunk: Blob;
+        try {
+          chunk = await source.slice(start, end);
+        } catch (err) {
+          if (err instanceof GislAbortError) throw err;
+          throw new GislMultipartPartError(
+            `multipartResume: failed to read bytes for part ${part.partNumber}: ` +
+              (err instanceof Error ? err.message : String(err)),
+            part.partNumber,
+            status.uploadId,
+          );
+        }
+
+        let lastErr: unknown = null;
+        for (let attempt = 0; attempt < this.multipartMaxAttempts; attempt++) {
+          if (options?.signal?.aborted) {
+            throw new GislAbortError(
+              `multipartResume: S3 part ${part.partNumber} upload aborted`,
+            );
+          }
+          if (failureController.signal.aborted) {
+            throw new GislError(
+              `multipartResume: S3 part ${part.partNumber} upload abandoned after sibling failure`,
+            );
+          }
+
+          let s3Response: Response;
+          try {
+            s3Response = await fetch(part.url, {
+              method: 'PUT',
+              body: chunk,
+              headers: { 'Content-Length': contentLength.toString() },
+              signal: options?.signal,
+            });
+          } catch (err: unknown) {
+            if (isAbortError(err) && options?.signal?.aborted) {
+              throw new GislAbortError(
+                `multipartResume: S3 part ${part.partNumber} upload aborted`,
+              );
+            }
+            // Non-user-abort AbortError (e.g. transport cleanup) must still
+            // surface as a typed GislError subclass — never as a raw
+            // DOMException — to preserve the "every multipart failure is a
+            // typed GislError" contract (code-reviewer P7).
+            if (isAbortError(err)) {
+              throw new GislMultipartPartError(
+                `multipartResume: S3 part ${part.partNumber} aborted by transport: ` +
+                  (err instanceof Error ? err.message : String(err)),
+                part.partNumber,
+                status.uploadId,
+              );
+            }
+            if (isRetryableNetworkError(err)) {
+              lastErr = err;
+              if (attempt + 1 >= this.multipartMaxAttempts) break;
+              const delay = fullJitterDelay(this.multipartRetryBaseMs, attempt);
+              await sleepWithEitherSignal(
+                delay,
+                options?.signal,
+                failureController.signal,
+              );
+              continue;
+            }
+            throw err;
+          }
+
+          if (s3Response.ok) {
+            const etag = s3Response.headers.get('etag');
+            if (!etag) {
+              await drainResponseBody(s3Response);
+              throw new GislError(
+                `multipartResume: S3 response missing ETag for part ${part.partNumber}`,
+              );
+            }
+            // Successful PUT — record etag, apply progress + checkpoint side
+            // effects OUTSIDE the retry-scoped path (mirrors the fresh-upload
+            // discipline at multipartUpload's ok-branch).
+            newEtags.push({ partNumber: part.partNumber, etag });
+            uploaded.set(part.partNumber, {
+              partNumber: part.partNumber,
+              etag,
+              sizeBytes: contentLength,
+              lastModified: new Date().toISOString(),
+            });
+            uploadedBytes = Math.min(uploadedBytes + contentLength, totalSize);
+            options?.onProgress?.(uploadedBytes, totalSize);
+            fireCheckpoint();
+            return;
+          }
+
+          await drainResponseBody(s3Response);
+          if (!isRetryableStatus(s3Response.status)) {
+            throw new GislError(
+              `multipartResume: S3 chunk upload failed for part ${part.partNumber}: HTTP ${s3Response.status} (non-retryable)`,
+            );
+          }
+          lastErr = new GislError(
+            `multipartResume: S3 chunk upload failed for part ${part.partNumber}: HTTP ${s3Response.status}`,
+          );
+          if (attempt + 1 >= this.multipartMaxAttempts) break;
+          const delay = fullJitterDelay(this.multipartRetryBaseMs, attempt);
+          await sleepWithEitherSignal(
+            delay,
+            options?.signal,
+            failureController.signal,
+          );
+        }
+
+        throw new GislMultipartPartError(
+          `multipartResume: S3 chunk upload failed for part ${part.partNumber} after ${this.multipartMaxAttempts} attempts: ` +
+            (lastErr instanceof Error ? lastErr.message : String(lastErr)),
+          part.partNumber,
+          status.uploadId,
+        );
+      };
+
+      // Drive batches of <=100 part numbers.
+      const PRESIGN_BATCH_SIZE = 100;
+      for (let i = 0; i < missingParts.length; i += PRESIGN_BATCH_SIZE) {
+        if (options?.signal?.aborted) {
+          throw new GislAbortError('multipartResume aborted');
+        }
+        const batch = missingParts.slice(i, i + PRESIGN_BATCH_SIZE);
+        const presigned = await this.presignParts(
+          status.uploadId,
+          batch,
+          status.totalParts,
+          { signal: options?.signal },
+        );
+
+        // Concurrent PUTs within the batch.
+        const queue = [...presigned.presignedUrls];
+        const workers = Array.from(
+          { length: Math.min(this.multipartConcurrency, queue.length) },
+          async () => {
+            while (queue.length > 0 && !failureController.signal.aborted) {
+              if (options?.signal?.aborted) {
+                throw new GislAbortError('multipartResume aborted');
+              }
+              const part = queue.shift()!;
+              try {
+                await putOne(part);
+              } catch (err) {
+                failureController.abort();
+                throw err;
+              }
+            }
+          },
+        );
+        await Promise.all(workers);
+      }
+    }
+
+    // Step 4: /complete with the FULL parts list = (server-recorded etags
+    // from /status) ∪ (newly-PUT etags this run). Sort ascending by
+    // partNumber (the wire shape pin in fresh-upload mirrors this).
+    const allParts: Array<{ partNumber: number; etag: string }> = [];
+    for (const p of status.uploadedParts) {
+      allParts.push({ partNumber: p.partNumber, etag: p.etag });
+    }
+    for (const e of newEtags) allParts.push(e);
+    allParts.sort((a, b) => a.partNumber - b.partNumber);
+    if (allParts.length !== status.totalParts) {
+      throw new GislError(
+        `multipartResume: assembled parts list has ${allParts.length} entries, ` +
+          `expected ${status.totalParts}. Refusing to /complete with an incomplete part set.`,
+      );
+    }
+
+    // Marshal via the generator's `*ToJSON` helper so the contracts-drift
+    // guard test (`contract-drift-fields.test.ts`) covers BOTH the fresh and
+    // resume paths uniformly (code-reviewer P7). If a future regen adds a
+    // required field to `MultipartCompleteRequest`, tsc fails here at the
+    // typed object literal — same as the fresh path.
+    const completeRequest: MultipartCompleteRequest = {
+      uploadId: status.uploadId,
+      parts: allParts.map((p) => ({ partNumber: p.partNumber, etag: p.etag })),
+    };
+    const wireCompleteBody = MultipartCompleteRequestToJSON(
+      completeRequest,
+    ) as unknown as {
+      upload_id: string;
+      parts: Array<{ part_number: number; etag: string }>;
+    };
+    if (
+      typeof wireCompleteBody?.upload_id !== 'string' ||
+      !Array.isArray(wireCompleteBody?.parts)
+    ) {
+      throw new GislError(
+        'multipartResume: MultipartCompleteRequestToJSON returned an unexpected shape.',
+      );
+    }
+
+    const completeResp = await this.request<MultipartCompleteResponse>(
+      'POST',
+      '/api/uploads/multipart/complete',
+      {
+        body: wireCompleteBody as unknown as Record<string, unknown>,
+        deserialize: MultipartCompleteResponseFromJSON,
+        signal: options?.signal,
+      },
+    );
+
+    if (completeResp.status !== 'completed') {
+      throw new GislError(
+        `multipartResume: completed with unexpected status: ${completeResp.status}`,
+      );
+    }
+
+    // Resume-path information loss: the /status envelope (and /complete)
+    // do NOT carry `mime_type` or `constraints_applied` — those were
+    // emitted on the original initiate envelope, which the resume path
+    // skipped. Fall back to caller-supplied `fileName` for `originalName`;
+    // emit `mimeType` as `''` and `constraintsApplied` as a sentinel
+    // populated with the only fact we DO know on resume: `maxSizeBytes =
+    // totalSize` (the upload was permitted at this size when initiated),
+    // `processingClassPreAssignment = 'unknown'`. Consumers needing
+    // authoritative post-upload metadata SHOULD call `getMetadata(fileId)`
+    // (the fresh-upload path's docblock already says the same).
+    // TODO(HxUmVr3Y): when contracts ships the resume-support schemas,
+    // extend `/status` (or add `/multipart/{id}/manifest`) to carry
+    // mime_type + constraints_applied so this sentinel can go away.
+    return {
+      fileId: completeResp.uploadId,
+      originalName: fileName,
+      mimeType: '',
+      sizeBytes: totalSize,
+      constraintsApplied: {
+        maxSizeBytes: totalSize,
+        // `maxDurationSeconds` deliberately omitted (not `null`): parity
+        // comparator filters `undefined` keys from both sides; cross-SDK
+        // upload_small precedent.
+        processingClassPreAssignment:
+          UploadConstraintsAppliedProcessingClassPreAssignmentEnum.unknown,
+      },
+    };
+  }
+
+  // -----------------------------------------------------------------------
+  // SDK-3 (Wb6ebOMM) — resume-support endpoints
+  // -----------------------------------------------------------------------
+
+  /**
+   * Fetch the durable status of an in-progress multipart upload session.
+   *
+   * Walks every page of `GET /api/uploads/multipart/{uploadId}/status`
+   * (paginated via `next_part_number_marker` + `is_truncated`) and returns
+   * the aggregated state. Callers see the complete set of recorded parts
+   * across pages without driving the cursor themselves.
+   *
+   * Anonymous-initiated sessions return 403 → `GislMultipartSessionAuthRequiredError`.
+   * Non-existent / expired sessions return 404 → `GislMultipartSessionNotFoundError`.
+   * Authed-but-non-owning callers return 403 → `GislMultipartSessionOwnershipError`.
+   *
+   * TODO(HxUmVr3Y): replace hand-coded response shape on regen.
+   */
+  async getUploadStatus(
+    uploadId: string,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<_Sdk3HandCodedMultipartStatusResult> {
+    if (typeof uploadId !== 'string' || uploadId === '') {
+      throw new GislError('getUploadStatus: uploadId must be a non-empty string.');
+    }
+    return this.walkUploadStatus(uploadId, opts);
+  }
+
+  /**
+   * Re-presign a batch of missing part numbers on an in-progress multipart
+   * session.
+   *
+   * Validates client-side BEFORE the HTTP round-trip:
+   * - `partNumbers` non-empty
+   * - length <=100 (server raw-body cap is 8 KiB before json_decode)
+   * - every entry an integer in `[2, totalParts]` — part 1 is sealed at
+   *   initiate (re-presigning it would break the etag recorded server-side
+   *   for /complete)
+   * - entries unique
+   * - `totalParts` <=10 000 (S3 hard limit; mirrors the SDK-1 ceiling guard)
+   *
+   * TODO(HxUmVr3Y): replace hand-coded request/response shapes on regen.
+   */
+  async presignParts(
+    uploadId: string,
+    partNumbers: readonly number[],
+    totalParts: number,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<_Sdk3HandCodedPresignPartsResult> {
+    if (typeof uploadId !== 'string' || uploadId === '') {
+      throw new GislError('presignParts: uploadId must be a non-empty string.');
+    }
+    if (
+      typeof totalParts !== 'number' ||
+      !Number.isInteger(totalParts) ||
+      totalParts < 1
+    ) {
+      throw new GislError(
+        `presignParts: totalParts must be a positive integer, got ${String(totalParts)}.`,
+      );
+    }
+    if (totalParts > S3_MAX_MULTIPART_PARTS) {
+      throw new GislMultipartPartCountError(
+        `presignParts: totalParts=${totalParts} exceeds the S3 ${S3_MAX_MULTIPART_PARTS}-part ` +
+          'multipart limit. Refusing to re-presign on a session that cannot complete.',
+        totalParts,
+        S3_MAX_MULTIPART_PARTS,
+      );
+    }
+    if (!Array.isArray(partNumbers) || partNumbers.length === 0) {
+      throw new GislError('presignParts: partNumbers must be a non-empty array.');
+    }
+    if (partNumbers.length > 100) {
+      throw new GislError(
+        `presignParts: partNumbers has ${partNumbers.length} entries — server caps batches at 100.`,
+      );
+    }
+    const seen = new Set<number>();
+    for (const n of partNumbers) {
+      if (
+        typeof n !== 'number' ||
+        !Number.isInteger(n) ||
+        n < 2 ||
+        n > totalParts
+      ) {
+        throw new GislError(
+          `presignParts: partNumbers entry ${String(n)} is not an integer in [2, ${totalParts}]. ` +
+            'Part 1 is sealed at initiate; re-presigning it would invalidate the recorded etag for /complete.',
+        );
+      }
+      if (seen.has(n)) {
+        throw new GislError(`presignParts: partNumbers contains duplicate ${n}.`);
+      }
+      seen.add(n);
+    }
+    const path = `/api/uploads/multipart/${encodeURIComponent(uploadId)}/presign`;
+    return this.request<_Sdk3HandCodedPresignPartsResult>('POST', path, {
+      // Hand-coded snake_case wire body. TODO(HxUmVr3Y): replace with
+      // generated `*RequestToJSON` helper on regen.
+      body: { part_numbers: [...partNumbers] },
+      deserialize: (raw) => {
+        // Hand-coded snake_case -> camelCase. TODO(HxUmVr3Y): replace with
+        // generated FromJSON helper on regen.
+        const r = raw as {
+          upload_id?: string;
+          presigned_urls?: Array<{
+            part_number: number;
+            url: string;
+            expires_at: string;
+          }>;
+        };
+        if (typeof r.upload_id !== 'string' || !Array.isArray(r.presigned_urls)) {
+          throw new GislError('presignParts: malformed response envelope.');
+        }
+        return {
+          uploadId: r.upload_id,
+          presignedUrls: r.presigned_urls.map((p) => ({
+            partNumber: p.part_number,
+            url: p.url,
+            expiresAt: p.expires_at,
+          })),
+        } satisfies _Sdk3HandCodedPresignPartsResult;
+      },
+      signal: opts.signal,
+    });
+  }
+
+  /**
+   * Extend the manifest TTL of an in-progress multipart upload session.
+   *
+   * The durable session manifest defaults to a 48 h TTL (decoupled from the
+   * shorter presigned-URL TTL). For a long-running resume that spans days
+   * (e.g. an upload paused overnight on flaky Wi-Fi), callers SHOULD invoke
+   * `keepaliveUpload` every **12-24 h** while resuming — the 12-24 h band
+   * leaves >=24 h of slack against the 48 h ceiling even with worst-case
+   * clock skew between client and server. The server atomically refreshes
+   * the Redis EXPIRE for the manifest key; the call is idempotent.
+   *
+   * TODO(HxUmVr3Y): replace hand-coded response shape on regen.
+   */
+  async keepaliveUpload(
+    uploadId: string,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<_Sdk3HandCodedKeepaliveResult> {
+    if (typeof uploadId !== 'string' || uploadId === '') {
+      throw new GislError('keepaliveUpload: uploadId must be a non-empty string.');
+    }
+    const path = `/api/uploads/multipart/${encodeURIComponent(uploadId)}/keepalive`;
+    return this.request<_Sdk3HandCodedKeepaliveResult>('POST', path, {
+      // Server expects an empty body; pass an empty object so the `request`
+      // helper sets `Content-Type: application/json` for symmetry with the
+      // other JSON-bodied POSTs. The endpoint ignores any fields if present.
+      body: {},
+      deserialize: (raw) => {
+        // Hand-coded snake_case -> camelCase. TODO(HxUmVr3Y): replace with
+        // generated FromJSON helper on regen.
+        const r = raw as { upload_id?: string; manifest_expires_at?: string };
+        if (
+          typeof r.upload_id !== 'string' ||
+          typeof r.manifest_expires_at !== 'string'
+        ) {
+          throw new GislError('keepaliveUpload: malformed response envelope.');
+        }
+        return {
+          uploadId: r.upload_id,
+          manifestExpiresAt: r.manifest_expires_at,
+        } satisfies _Sdk3HandCodedKeepaliveResult;
+      },
+      signal: opts.signal,
+    });
+  }
+
+  /**
+   * Private walk-pagination helper for /status. Aggregates every page into
+   * a single `_Sdk3HandCodedMultipartStatusResult`. AbortSignal short-circuits
+   * the loop between page fetches AND propagates into each fetch.
+   *
+   * Limit pinned to 1000 (max per page) so we make the minimum number of
+   * round-trips even for the worst-case ~10 pages on a 10 000-part upload.
+   */
+  private async walkUploadStatus(
+    uploadId: string,
+    opts: { signal?: AbortSignal },
+  ): Promise<_Sdk3HandCodedMultipartStatusResult> {
+    const PAGE_LIMIT = 1000;
+    // Slow-path DoS guard (code-reviewer minor 6). The cursor-advance check
+    // already prevents an infinite loop; this cap additionally prevents a
+    // pathological server that advances by 1 each page from forcing
+    // O(totalParts) round-trips for a 10 000-part upload. PAGE_LIMIT=1000
+    // means a healthy server completes in <=10 round-trips; 50 leaves
+    // generous slack.
+    const MAX_PAGES = 50;
+    const collected: _Sdk3HandCodedUploadedPart[] = [];
+    let cursor = 0;
+    let totalParts = 0;
+    let multipartUploadId = '';
+    let cloudKey = '';
+    let manifestExpiresAt = '';
+    let recommendedChunkSize = 0;
+    let pageCount = 0;
+
+    while (true) {
+      if (opts.signal?.aborted) {
+        throw new GislAbortError('getUploadStatus aborted');
+      }
+      if (pageCount >= MAX_PAGES) {
+        throw new GislError(
+          `getUploadStatus: server returned more than ${MAX_PAGES} pages — refusing to ` +
+            'continue. The /status endpoint should advance the cursor in 1000-part strides.',
+        );
+      }
+      pageCount += 1;
+      const query =
+        `?cursor=${cursor}&limit=${PAGE_LIMIT}`;
+      const path =
+        `/api/uploads/multipart/${encodeURIComponent(uploadId)}/status${query}`;
+      // Hand-coded page-shape — kept local to this helper so the public
+      // surface only exposes the aggregated `*Result` form.
+      // TODO(HxUmVr3Y): replace with generated page-response type on regen.
+      type _Sdk3HandCodedMultipartStatusPage = {
+        upload_id: string;
+        multipart_upload_id: string;
+        cloud_key: string;
+        total_parts: number;
+        uploaded_parts: Array<{
+          part_number: number;
+          etag: string;
+          size_bytes: number;
+          last_modified: string;
+        }>;
+        next_part_number_marker: number;
+        is_truncated: boolean;
+        manifest_expires_at: string;
+        recommended_chunk_size: number;
+      };
+      const page = await this.request<_Sdk3HandCodedMultipartStatusPage>(
+        'GET',
+        path,
+        { signal: opts.signal },
+      );
+
+      // Defensive: server contract pins these fields. Strict-validate every
+      // top-level field on each page (code-reviewer P7) so a malformed wire
+      // envelope cannot silently coerce a missing key to '' / 0 / NaN and
+      // flow it into MultipartCheckpointState.manifestExpiresAt or downstream
+      // chunkSize guards.
+      if (typeof page.total_parts !== 'number' || page.total_parts < 1) {
+        throw new GislError(
+          'getUploadStatus: server page missing or invalid total_parts.',
+        );
+      }
+      if (
+        typeof page.upload_id !== 'string' ||
+        page.upload_id !== uploadId ||
+        typeof page.multipart_upload_id !== 'string' ||
+        page.multipart_upload_id === '' ||
+        typeof page.cloud_key !== 'string' ||
+        page.cloud_key === '' ||
+        typeof page.manifest_expires_at !== 'string' ||
+        page.manifest_expires_at === '' ||
+        typeof page.recommended_chunk_size !== 'number'
+      ) {
+        throw new GislError(
+          'getUploadStatus: server page missing required fields or returned a ' +
+            `mismatching upload_id (expected ${uploadId}, got ` +
+            `${String(page.upload_id)}).`,
+        );
+      }
+      totalParts = page.total_parts;
+      multipartUploadId = page.multipart_upload_id;
+      cloudKey = page.cloud_key;
+      manifestExpiresAt = page.manifest_expires_at;
+      recommendedChunkSize = page.recommended_chunk_size;
+
+      for (const p of page.uploaded_parts ?? []) {
+        collected.push({
+          partNumber: p.part_number,
+          etag: p.etag,
+          sizeBytes: p.size_bytes,
+          lastModified: p.last_modified,
+        });
+      }
+
+      if (!page.is_truncated) break;
+      // Advance cursor; guard against a contract-violating non-advancing
+      // marker that would loop forever.
+      if (
+        typeof page.next_part_number_marker !== 'number' ||
+        page.next_part_number_marker <= cursor
+      ) {
+        throw new GislError(
+          'getUploadStatus: server is_truncated=true but next_part_number_marker ' +
+            `did not advance (was ${cursor}, got ${String(page.next_part_number_marker)}).`,
+        );
+      }
+      cursor = page.next_part_number_marker;
+    }
+
+    // Sort ascending by partNumber — server SHOULD already deliver in order
+    // page-by-page, but a defensive sort keeps the aggregated shape's
+    // contract simple to consume (resume-branch missing-parts compute scans
+    // it linearly).
+    collected.sort((a, b) => a.partNumber - b.partNumber);
+
+    return {
+      uploadId,
+      multipartUploadId,
+      cloudKey,
+      totalParts,
+      uploadedParts: collected,
+      manifestExpiresAt,
+      recommendedChunkSize,
     };
   }
 

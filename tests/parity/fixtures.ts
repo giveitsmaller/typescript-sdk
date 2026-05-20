@@ -143,6 +143,10 @@ export const KNOWN_SDK_METHODS: ReadonlySet<string> = new Set([
   'probeUpload',
   'retryOperation',
   'submitContact',
+  // SDK-3 (Wb6ebOMM) resume-support endpoints.
+  'getUploadStatus',
+  'presignParts',
+  'keepaliveUpload',
   // Webhook mode invokes verifyWebhook() directly; it is not a GislClient method.
   'verifyWebhook',
 ]);

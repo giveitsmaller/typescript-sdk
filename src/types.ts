@@ -422,4 +422,161 @@ export interface UploadOptions {
    * single FormData field on the multipart/initiate request.
    */
   metadataHint?: MultipartInitiateRequestMetadataHint;
+  /**
+   * Resume an in-progress multipart upload (SDK-3 / Wb6ebOMM).
+   *
+   * When set, `uploadFile()` skips `/multipart/initiate` entirely. Instead it
+   * walks `GET /api/uploads/multipart/{uploadId}/status` (paginated via
+   * `next_part_number_marker` / `is_truncated`), computes which parts are
+   * still missing, re-presigns them in batches of <=100 via
+   * `POST /api/uploads/multipart/{uploadId}/presign`, PUTs only the missing
+   * parts, then `POST /api/uploads/multipart/complete`.
+   *
+   * The caller's `file` argument MUST be byte-identical to the file used in
+   * the original initiate call (same byte content at the same offsets).
+   * Mismatched bytes will produce S3 etags that don't match the server's
+   * recorded state, and `/multipart/complete` will reject.
+   *
+   * Anonymous-initiated sessions cannot be resumed by an authed caller
+   * (server returns 403 → `GislMultipartSessionAuthRequiredError`); a
+   * non-existent or expired session returns 404 →
+   * `GislMultipartSessionNotFoundError`.
+   */
+  resumeUploadId?: string;
+  /**
+   * Called after every successful part PUT during fresh-upload AND resume
+   * paths. Receives a JSON-serialisable snapshot of the upload state — round-
+   * trippable via `JSON.stringify` for persistence across process restarts,
+   * so a future `uploadFile({ resumeUploadId: state.uploadId, ... })` can
+   * pick up where the prior process stopped.
+   *
+   * The callback is invoked OUTSIDE the per-part retry-scoped path: a throw
+   * here will fail the upload but NEVER trigger a duplicate PUT (mirrors the
+   * `onProgress` discipline at `client.ts:1195-1199`).
+   */
+  onCheckpoint?: (state: MultipartCheckpointState) => void;
+}
+
+/**
+ * JSON-serialisable snapshot of an in-progress multipart upload, emitted
+ * after every successful part PUT via `UploadOptions.onCheckpoint`. Designed
+ * to round-trip through `JSON.stringify` / `JSON.parse` so consumers can
+ * persist it across process restarts and resume via
+ * `uploadFile({ resumeUploadId: state.uploadId, ... })`.
+ *
+ * All fields are primitive: no `Date` (use the ISO-8601 string on
+ * `manifestExpiresAt`), no `Buffer`, no functions.
+ */
+export interface MultipartCheckpointState {
+  /** The server-assigned `upload_id` (UUID) used as `resumeUploadId` later. */
+  readonly uploadId: string;
+  /** Total parts the server computed for this upload. <=10 000. */
+  readonly totalParts: number;
+  /**
+   * Part numbers (1-indexed) that have been successfully PUT to S3 so far.
+   * Includes part 1 (the initiate first chunk) once a part >= 2 lands. Sorted
+   * ascending. Excluded numbers in `[1, totalParts]` are the still-missing
+   * set a resume must re-PUT.
+   */
+  readonly uploadedPartNumbers: readonly number[];
+  /**
+   * ISO-8601 wall-clock instant at which the server's durable manifest for
+   * this `uploadId` expires (currently a 48h TTL per the API-2 contract). On
+   * resume, clients SHOULD call `keepaliveUpload(uploadId)` every 12-24h to
+   * extend this, leaving >=24h of slack against the 48h ceiling even with
+   * worst-case clock skew between client and server.
+   */
+  readonly manifestExpiresAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// SDK-3 hand-coded resume-support shapes (TODO(HxUmVr3Y): replace on regen).
+//
+// API-2 / PR #283 shipped the 3 resume-support endpoints (`/status`,
+// `/presign`, `/keepalive`); contracts ticket HxUmVr3Y will add the OpenAPI
+// schemas that drive the openapi-generator output. Until that regen lands,
+// these types are hand-coded so SDK-3 ships unblocked. Every public type and
+// call-site is prefixed `_Sdk3HandCoded` so the eventual regen sweep is a
+// mechanical grep — find every reference and re-point at the generated
+// `@giveitsmaller/contracts/openapi` types.
+//
+// Wire shape is snake_case (matches API-2's PHP response writer); the TS
+// surface here uses camelCase consistent with the rest of the SDK's
+// hand-written types. The client.ts code path that SENDS the `/presign`
+// request body marshals to the snake_case wire object inline; the response
+// shapes are read in camelCase after the `handleResponse` envelope unwrap
+// (callers narrow on field names from these interfaces).
+// ---------------------------------------------------------------------------
+
+/**
+ * One entry in `_Sdk3HandCodedMultipartStatusResult.uploadedParts`. Aggregated
+ * across all pages of the underlying `GET /status` endpoint by the SDK's
+ * walk-pagination loop.
+ *
+ * TODO(HxUmVr3Y): replace hand-coded shape on regen.
+ */
+export interface _Sdk3HandCodedUploadedPart {
+  readonly partNumber: number;
+  readonly etag: string;
+  readonly sizeBytes: number;
+  /** ISO-8601 last-modified instant of the S3 part. */
+  readonly lastModified: string;
+}
+
+/**
+ * Aggregated result of `getUploadStatus()` after the SDK has walked every
+ * page of the underlying `GET /api/uploads/multipart/{uploadId}/status`
+ * endpoint (paginated via `next_part_number_marker` / `is_truncated`).
+ * `uploadedParts` is the merged-and-sorted list of every part the server
+ * has recorded across all pages — callers see the complete state without
+ * needing to drive the pagination cursor themselves.
+ *
+ * TODO(HxUmVr3Y): replace hand-coded shape on regen.
+ */
+export interface _Sdk3HandCodedMultipartStatusResult {
+  readonly uploadId: string;
+  readonly multipartUploadId: string;
+  readonly cloudKey: string;
+  readonly totalParts: number;
+  /** Sorted ascending by `partNumber`; complete across all server-side pages. */
+  readonly uploadedParts: readonly _Sdk3HandCodedUploadedPart[];
+  /** ISO-8601 wall-clock when the durable session manifest expires. */
+  readonly manifestExpiresAt: string;
+  /** Server-recommended chunk size in bytes (matches the initiate envelope). */
+  readonly recommendedChunkSize: number;
+}
+
+/**
+ * One entry in `_Sdk3HandCodedPresignPartsResult.presignedUrls`. Shape mirrors
+ * the contract-pinned `PresignedUrlPart` from the initiate envelope; kept
+ * hand-coded here so the resume path does not depend on the generator's name
+ * for that shape (decoupling for the HxUmVr3Y regen window).
+ *
+ * TODO(HxUmVr3Y): replace hand-coded shape on regen.
+ */
+export interface _Sdk3HandCodedPresignedPart {
+  readonly partNumber: number;
+  readonly url: string;
+  readonly expiresAt: string;
+}
+
+/**
+ * Result of `presignParts()` — the server-issued presigned PUT URLs for the
+ * requested part numbers.
+ *
+ * TODO(HxUmVr3Y): replace hand-coded shape on regen.
+ */
+export interface _Sdk3HandCodedPresignPartsResult {
+  readonly uploadId: string;
+  readonly presignedUrls: readonly _Sdk3HandCodedPresignedPart[];
+}
+
+/**
+ * Result of `keepaliveUpload()` — the refreshed manifest TTL expiry instant.
+ *
+ * TODO(HxUmVr3Y): replace hand-coded shape on regen.
+ */
+export interface _Sdk3HandCodedKeepaliveResult {
+  readonly uploadId: string;
+  readonly manifestExpiresAt: string;
 }

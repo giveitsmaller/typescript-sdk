@@ -39,6 +39,15 @@ export type {
   DeliveryOutputRefPayload,
   WorkflowProcessingPayload,
   ProcessingClassHintPayload,
+  // SDK-3 (Wb6ebOMM) resume-support surface. Hand-coded until contracts
+  // ticket HxUmVr3Y publishes the OpenAPI schemas; every type is prefixed
+  // `_Sdk3HandCoded` so the regen sweep finds every consumer via grep.
+  MultipartCheckpointState,
+  _Sdk3HandCodedUploadedPart,
+  _Sdk3HandCodedMultipartStatusResult,
+  _Sdk3HandCodedPresignedPart,
+  _Sdk3HandCodedPresignPartsResult,
+  _Sdk3HandCodedKeepaliveResult,
 } from './types.js';
 export {
   uploadSource,
@@ -61,6 +70,10 @@ export {
   GislUploadCapExceededError,
   GislMultipartPartError,
   GislMultipartPartCountError,
+  // SDK-3 (Wb6ebOMM) — typed errors for the 3 resume-support endpoints.
+  GislMultipartSessionNotFoundError,
+  GislMultipartSessionOwnershipError,
+  GislMultipartSessionAuthRequiredError,
   GislTimeoutError,
   GislAbortError,
 } from './errors.js';

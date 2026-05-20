@@ -202,14 +202,28 @@ export class GislAuthError extends GislApiError {
 }
 
 /**
- * Discriminates the three upload-too-big shapes the server can return:
- * - `size_tier`     — 422 `upload_size_exceeds_tier` (typed payload present)
- * - `duration_tier` — 422 `upload_duration_exceeds_tier` (typed payload present)
- * - `absolute_413`  — 413, the absolute across-tier cap. The contract models
- *                     413 as a plain `ErrorEnvelope` with NO `error_type`
- *                     discriminator, so there is NO typed payload for it.
+ * Discriminates the four upload-too-big shapes the server can return:
+ * - `size_tier`        — 422 `upload_size_exceeds_tier` (typed payload present)
+ * - `duration_tier`    — 422 `upload_duration_exceeds_tier` (typed payload present)
+ * - `absolute_413`     — 413, the absolute across-tier cap. The contract models
+ *                        413 as a plain `ErrorEnvelope` with NO `error_type`
+ *                        discriminator, so there is NO typed payload for it.
+ * - `cap_v2_multipart` — 422 `FILE_TOO_LARGE_FOR_MULTIPART` (SDK-3 / Wb6ebOMM,
+ *                        pre-S3 capacity reject on the resume-support endpoints).
+ *                        The contract carries no structured payload for this
+ *                        code today — `payload` is undefined for this kind.
+ *
+ * **Caveat for exhaustive-narrowing consumers.** The `cap_v2_multipart` value
+ * was added in TS SDK 0.5.0 / PHP SDK 0.3.0. A consumer writing
+ * `switch (e.kind) { case 'size_tier': ... case 'duration_tier': ... default:
+ * absurd(e.kind); }` against the prior 3-value union now sees a non-exhaustive
+ * switch and must add the new arm. The bump is logged in CHANGELOG.md.
  */
-export type GislUploadCapKind = 'size_tier' | 'duration_tier' | 'absolute_413';
+export type GislUploadCapKind =
+  | 'size_tier'
+  | 'duration_tier'
+  | 'absolute_413'
+  | 'cap_v2_multipart';
 
 /**
  * A single class covering all three "upload exceeds a size/duration cap"
@@ -253,6 +267,69 @@ export class GislUploadCapExceededError extends GislApiError {
     super(statusCode, errorMessage, path, undefined, buildOptionsWithPayload(payload, extra));
     this.name = 'GislUploadCapExceededError';
     this.kind = kind;
+  }
+}
+
+/**
+ * 404 `MULTIPART_SESSION_NOT_FOUND` — the durable multipart session referenced
+ * by a resume / status / presign / keepalive call cannot be located (expired
+ * past its 48h manifest TTL, deleted, or never existed). Thrown by the SDK-3
+ * resume-support endpoints (`getUploadStatus`, `presignParts`,
+ * `keepaliveUpload`, and the resume branch of `uploadFile`).
+ *
+ * Carries no typed structured payload — the contract for the 3 resume-support
+ * endpoints models this code as a plain `ErrorEnvelope`. Consumers should
+ * detect via `instanceof` and abandon the resume; a fresh `uploadFile()` call
+ * (without `resumeUploadId`) will start a new session.
+ */
+export class GislMultipartSessionNotFoundError extends GislApiError {
+  constructor(
+    statusCode: number,
+    errorMessage: string,
+    path?: string,
+    options?: GislApiErrorOptions,
+  ) {
+    super(statusCode, errorMessage, path, undefined, options);
+    this.name = 'GislMultipartSessionNotFoundError';
+  }
+}
+
+/**
+ * 403 `MULTIPART_SESSION_OWNERSHIP` — the caller is authenticated but the
+ * multipart session belongs to a different user. Thrown by the SDK-3
+ * resume-support endpoints. The session itself exists (otherwise the server
+ * would return 404 NOT_FOUND); the caller's identity simply doesn't match
+ * `manifest.userId`. Consumers should abandon the resume.
+ */
+export class GislMultipartSessionOwnershipError extends GislApiError {
+  constructor(
+    statusCode: number,
+    errorMessage: string,
+    path?: string,
+    options?: GislApiErrorOptions,
+  ) {
+    super(statusCode, errorMessage, path, undefined, options);
+    this.name = 'GislMultipartSessionOwnershipError';
+  }
+}
+
+/**
+ * 403 `MULTIPART_SESSION_AUTH_REQUIRED` — the multipart session was initiated
+ * anonymously (no `manifest.userId`) and the SDK-3 resume-support endpoints
+ * refuse to serve it on an authed caller. There is no "claim" workflow today
+ * to bind an authed identity to an anonymously-started session; that is the
+ * future flip tracked at upstream ticket 8LABloaz. Consumers hitting this on
+ * resume should abandon and re-upload from scratch under the authed identity.
+ */
+export class GislMultipartSessionAuthRequiredError extends GislApiError {
+  constructor(
+    statusCode: number,
+    errorMessage: string,
+    path?: string,
+    options?: GislApiErrorOptions,
+  ) {
+    super(statusCode, errorMessage, path, undefined, options);
+    this.name = 'GislMultipartSessionAuthRequiredError';
   }
 }
 
