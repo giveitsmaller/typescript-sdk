@@ -19,7 +19,7 @@
     "node": ">=18"
   },
   "dependencies": {
-    "@giveitsmaller/contracts": "^0.3.0"
+    "@giveitsmaller/contracts": "^0.4.0"
   },
   "devDependencies": {
     "@types/node": "^22",
