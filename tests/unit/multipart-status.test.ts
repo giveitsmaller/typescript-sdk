@@ -120,8 +120,11 @@ describe('SDK-3 getUploadStatus walk-pagination', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(2);
 
     // Verify the page-2 URL carries the advanced cursor (?cursor=1000).
+    // Assert the full path+`?` boundary so a regression that drops the `?`
+    // separator (e.g. `/status` + `cursor=...`) is caught — `toContain('cursor=1000')`
+    // alone would still pass a malformed `/statuscursor=1000` (S9WHtXre).
     const page2Url = fetchSpy.mock.calls[1]?.[0] as string;
-    expect(page2Url).toContain('cursor=1000');
+    expect(page2Url).toContain('/api/uploads/multipart/mp-2/status?cursor=1000');
     expect(page2Url).toContain('limit=1000');
   });
 

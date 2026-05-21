@@ -7,11 +7,18 @@
  *
  * Assumptions documented here so a future contributor isn't surprised:
  *
- * 1. Path parameter normalisation: both `${encodeURIComponent(x)}` and a bare
- *    `${x}` inside a backtick template collapse to `{id}`. The contract uses
- *    `{id}` uniformly for every single-param path. If a future contract path
- *    adopts a different placeholder (e.g. `{workflowId}`), this test will fail
- *    spuriously until the normaliser is updated.
+ * 1. Path parameter normalisation is symmetric. The SDK side collapses every
+ *    `${...}` interpolation (both `${encodeURIComponent(x)}` and a bare `${x}`)
+ *    to `{id}`; the contract side collapses every `{param}` placeholder
+ *    (`{id}`, `{uploadId}`, ...) to `{id}` as well. This means the test
+ *    compares path STRUCTURE, not placeholder NAMES — a contract that renames
+ *    `{id}` to `{uploadId}` or `{workflowId}` will NOT false-drift.
+ *    Caveat: folding all param names to `{id}` means a multi-param path like
+ *    `/api/x/{a}/y/{b}` becomes `/api/x/{id}/y/{id}`, so two such paths that
+ *    differ only by param name would alias. There are zero multi-param paths
+ *    in the contract today (every parameterised path has exactly one param),
+ *    so the fold is currently lossless for drift detection. Param-NAME drift
+ *    was never catchable by this test (the SDK side already erases names).
  *
  * 2. String concatenation (`'/api/' + 'workflows'`) would bypass the regex
  *    scanner and silently pass this test. Every URL in `client.ts` today is
@@ -47,7 +54,13 @@ function extractContractPaths(apiYaml: string): string[] {
   if (!doc.paths || typeof doc.paths !== 'object') {
     throw new Error('api.yaml has no paths section');
   }
-  return Object.keys(doc.paths).sort();
+  // Fold every `{param}` placeholder to canonical `{id}` so the contract side
+  // is symmetric with the SDK normaliser (which collapses all `${...}` to
+  // `{id}`). Without this, the contract's `{uploadId}` multipart paths would
+  // false-drift against the SDK-normalised `{id}`. See docblock assumption #1.
+  return Object.keys(doc.paths)
+    .map(p => p.replace(/\{[^}]+\}/g, '{id}'))
+    .sort();
 }
 
 describe('contract drift', () => {
@@ -62,5 +75,18 @@ describe('contract drift', () => {
 
     const drift = sdkPaths.filter(p => !contractPaths.has(p));
     expect(drift).toEqual([]);
+  });
+
+  it('folds contract `{uploadId}` placeholders to `{id}` (regression lock)', () => {
+    // The 3 SDK-3 multipart paths use `{uploadId}` in the contract. This
+    // asserts the placeholder fold in extractContractPaths is load-bearing —
+    // if a future edit drops the fold, these become `{uploadId}` and the
+    // primary drift test above false-fails (ticket S9WHtXre).
+    const contractPaths = new Set(
+      extractContractPaths(readFileSync(resolveContractsRepoSpec(), 'utf8')),
+    );
+    expect(contractPaths.has('/api/uploads/multipart/{id}/status')).toBe(true);
+    expect(contractPaths.has('/api/uploads/multipart/{id}/presign')).toBe(true);
+    expect(contractPaths.has('/api/uploads/multipart/{id}/keepalive')).toBe(true);
   });
 });

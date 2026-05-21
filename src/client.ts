@@ -1999,8 +1999,13 @@ export class GislClient {
       pageCount += 1;
       const query =
         `?cursor=${cursor}&limit=${PAGE_LIMIT}`;
+      // String-concat the query OUTSIDE the path backtick so the contract-drift
+      // scanner (tests/unit/contract-drift.test.ts) sees the bare path
+      // `/api/uploads/multipart/{id}/status`. Embedding `${query}` in the
+      // template collapses to `/status{id}` and false-drifts — same reason
+      // getSchema and getCreditsUsage concatenate their querystrings.
       const path =
-        `/api/uploads/multipart/${encodeURIComponent(uploadId)}/status${query}`;
+        `/api/uploads/multipart/${encodeURIComponent(uploadId)}/status` + query;
       // Hand-coded page-shape — kept local to this helper so the public
       // surface only exposes the aggregated `*Result` form.
       // TODO(HxUmVr3Y): replace with generated page-response type on regen.
