@@ -2350,6 +2350,16 @@ export class GislClient {
    * previous response to revalidate — a 304 surfaces as
    * `{ notModified: true, etag, lastModified }` so callers can keep
    * using their cached copy.
+   *
+   * NOTE: this schema describes available types/options/availability — it does
+   * NOT carry per-tier processing-class size/duration caps (the response shape
+   * has no `processing_class` / `per_tier_constraints`). The typed operation
+   * metadata's `AvailabilityEntry.constraints` is the conservative baseline
+   * only. Per-tier caps are enforced server-side: the caps that applied to an
+   * upload are reported on a successful `UploadResponse.constraintsApplied`,
+   * and an exceeded limit throws `GislUploadCapExceededError` (the 422 path
+   * carries a typed payload; the 413 absolute-cap path is a plain envelope).
+   * There is no read-ahead per-tier-cap API today.
    */
   async getSchema(
     options: GetSchemaOptions = {},
