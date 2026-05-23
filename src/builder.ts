@@ -47,6 +47,29 @@ import { uploadSource } from './types.js';
 import { GislTimeoutError } from './errors.js';
 
 // ---------------------------------------------------------------------------
+// ArtifactRef — the shape passed to `.mapEach(fn)` callbacks.
+// ---------------------------------------------------------------------------
+
+/**
+ * Lightweight artifact reference passed to a `.mapEach(...)` fn. Mirrors
+ * the subset of `Artifact` a fan-out callback can use to construct the
+ * downstream operation (typically `art.url` + `art.jobId` / `art.ref` for
+ * provenance). Future chain methods will extend this with the artifact-
+ * backed input helpers (e.g. `art.compress(...)`).
+ */
+export interface ArtifactRef {
+  readonly url: string;
+  readonly filename: string;
+  readonly sizeBytes: number;
+  readonly operation: string;
+  readonly operationId: string;
+  readonly jobId: string;
+  readonly ref: string;
+  readonly pageIndex?: number;
+  readonly position?: number;
+}
+
+// ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
 
@@ -332,6 +355,39 @@ export class OperationBuilder {
     return handle;
   }
 
+  /**
+   * Fan-out chain: run this builder to completion, then for each artifact
+   * in the resulting `Result`, call `fn(artifactRef)` to construct a
+   * downstream `OperationBuilder`, run that, and collect the child results
+   * into a combined `Result`.
+   *
+   * **KNOWN LIMITATION (T6 — codex r1 HIGH 11cb690e12ae):** today the
+   * downstream `OperationBuilder` constructor still takes `string | Blob`
+   * inputs, NOT artifact URLs. Passing `art.url` into a child builder
+   * would have `uploadFile` treat it as a local filesystem path — the
+   * fan-out cannot actually consume parent artifacts without out-of-band
+   * prefetching the caller does themselves. The proper fix is an
+   * artifact-as-input path (chain via `JobOutputSource.from`) that
+   * tracks as a follow-up card. T6 ships the SCAFFOLD: the method, the
+   * `MapEachBuilder` class, the `GislChainCardinalityMismatchError`
+   * error type (dormant), and orchestration that fans out fn — this
+   * unblocks future work on the artifact-source feature without API
+   * churn. Use today only for callbacks that construct child builders
+   * from `string | Blob` inputs derived from the artifact (e.g. download +
+   * re-upload bridges).
+   *
+   * Single-output parents degrade gracefully (1 artifact = 1 fn call =
+   * 1 child run). Multi-output parents (PDF → N pages, future split ops)
+   * fan out N child runs. Each child shares the SAME maxWait deadline
+   * (subtracting elapsed); aborts propagate.
+   *
+   * `.submit()` is NOT supported on a `MapEachBuilder` — fan-out submit-
+   * with-webhook is a future card.
+   */
+  mapEach(fn: (artifact: ArtifactRef) => OperationBuilder): MapEachBuilder {
+    return new MapEachBuilder(this, fn);
+  }
+
   // -------------------------------------------------------------------------
 
   private async awaitTerminal(args: {
@@ -356,6 +412,100 @@ export class OperationBuilder {
     }
     return await _pollToTerminal(this.client, args);
   }
+}
+
+// ---------------------------------------------------------------------------
+// MapEachBuilder — fan-out chain over a parent's artifacts.
+// ---------------------------------------------------------------------------
+
+export class MapEachBuilder {
+  constructor(
+    private readonly parent: OperationBuilder,
+    private readonly fn: (artifact: ArtifactRef) => OperationBuilder,
+  ) {}
+
+  /**
+   * Run the parent builder to completion, then fan out the fn over each
+   * resulting artifact. The deadline (maxWait) covers the parent's full
+   * run + every child's full run — each child sees the REMAINING budget
+   * after the parent and prior children completed. Signal aborts cascade.
+   */
+  async run(options: RunOptions): Promise<Result> {
+    const deadline = Date.now() + _parseMaxWait(options.maxWait);
+
+    // 1. Run the parent.
+    const remainingForParent = Math.max(1, deadline - Date.now());
+    const parentResult = await this.parent.run({
+      ...options,
+      maxWait: remainingForParent,
+    });
+
+    // 2. Fan out the fn over each artifact, sequentially. The downstream
+    //    server may parallelise workflows on its end; we serialise here for
+    //    deterministic semantics + easier abort/error propagation.
+    const collectedArtifacts: Artifact[] = [];
+    const collectedJobs: JobBreakdown[] = [];
+    const collectedChildResults: Result[] = [];
+    for (const art of parentResult.artifacts) {
+      _checkAborted(options.signal);
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        throw new GislTimeoutError(
+          `maxWait elapsed during fan-out (after ${collectedArtifacts.length} child runs)`,
+        );
+      }
+      const childBuilder = this.fn(art);
+      const childResult = await childBuilder.run({
+        ...options,
+        maxWait: remaining,
+      });
+      collectedChildResults.push(childResult);
+      for (const childArt of childResult.artifacts) collectedArtifacts.push(childArt);
+      for (const childJob of childResult.jobs) collectedJobs.push(childJob);
+    }
+
+    // 3. Build a combined Result. workflowId is the parent's (codex r1
+    //    medium ba14b2cebf47 — child workflowIds preserved on
+    //    childWorkflowIds for inspection). Status aggregates worst-of
+    //    parent + children (codex r1 HIGH 88e7186edc9a — previously
+    //    always reported parent.status, masking failed children).
+    const childWorkflowIds = collectedChildResults.map((r) => r.workflowId);
+    const allStatuses = [parentResult.status, ...collectedChildResults.map((r) => r.status)];
+    const aggregateStatus = aggregateWorkflowStatus(allStatuses);
+    const combined: Result & { childWorkflowIds: readonly string[] } = {
+      workflowId: parentResult.workflowId,
+      status: aggregateStatus,
+      ...(parentResult.createdAt !== undefined ? { createdAt: parentResult.createdAt } : {}),
+      ...(parentResult.updatedAt !== undefined ? { updatedAt: parentResult.updatedAt } : {}),
+      artifacts: collectedArtifacts,
+      jobs: [...parentResult.jobs, ...collectedJobs],
+      ...(collectedArtifacts.length === 1 ? { url: collectedArtifacts[0].url } : {}),
+      resolvedOptions: parentResult.resolvedOptions,
+      childWorkflowIds,
+    };
+    return combined;
+  }
+}
+
+/**
+ * Aggregate the worst-of N workflow statuses for a fan-out combined Result.
+ * Precedence: failed > expired > paused_insufficient_credits > cancelled >
+ * partially_failed > completed (anything not in this order falls through
+ * as the original parent status — defensive default).
+ */
+function aggregateWorkflowStatus(statuses: readonly string[]): string {
+  const order = [
+    'failed',
+    'expired',
+    'paused_insufficient_credits',
+    'cancelled',
+    'partially_failed',
+    'completed',
+  ];
+  for (const candidate of order) {
+    if (statuses.includes(candidate)) return candidate === 'completed' && statuses.every((s) => s === 'completed') ? 'completed' : candidate === 'completed' ? 'completed' : candidate;
+  }
+  return statuses[0] ?? 'completed';
 }
 
 // ---------------------------------------------------------------------------

@@ -84,6 +84,10 @@ export {
   GislUndeclaredAssetError,
   GislUnusedAssetError,
   GislPerInputOptionsNotSupportedError,
+  // T6 / aDR1jnyZ — chain-cardinality validation (dormant until chain
+  // methods on OperationBuilder ship; type + audit registration land
+  // here so the future chain-method PR is a pure addition).
+  GislChainCardinalityMismatchError,
 } from './errors.js';
 export type { GislApiErrorOptions, GislUploadCapKind } from './errors.js';
 
@@ -97,7 +101,7 @@ export type { GislCreateOptions, Environment, ErgonomicClient } from './gisl.js'
 // returns an `OperationBuilder`; `.run()` projects to a flat `Result` /
 // `.submit({webhook})` returns a `Handle`. Progress events are the
 // SDK-synthesised `{phase:'upload'|'processing', ...}` discriminated union.
-export { OperationBuilder } from './builder.js';
+export { OperationBuilder, MapEachBuilder } from './builder.js';
 export { MergeBuilder, asset, handle, clip } from './merge.js';
 export type {
   Asset,
@@ -109,8 +113,10 @@ export type {
 } from './merge.js';
 export type {
   Artifact,
+  ArtifactRef,
   Handle,
   JobBreakdown,
+  OperationBreakdown,
   ProcessingProgressEvent,
   ProgressEvent,
   ResolvedOptions,

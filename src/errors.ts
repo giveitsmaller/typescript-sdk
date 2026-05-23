@@ -434,6 +434,32 @@ export class GislPerInputOptionsNotSupportedError extends GislConfigError {
   }
 }
 
+/**
+ * Thrown by future chain methods (`.compress()` / `.thumbnail()` /
+ * `.convert()` on an `OperationBuilder`) when the previous step produces
+ * MULTIPLE artifacts and the caller didn't explicitly call `.mapEach(...)`
+ * to opt into per-artifact fan-out. T6 ships the error class + the
+ * `.mapEach(...)` method; the chain methods themselves are a separate
+ * follow-up card, so this error is currently dormant — but the type +
+ * audit-gate registration land here so the future chain-method PR is a
+ * pure addition with no public-API churn.
+ */
+export class GislChainCardinalityMismatchError extends GislConfigError {
+  readonly previousOperation: string;
+  readonly attemptedOperation: string;
+
+  constructor(previousOperation: string, attemptedOperation: string) {
+    super(
+      `Previous step (${previousOperation}) produces multiple artifacts; ` +
+        `use .mapEach(art => art.${attemptedOperation}(...)) to apply the chain per-artifact, ` +
+        `or branch to a single artifact first.`,
+    );
+    this.name = 'GislChainCardinalityMismatchError';
+    this.previousOperation = previousOperation;
+    this.attemptedOperation = attemptedOperation;
+  }
+}
+
 export class GislTimeoutError extends GislError {
   constructor(message: string) {
     super(message);

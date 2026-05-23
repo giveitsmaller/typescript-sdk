@@ -505,6 +505,94 @@ describe('codex R1 regression guards', () => {
   });
 });
 
+describe('T6 — .mapEach fan-out', () => {
+  it('GislChainCardinalityMismatchError carries previousOperation + attemptedOperation fields', async () => {
+    // T6 ships the error class for the FUTURE chain methods (.compress() etc.
+    // on OperationBuilder result). The error itself is dormant — no chain
+    // method throws it today — but the type + audit registration land here
+    // so the future chain-method PR is a pure addition.
+    const { GislChainCardinalityMismatchError } = await import('../../src/errors.js');
+    const e = new GislChainCardinalityMismatchError('convert', 'compress');
+    expect(e.previousOperation).toBe('convert');
+    expect(e.attemptedOperation).toBe('compress');
+    expect(e.message).toMatch(/multiple artifacts/);
+    expect(e.message).toMatch(/mapEach/);
+    expect(e.name).toBe('GislChainCardinalityMismatchError');
+  });
+
+  it('mapEach on a multi-output parent (3 artifacts) calls fn 3× and combines child artifacts', async () => {
+    const mock = makeMockClient();
+    let parentCallSeen = false;
+    mock.getWorkflowDownloads.mockImplementation(async () => {
+      if (!parentCallSeen) {
+        parentCallSeen = true;
+        return {
+          downloads: [
+            {
+              jobId: 'job_parent',
+              ref: 'op',
+              files: [
+                { operation: 'convert', operationId: 'opid_1', filename: 'page_1.png', sizeBytes: 100, downloadUrl: 'https://signed.example.com/page_1.png', pageIndex: 1 },
+                { operation: 'convert', operationId: 'opid_2', filename: 'page_2.png', sizeBytes: 100, downloadUrl: 'https://signed.example.com/page_2.png', pageIndex: 2 },
+                { operation: 'convert', operationId: 'opid_3', filename: 'page_3.png', sizeBytes: 100, downloadUrl: 'https://signed.example.com/page_3.png', pageIndex: 3 },
+              ],
+            },
+          ],
+        };
+      }
+      // Each child returns 1 artifact.
+      return {
+        downloads: [
+          {
+            jobId: `job_child`,
+            ref: 'op',
+            files: [
+              { operation: 'compress', operationId: 'opid_c', filename: 'compressed.png', sizeBytes: 50, downloadUrl: 'https://signed.example.com/compressed.png' },
+            ],
+          },
+        ],
+      };
+    });
+    let fnCalls = 0;
+    const result = await new OperationBuilder(mock.client, 'convert', 'doc.pdf', { to: 'png', pages: '1-3' })
+      .mapEach((art) => {
+        fnCalls += 1;
+        expect(art.url).toMatch(/page_\d\.png/);
+        return new OperationBuilder(mock.client, 'compress', 'noop', {});
+      })
+      .run({ maxWait: '60s' });
+    expect(fnCalls).toBe(3);
+    expect(result.artifacts).toHaveLength(3);
+  });
+
+  it('mapEach on a single-output parent calls fn exactly ONCE', async () => {
+    const mock = makeMockClient();
+    let fnCalls = 0;
+    const result = await new OperationBuilder(mock.client, 'compress', 'p.jpg', {})
+      .mapEach(() => {
+        fnCalls += 1;
+        return new OperationBuilder(mock.client, 'thumbnail', 'noop', {});
+      })
+      .run({ maxWait: '30s' });
+    expect(fnCalls).toBe(1);
+    expect(result.artifacts).toHaveLength(1);
+  });
+
+  it('mapEach propagates GislTimeoutError when parent.run() exceeds maxWait', async () => {
+    const mock = makeMockClient();
+    mock.getWorkflowStatus.mockResolvedValue({ workflowId: 'wf_1', status: 'running' });
+    let fnCalls = 0;
+    const pending = new OperationBuilder(mock.client, 'compress', 'p.jpg', {})
+      .mapEach(() => {
+        fnCalls += 1;
+        return new OperationBuilder(mock.client, 'thumbnail', 'noop', {});
+      })
+      .run({ maxWait: 5, useSSE: false, pollIntervalMs: 100 });
+    await expect(pending).rejects.toBeInstanceOf(GislTimeoutError);
+    expect(fnCalls).toBe(0);
+  });
+});
+
 describe('ergonomic-client Proxy interaction (T2 + T1 layering)', () => {
   it('the ErgonomicClient returned from gisl.create() is still instanceof GislClient', async () => {
     // Codex-reviewer P1: the Proxy must preserve instanceof so downstream

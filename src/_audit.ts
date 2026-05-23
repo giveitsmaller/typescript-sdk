@@ -93,6 +93,7 @@ import type {
   Environment,
   ErgonomicClient,
   Artifact,
+  ArtifactRef,
   Handle,
   Result,
   RunOptions,
@@ -201,4 +202,6 @@ export function _runAudit(): void {
   accept<MergeOptions>();
   accept<MergeMediaKind>();
   accept<SequenceEntry>();
+  // T6 / aDR1jnyZ — fan-out surface.
+  accept<ArtifactRef>();
 }
