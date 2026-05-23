@@ -77,6 +77,33 @@ import type {
 // on the public surface.
 import type { OperationResultOutputEntry } from './index.js';
 
+// Ergonomic-layer entry points (T1 / wVU4xHx3) — `gisl.create()` factory
+// + credential-chain types + the new local-error tree (GislConfigError +
+// GislMissingCredentialsError + GislFeatureRequiresAuthError). Sibling to
+// GislApiError; thrown before any I/O.
+//
+// Public-surface types imported via `./index.js` (NOT `./gisl.js`) so
+// removing the index.ts re-export breaks `tsc --noEmit` here — the
+// purpose of the audit gate (codex r2 low a8b2e50caf83). The
+// `ANONYMOUS_ALLOWLIST` parking invariant is imported from `./gisl.js`
+// directly since the constant is intentionally NOT re-exported from
+// index.ts (parked-internal).
+import type {
+  GislCreateOptions,
+  Environment,
+} from './index.js';
+import { ANONYMOUS_ALLOWLIST } from './gisl.js';
+
+// Pin the parked-allowlist invariant: `ANONYMOUS_ALLOWLIST` MUST stay empty
+// until the user-decision in `docs/plans/sdk-ergonomics/plan.md` §12 flips,
+// at which point the public `gisl.anonymous()` export also needs to land.
+// Widening the list without the export flip would ship a dead capability.
+// This compile-time assertion fires the moment someone adds an entry.
+type _AllowlistEmpty = typeof ANONYMOUS_ALLOWLIST extends readonly [] ? true : false;
+type _AssertAllowlistEmpty<T extends true> = T;
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+type _AnonymousAllowlistParkingInvariant = _AssertAllowlistEmpty<_AllowlistEmpty>;
+
 // SDK-3 (Wb6ebOMM) — hand-coded resume-support types in types.ts. The
 // `_Sdk3HandCoded` prefix marks them as transient (replaced on HxUmVr3Y
 // regen). The audit gate pins their presence on the public surface so a
@@ -143,4 +170,7 @@ export function _runAudit(): void {
   accept<_Sdk3HandCodedPresignedPart>();
   accept<_Sdk3HandCodedPresignPartsResult>();
   accept<_Sdk3HandCodedKeepaliveResult>();
+  // T1 / wVU4xHx3 — ergonomic-layer entry points.
+  accept<GislCreateOptions>();
+  accept<Environment>();
 }

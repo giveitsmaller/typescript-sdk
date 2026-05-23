@@ -333,6 +333,49 @@ export class GislMultipartSessionAuthRequiredError extends GislApiError {
   }
 }
 
+/**
+ * Root of the LOCAL config-error tree — thrown before any HTTP/file I/O.
+ * Sibling of `GislApiError` (which represents server-side error envelopes).
+ * Reserve for fail-early errors raised by the ergonomic-layer factory or
+ * credential-chain resolver when the caller hasn't supplied something the
+ * SDK needs to make a request. Never carries an HTTP status code.
+ */
+export class GislConfigError extends GislError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'GislConfigError';
+  }
+}
+
+/**
+ * The ergonomic-layer factory `gisl.create()` could not resolve an API key
+ * from any of explicit arg, `GISL_API_KEY` env, or shared-config profile,
+ * AND the caller did not opt into anonymous or cookie-mode. Thrown BEFORE
+ * any file read or HTTP request — calls to `client.compress(...)`, `.run()`,
+ * etc., synchronously fail with this error.
+ */
+export class GislMissingCredentialsError extends GislConfigError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'GislMissingCredentialsError';
+  }
+}
+
+/**
+ * The caller used `gisl.anonymous()` and then invoked an operation that is
+ * not in the anonymous-capable allowlist. Local-only — thrown before any I/O.
+ * Distinct from server-side `GislAuthError` (401/403 on the wire).
+ */
+export class GislFeatureRequiresAuthError extends GislConfigError {
+  readonly operation: string;
+
+  constructor(operation: string, message: string) {
+    super(message);
+    this.name = 'GislFeatureRequiresAuthError';
+    this.operation = operation;
+  }
+}
+
 export class GislTimeoutError extends GislError {
   constructor(message: string) {
     super(message);

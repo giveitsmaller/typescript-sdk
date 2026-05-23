@@ -76,8 +76,18 @@ export {
   GislMultipartSessionAuthRequiredError,
   GislTimeoutError,
   GislAbortError,
+  // T1 / wVU4xHx3 — local config-error tree (pre-I/O; sibling of GislApiError).
+  GislConfigError,
+  GislMissingCredentialsError,
+  GislFeatureRequiresAuthError,
 } from './errors.js';
 export type { GislApiErrorOptions, GislUploadCapKind } from './errors.js';
+
+// Ergonomic-layer entrypoint (T1 / wVU4xHx3) — `gisl.create()` factory +
+// credential-chain types. `gisl.anonymous()` (public export) lands once
+// the anonymous-capable operation allowlist is non-empty (plan §12).
+export { gisl, create } from './gisl.js';
+export type { GislCreateOptions, Environment } from './gisl.js';
 
 // Re-export key contract types so users only need @giveitsmaller/sdk
 export type {
