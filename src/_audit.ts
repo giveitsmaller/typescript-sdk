@@ -91,6 +91,13 @@ import type { OperationResultOutputEntry } from './index.js';
 import type {
   GislCreateOptions,
   Environment,
+  ErgonomicClient,
+  Artifact,
+  Handle,
+  Result,
+  RunOptions,
+  SubmitOptions,
+  ProgressEvent,
 } from './index.js';
 import { ANONYMOUS_ALLOWLIST } from './gisl.js';
 
@@ -173,4 +180,12 @@ export function _runAudit(): void {
   // T1 / wVU4xHx3 — ergonomic-layer entry points.
   accept<GislCreateOptions>();
   accept<Environment>();
+  // T2 / xVDTIm8C — operation-builder surface.
+  accept<ErgonomicClient>();
+  accept<Artifact>();
+  accept<Handle>();
+  accept<Result>();
+  accept<RunOptions>();
+  accept<SubmitOptions>();
+  accept<ProgressEvent>();
 }

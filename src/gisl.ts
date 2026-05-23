@@ -30,6 +30,7 @@ import {
   type ResolveEndpointOptions,
 } from './credentials.js';
 import type { GislClientConfig } from './types.js';
+import { OperationBuilder } from './builder.js';
 
 // ---------------------------------------------------------------------------
 // Anonymous-capable operation allowlist (internal)
@@ -86,9 +87,43 @@ interface _InternalCreateOptions extends GislCreateOptions {
  * credentials check — browser SPAs that drive auth via `client.login()`
  * legitimately have no apiKey at construction time.
  */
-export async function create(opts: GislCreateOptions = {}): Promise<GislClient> {
-  return _createInternal(opts);
+export async function create(opts: GislCreateOptions = {}): Promise<ErgonomicClient> {
+  return wrapErgonomic(await _createInternal(opts));
 }
+
+/**
+ * Compose the ergonomic operation surface (`.compress` / `.convert` /
+ * `.thumbnail`) on top of a `GislClient` via Proxy — matches the
+ * `wrapAnonymous` precedent (no prototype mutation). Layer order is
+ * builder-wrap INSIDE, anonymous-wrap OUTSIDE so the allowlist gate
+ * runs last in `_internalAnonymous` (see `_createInternal`).
+ */
+function wrapErgonomic(client: GislClient): ErgonomicClient {
+  return new Proxy(client, {
+    get(target, prop, receiver) {
+      if (prop === 'compress' || prop === 'convert' || prop === 'thumbnail') {
+        return (input: string | Blob, options: Record<string, unknown> = {}): OperationBuilder => {
+          return new OperationBuilder(target, prop, input, options);
+        };
+      }
+      return Reflect.get(target, prop, receiver);
+    },
+  }) as ErgonomicClient;
+}
+
+/**
+ * The ergonomic-client surface: `GislClient` (verbatim low-level API)
+ * plus three ergonomic op-builder factories. Intersection type — at
+ * runtime the Proxy synthesises the three methods on-demand. `input`
+ * accepts `string | Blob` matching `GislClient.uploadFile` (codex r1
+ * low 89cae59f4f04 — Blob/File uploads were previously rejected by the
+ * ergonomic factory's narrower string-only typing).
+ */
+export type ErgonomicClient = GislClient & {
+  compress(input: string | Blob, options?: Record<string, unknown>): OperationBuilder;
+  convert(input: string | Blob, options?: Record<string, unknown>): OperationBuilder;
+  thumbnail(input: string | Blob, options?: Record<string, unknown>): OperationBuilder;
+};
 
 /**
  * Inner factory shared by `create()` and `_internalAnonymous()` — extracted

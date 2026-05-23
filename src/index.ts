@@ -87,7 +87,25 @@ export type { GislApiErrorOptions, GislUploadCapKind } from './errors.js';
 // credential-chain types. `gisl.anonymous()` (public export) lands once
 // the anonymous-capable operation allowlist is non-empty (plan §12).
 export { gisl, create } from './gisl.js';
-export type { GislCreateOptions, Environment } from './gisl.js';
+export type { GislCreateOptions, Environment, ErgonomicClient } from './gisl.js';
+
+// Operation-builder surface (T2 / xVDTIm8C) — `client.compress/convert/thumbnail`
+// returns an `OperationBuilder`; `.run()` projects to a flat `Result` /
+// `.submit({webhook})` returns a `Handle`. Progress events are the
+// SDK-synthesised `{phase:'upload'|'processing', ...}` discriminated union.
+export { OperationBuilder } from './builder.js';
+export type {
+  Artifact,
+  Handle,
+  JobBreakdown,
+  ProcessingProgressEvent,
+  ProgressEvent,
+  ResolvedOptions,
+  Result,
+  RunOptions,
+  SubmitOptions,
+  UploadProgressEvent,
+} from './builder.js';
 
 // Re-export key contract types so users only need @giveitsmaller/sdk
 export type {
@@ -280,6 +298,39 @@ type _OperationResultOutputEntryDrift = [_OperationResultOutputEntryExtraAlias] 
 type _AssertTrue<T extends true> = T;
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 type _OperationResultOutputEntryDriftAssertion = _AssertTrue<_OperationResultOutputEntryDrift>;
+
+// T2 / xVDTIm8C — drift assertion: `Artifact` is a projection of
+// `OperationDownload` with `url` aliasing `downloadUrl` and the rest
+// verbatim (`jobId` + `ref` come from the parent `JobDownload`, not from
+// the file entry itself). Any contracts regen that renames or drops a
+// projected field breaks here at `tsc --noEmit` rather than silently
+// shifting the projection (codex-reviewer P1 — claimed in T2 PR but
+// initially missing).
+import type { OperationDownload as _OperationDownload } from '@giveitsmaller/contracts/openapi';
+import type { Artifact as _Artifact } from './builder.js';
+// The Artifact fields that MUST be backed by OperationDownload:
+type _ArtifactFromDownload = 'filename' | 'sizeBytes' | 'operation' | 'operationId' | 'pageIndex' | 'position';
+// Confirm each of these exists on OperationDownload. If a field is
+// renamed/dropped upstream, the Extract becomes `never` and the assert
+// below fires.
+type _OperationDownloadHasFields = Extract<_ArtifactFromDownload, keyof _OperationDownload> extends _ArtifactFromDownload
+  ? true
+  : ['DRIFT: OperationDownload missing one of', _ArtifactFromDownload];
+// Confirm OperationDownload.downloadUrl exists (the `url` alias source):
+type _OperationDownloadHasDownloadUrl = 'downloadUrl' extends keyof _OperationDownload
+  ? true
+  : ['DRIFT: OperationDownload.downloadUrl (aliased by Artifact.url) missing'];
+// Confirm Artifact still has `url` + `jobId` + `ref` (the alias + parent
+// fields — easy to accidentally drop on a refactor):
+type _ArtifactSurfaceComplete = ('url' | 'jobId' | 'ref') extends keyof _Artifact
+  ? true
+  : ['DRIFT: Artifact missing url/jobId/ref'];
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+type _ArtifactDriftAssertion = [
+  _AssertTrue<_OperationDownloadHasFields>,
+  _AssertTrue<_OperationDownloadHasDownloadUrl>,
+  _AssertTrue<_ArtifactSurfaceComplete>,
+];
 
 // Re-export all operation option types
 export type {
