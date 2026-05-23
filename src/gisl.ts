@@ -31,6 +31,7 @@ import {
 } from './credentials.js';
 import type { GislClientConfig } from './types.js';
 import { OperationBuilder } from './builder.js';
+import { MergeBuilder, asset, type Asset, type MergeOptions } from './merge.js';
 
 // ---------------------------------------------------------------------------
 // Anonymous-capable operation allowlist (internal)
@@ -106,9 +107,43 @@ function wrapErgonomic(client: GislClient): ErgonomicClient {
           return new OperationBuilder(target, prop, input, options);
         };
       }
+      if (prop === 'merge') {
+        // merge(...) accepts a mix of:
+        // - Asset objects (handle/path) — declared explicitly
+        // - string | Blob — wrapped via `asset()`
+        // - MergeOptions (always LAST) — sniffed by the absence of asset shape
+        return (...args: ReadonlyArray<string | Blob | Asset | MergeOptions>): MergeBuilder => {
+          let mergeOpts: MergeOptions = {};
+          let last = args.length > 0 ? args[args.length - 1] : undefined;
+          if (isMergeOptions(last)) {
+            mergeOpts = last;
+            args = args.slice(0, -1);
+          }
+          const declared: Asset[] = args.map((a) => {
+            if (typeof a === 'string' || a instanceof Blob) return asset(a);
+            // Asset (handle or path).
+            return a as Asset;
+          });
+          return new MergeBuilder(target, declared, mergeOpts);
+        };
+      }
       return Reflect.get(target, prop, receiver);
     },
   }) as ErgonomicClient;
+}
+
+/**
+ * Sniff whether the final argument to `merge(...)` is a `MergeOptions`
+ * object rather than an `Asset`. Heuristic: an `Asset` always has a
+ * `type` field with `'handle'` or `'path'`; a `MergeOptions` does not.
+ */
+function isMergeOptions(value: unknown): value is MergeOptions {
+  if (value === null || typeof value !== 'object') return false;
+  if (typeof (value as { then?: unknown }).then === 'function') return false;
+  if (value instanceof Blob) return false;
+  const t = (value as { type?: unknown }).type;
+  if (t === 'handle' || t === 'path' || t === 'clip') return false;
+  return true;
 }
 
 /**
@@ -123,6 +158,13 @@ export type ErgonomicClient = GislClient & {
   compress(input: string | Blob, options?: Record<string, unknown>): OperationBuilder;
   convert(input: string | Blob, options?: Record<string, unknown>): OperationBuilder;
   thumbnail(input: string | Blob, options?: Record<string, unknown>): OperationBuilder;
+  /**
+   * Merge ordered-sequence factory (T3). Accepts a variadic list of assets
+   * (strings/Blobs/`handle()`/`asset()`) optionally terminated by a
+   * `MergeOptions` object. Returns a `MergeBuilder`; pin the play order
+   * with `.sequence(...)`.
+   */
+  merge(...args: ReadonlyArray<string | Blob | Asset | MergeOptions>): MergeBuilder;
 };
 
 /**

@@ -80,6 +80,10 @@ export {
   GislConfigError,
   GislMissingCredentialsError,
   GislFeatureRequiresAuthError,
+  // T3 / cuecCmb5 — merge-compose local validation errors.
+  GislUndeclaredAssetError,
+  GislUnusedAssetError,
+  GislPerInputOptionsNotSupportedError,
 } from './errors.js';
 export type { GislApiErrorOptions, GislUploadCapKind } from './errors.js';
 
@@ -94,6 +98,15 @@ export type { GislCreateOptions, Environment, ErgonomicClient } from './gisl.js'
 // `.submit({webhook})` returns a `Handle`. Progress events are the
 // SDK-synthesised `{phase:'upload'|'processing', ...}` discriminated union.
 export { OperationBuilder } from './builder.js';
+export { MergeBuilder, asset, handle, clip } from './merge.js';
+export type {
+  Asset,
+  ClipEntry,
+  ClipOptions,
+  MergeMediaKind,
+  MergeOptions,
+  SequenceEntry,
+} from './merge.js';
 export type {
   Artifact,
   Handle,

@@ -98,6 +98,12 @@ import type {
   RunOptions,
   SubmitOptions,
   ProgressEvent,
+  Asset,
+  ClipEntry,
+  ClipOptions,
+  MergeOptions,
+  MergeMediaKind,
+  SequenceEntry,
 } from './index.js';
 import { ANONYMOUS_ALLOWLIST } from './gisl.js';
 
@@ -188,4 +194,11 @@ export function _runAudit(): void {
   accept<RunOptions>();
   accept<SubmitOptions>();
   accept<ProgressEvent>();
+  // T3 / cuecCmb5 — merge-compose surface.
+  accept<Asset>();
+  accept<ClipEntry>();
+  accept<ClipOptions>();
+  accept<MergeOptions>();
+  accept<MergeMediaKind>();
+  accept<SequenceEntry>();
 }

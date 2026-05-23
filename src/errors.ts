@@ -376,6 +376,64 @@ export class GislFeatureRequiresAuthError extends GislConfigError {
   }
 }
 
+/**
+ * `MergeBuilder.sequence(...)` referenced an asset that wasn't declared in
+ * the prior `client.merge(...)` call. Local validation runs BEFORE upload
+ * so the caller fails fast on the typo without burning bandwidth.
+ */
+export class GislUndeclaredAssetError extends GislConfigError {
+  readonly assetId: string;
+  readonly declaredAssets: readonly string[];
+
+  constructor(assetId: string, declaredAssets: readonly string[]) {
+    super(
+      `Sequence references asset '${assetId}' but it wasn't declared in merge(...). ` +
+        `Declared assets: [${declaredAssets.join(', ')}]. ` +
+        `Either pass it to merge(...) before sequencing, or remove the reference.`,
+    );
+    this.name = 'GislUndeclaredAssetError';
+    this.assetId = assetId;
+    this.declaredAssets = declaredAssets;
+  }
+}
+
+/**
+ * `MergeBuilder.sequence(...)` was called but at least one declared asset
+ * wasn't referenced. Almost always a bug (wasted upload). Escape via
+ * `allowUnusedAssets: true` on the merge options.
+ */
+export class GislUnusedAssetError extends GislConfigError {
+  readonly unusedAssets: readonly string[];
+
+  constructor(unusedAssets: readonly string[]) {
+    super(
+      `Assets [${unusedAssets.join(', ')}] were declared in merge(...) but never sequenced. ` +
+        `Reference them in .sequence(...), remove them from the declaration, ` +
+        `or pass {allowUnusedAssets: true} to opt out of this check.`,
+    );
+    this.name = 'GislUnusedAssetError';
+    this.unusedAssets = unusedAssets;
+  }
+}
+
+/**
+ * `MergeBuilder.sequence(...)` on an image merge was given a `clip(ref, opts)`
+ * entry. Image merges have NO per-input options in the wire today — `transition`
+ * applies at the merge level and is uniform across all joins.
+ */
+export class GislPerInputOptionsNotSupportedError extends GislConfigError {
+  readonly mediaKind: string;
+
+  constructor(mediaKind: string) {
+    super(
+      `${mediaKind} merge has no per-input options today; set 'transition' at the ` +
+        `.merge(...) level instead — it applies to every join.`,
+    );
+    this.name = 'GislPerInputOptionsNotSupportedError';
+    this.mediaKind = mediaKind;
+  }
+}
+
 export class GislTimeoutError extends GislError {
   constructor(message: string) {
     super(message);

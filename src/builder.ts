@@ -249,7 +249,7 @@ export class OperationBuilder {
    * `GislTimeoutError` if `maxWait` elapses before terminal status.
    */
   async run(options: RunOptions): Promise<Result> {
-    const deadline = Date.now() + parseMaxWait(options.maxWait);
+    const deadline = Date.now() + _parseMaxWait(options.maxWait);
     const signal = options.signal;
     const onProgress = options.onProgress;
     const useSSE = options.useSSE ?? true;
@@ -262,7 +262,7 @@ export class OperationBuilder {
       };
     }
     const uploadResp = await this.client.uploadFile(this.input, uploadOpts);
-    checkAborted(signal);
+    _checkAborted(signal);
 
     // Codex r2 medium 9a117f04eb59 — check deadline AFTER upload so a slow
     // upload doesn't proceed to createWorkflow past the caller's deadline.
@@ -280,7 +280,7 @@ export class OperationBuilder {
     };
     const payload: WorkflowCreatePayload = { jobs: [job] };
     const created = await this.client.createWorkflow(payload);
-    checkAborted(signal);
+    _checkAborted(signal);
 
     // 3. Wait to terminal status.
     const finalStatus = await this.awaitTerminal({
@@ -302,7 +302,7 @@ export class OperationBuilder {
       );
     }
     const downloads = await this.client.getWorkflowDownloads(created.workflowId);
-    return projectResult(finalStatus, downloads.downloads, this.opOptions);
+    return _projectResult(finalStatus, downloads.downloads, this.opOptions);
   }
 
   /**
@@ -344,7 +344,7 @@ export class OperationBuilder {
   }): Promise<WorkflowStatusResponse> {
     if (args.useSSE) {
       try {
-        return await consumeSseToTerminal(this.client, args);
+        return await _consumeSseToTerminal(this.client, args);
       } catch (err) {
         // Caller-aborted or deadline-elapsed errors MUST propagate — they
         // are NOT transient SSE failures. Only fall through to poll on a
@@ -354,7 +354,7 @@ export class OperationBuilder {
         // Genuine SSE connect / stream error — fall through to poll fallback.
       }
     }
-    return await pollToTerminal(this.client, args);
+    return await _pollToTerminal(this.client, args);
   }
 }
 
@@ -371,7 +371,8 @@ const TERMINAL_STATUS = new Set([
   'paused_insufficient_credits',
 ]);
 
-async function consumeSseToTerminal(
+/** @internal — exported for reuse by `merge.ts` (T3) and future builders. */
+export async function _consumeSseToTerminal(
   client: GislClient,
   args: {
     workflowId: string;
@@ -497,7 +498,8 @@ async function consumeSseToTerminal(
   }
 }
 
-async function pollToTerminal(
+/** @internal — exported for reuse by `merge.ts` (T3) and future builders. */
+export async function _pollToTerminal(
   client: GislClient,
   args: {
     workflowId: string;
@@ -521,7 +523,7 @@ async function pollToTerminal(
     intervalMs = requested;
   }
   while (true) {
-    checkAborted(args.signal);
+    _checkAborted(args.signal);
     if (Date.now() >= args.deadline) {
       throw new GislTimeoutError(
         `Workflow ${args.workflowId} did not complete before maxWait deadline`,
@@ -553,7 +555,8 @@ async function pollToTerminal(
 // Projection
 // ---------------------------------------------------------------------------
 
-function projectResult(
+/** @internal — exported for reuse by `merge.ts` (T3) and future builders. */
+export function _projectResult(
   status: WorkflowStatusResponse,
   jobDownloads: readonly { ref: string; jobId: string; files: readonly OperationDownload[] }[],
   appliedOptions: Record<string, unknown>,
@@ -636,7 +639,8 @@ function projectResult(
 // Helpers
 // ---------------------------------------------------------------------------
 
-function checkAborted(signal: AbortSignal | undefined): void {
+/** @internal — exported for reuse by `merge.ts` (T3) and future builders. */
+export function _checkAborted(signal: AbortSignal | undefined): void {
   if (signal !== undefined && signal.aborted) {
     throw new DOMException('Aborted', 'AbortError');
   }
@@ -667,7 +671,8 @@ async function sleep(ms: number, signal: AbortSignal | undefined): Promise<void>
  * Parse a `maxWait` argument: number = milliseconds; string with suffix
  * `ms` / `s` / `m` / `h`. Throws if the string is malformed.
  */
-function parseMaxWait(value: string | number): number {
+/** @internal — exported for reuse by `merge.ts` (T3) and future builders. */
+export function _parseMaxWait(value: string | number): number {
   if (typeof value === 'number') {
     if (!Number.isFinite(value) || value <= 0) {
       throw new TypeError(`maxWait must be a positive finite number; got ${value}`);
