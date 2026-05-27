@@ -34,6 +34,7 @@ import {
   TierRestrictionResponseFromJSON,
   UserTier,
   WorkflowExpiredResponseFromJSON,
+  ProbePendingResponseFromJSON,
   UploadSizeExceedsTierResponseFromJSON,
   UploadDurationExceedsTierResponseFromJSON,
   UploadConstraintsAppliedProcessingClassPreAssignmentEnum,
@@ -84,6 +85,7 @@ import {
   GislMultipartSessionAuthRequiredError,
   GislTierRestrictedError,
   GislTimeoutError,
+  GislProbePendingError,
   GislUploadCapExceededError,
   type GislUploadCapKind,
   GislValidationError,
@@ -748,6 +750,27 @@ export class GislClient {
           WorkflowExpiredResponseFromJSON,
           GislWorkflowExpiredError,
           (p) => isValidDate(p.expiredAt),
+        );
+      }
+
+      // Probe-pending 422 on POST /api/workflows (per contracts av1J0rEF).
+      // Recovery: caller polls /api/uploads/{id}/probe until terminal, then
+      // retries the workflow-create. `payload.jobRef` names which job.
+      //
+      // Defensive against v2.15.3 generator-bug: the openapi-generator-emitted
+      // `instanceOfProbePendingResponse` checks camelCase fields against the
+      // raw snake_case wire — fails dispatch when used at the CreateWorkflow
+      // 422 union top-level. We branch on the already-parsed `error_type`
+      // here (the SDK-side snake_case envelope read at line 659) and
+      // validate the payload shape directly on the raw JSON before
+      // ProbePendingResponseFromJSON converts snake_case → camelCase.
+      // Robust to BOTH the current v2.15.3 broken dispatch AND any future
+      // v2.15.4 fix that lands a discriminator.
+      if (status === 422 && errorType === 'probe_pending') {
+        tryThrowStructured(
+          ProbePendingResponseFromJSON,
+          GislProbePendingError,
+          (p) => typeof p.jobRef === 'string' && p.jobRef.length > 0,
         );
       }
 

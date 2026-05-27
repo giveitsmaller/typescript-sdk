@@ -26,6 +26,7 @@ import type {
   FeatureNotAvailableResponse,
   FeatureViolation,
   WorkflowExpiredResponse,
+  ProbePendingResponse,
   AuthErrorResponse,
   // Workflow lifecycle / delivery / processing plan response shapes
   // (T4 + T7 introduced these for v2).
@@ -147,6 +148,7 @@ export function _runAudit(): void {
   accept<FeatureNotAvailableResponse>();
   accept<FeatureViolation>();
   accept<WorkflowExpiredResponse>();
+  accept<ProbePendingResponse>();
   accept<AuthErrorResponse>();
   accept<WorkflowCancelResponse>();
   accept<WorkflowResumeResponse>();

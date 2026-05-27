@@ -16,6 +16,7 @@ import {
   GislTierRestrictedError,
   GislTimeoutError,
   GislValidationError,
+  GislProbePendingError,
   GislWorkflowExpiredError,
 } from '../../src/errors.js';
 
@@ -592,6 +593,39 @@ describe('GislClient', () => {
         expect.unreachable('should have thrown');
       } catch (err) {
         expect(err).toBeInstanceOf(GislWorkflowExpiredError);
+      }
+    });
+
+    it('throws GislProbePendingError on 422 probe_pending with typed jobRef', async () => {
+      // Drives the snake_case wire envelope through handleResponse to lock
+      // in the dispatch (j2sukTDl). Production trigger is POST /api/workflows
+      // but the dispatcher is endpoint-agnostic — any 4xx with
+      // error_type: probe_pending exercises the same branch.
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'probe_pending',
+            message: 'The upload for job_compress is still being probed.',
+            message_key: 'errors.workflow.probe_pending',
+            locale: 'en-GB',
+            error_type: 'probe_pending',
+            job_ref: 'job_compress',
+          },
+          422,
+        ),
+      );
+
+      try {
+        await client.resumeWorkflow('wf-1');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislProbePendingError);
+        if (err instanceof GislProbePendingError) {
+          expect(err.payload.jobRef).toBe('job_compress');
+          expect(err.payload.errorType).toBe('probe_pending');
+          expect(err.messageKey).toBe('errors.workflow.probe_pending');
+        }
       }
     });
   });

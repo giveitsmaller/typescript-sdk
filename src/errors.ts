@@ -3,6 +3,7 @@ import type {
   BalanceExhaustedResponse,
   FeatureNotAvailableResponse,
   FeatureTierRestrictedResponse,
+  ProbePendingResponse,
   TierRestrictionResponse,
   UploadDurationExceedsTierResponse,
   UploadSizeExceedsTierResponse,
@@ -168,6 +169,48 @@ export class GislFeatureNotAvailableError extends GislApiError {
   ) {
     super(statusCode, errorMessage, path, undefined, buildOptionsWithPayload(payload, extra));
     this.name = 'GislFeatureNotAvailableError';
+  }
+}
+
+/**
+ * 422 response on `POST /api/workflows` when a job references an upload
+ * whose server-side probe hasn't completed at workflow-create time. The
+ * server rejects rather than silently routing as `short_form` (which
+ * hard-fails long video clips).
+ *
+ * **Recovery contract** (per contracts ProbePendingResponse docblock):
+ * poll `POST /api/uploads/{id}/probe` for the pending upload until
+ * `probe_status` is terminal (`ok` → re-`POST /api/workflows` the same
+ * request; `corrupt` / `unsupported_codec` → surface the probe error).
+ * The `Retry-After` response header (when present) suggests a delay
+ * in seconds before the next poll/retry.
+ *
+ * `payload.jobRef` identifies which job in the multi-job request triggered
+ * the probe-pending rejection.
+ *
+ * @example
+ * try {
+ *   await client.createWorkflow({ jobs });
+ * } catch (e) {
+ *   if (e instanceof GislProbePendingError) {
+ *     await waitForProbe(e.payload.jobRef);
+ *     // retry...
+ *   }
+ *   throw e;
+ * }
+ */
+export class GislProbePendingError extends GislApiError {
+  declare readonly payload: ProbePendingResponse;
+
+  constructor(
+    statusCode: number,
+    errorMessage: string,
+    payload: ProbePendingResponse,
+    path?: string,
+    extra?: Omit<GislApiErrorOptions, 'payload'>,
+  ) {
+    super(statusCode, errorMessage, path, undefined, buildOptionsWithPayload(payload, extra));
+    this.name = 'GislProbePendingError';
   }
 }
 

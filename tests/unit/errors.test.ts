@@ -9,6 +9,7 @@ import {
   GislFeatureTierRestrictedError,
   GislMultipartPartCountError,
   GislMultipartPartError,
+  GislProbePendingError,
   GislTierRestrictedError,
   GislUploadCapExceededError,
   GislValidationError,
@@ -87,6 +88,25 @@ describe('error classes', () => {
       expect(err).toBeInstanceOf(GislFeatureNotAvailableError);
       expect(err).toBeInstanceOf(GislApiError);
       expect(err.name).toBe('GislFeatureNotAvailableError');
+    });
+
+    it('GislProbePendingError extends GislApiError with typed jobRef', () => {
+      const err = new GislProbePendingError(
+        422,
+        'Upload probe pending',
+        {
+          success: false,
+          error: 'Upload probe pending',
+          errorType: 'probe_pending',
+          jobRef: 'job_compress',
+        },
+      );
+      expect(err).toBeInstanceOf(GislProbePendingError);
+      expect(err).toBeInstanceOf(GislApiError);
+      expect(err.name).toBe('GislProbePendingError');
+      // Payload narrows to ProbePendingResponse so consumers read jobRef typed.
+      expect(err.payload.jobRef).toBe('job_compress');
+      expect(err.payload.errorType).toBe('probe_pending');
     });
 
     it('GislWorkflowExpiredError extends GislApiError', () => {

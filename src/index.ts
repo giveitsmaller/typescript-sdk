@@ -66,6 +66,7 @@ export {
   GislFeatureTierRestrictedError,
   GislFeatureNotAvailableError,
   GislWorkflowExpiredError,
+  GislProbePendingError,
   GislAuthError,
   GislUploadCapExceededError,
   GislMultipartPartError,
@@ -213,6 +214,7 @@ export type {
   FeatureNotAvailableResponse,
   FeatureViolation,
   WorkflowExpiredResponse,
+  ProbePendingResponse,
   AuthErrorResponse,
 } from '@giveitsmaller/contracts/openapi';
 
