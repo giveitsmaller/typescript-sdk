@@ -1,3 +1,10 @@
+// TypeScript parity adapter — reference implementation of the parity
+// adapter contract (F5 / MZWsS0qs). See docs/sdks/parity-adapter-contract.md
+// for the language-neutral interface every adapter implements.
+//
+// CapturedRequest / CapturedBody shapes live in ./fetch-stub.ts and are
+// the normalised form the comparator operates on across all four
+// languages.
 import { createHmac } from 'node:crypto';
 
 import { GislClient } from '../../src/client.js';
