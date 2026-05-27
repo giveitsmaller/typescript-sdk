@@ -1,0 +1,163 @@
+// CODE GENERATED — DO NOT EDIT.
+// Source: compression_contracts/sdk-spec/ (see sdk-spec/README.md).
+// Regenerate with: scripts/generate.py.
+
+export type PresetLevel = 'Size' | 'Balanced' | 'Quality';
+
+export type PresetCell = Readonly<Record<string, string | number | boolean>>;
+
+export type PresetMatrix = Readonly<Record<string, Readonly<Record<PresetLevel, PresetCell>>>>;
+
+export const PRESETS: PresetMatrix = Object.freeze({
+  "image_compress": Object.freeze({
+    Size: Object.freeze({
+      "mode": "Lossy",
+      "quality": 65,
+      "metadata": "All",
+      "iccProfile": "Strip",
+      "autoOrient": true,
+      "progressive": true,
+      "outputFormat": "Smallest",
+    } as PresetCell),
+    Balanced: Object.freeze({
+      "mode": "Auto",
+      "quality": 80,
+      "metadata": "Sensitive",
+      "iccProfile": "Preserve",
+      "autoOrient": true,
+      "progressive": true,
+      "outputFormat": "Auto",
+    } as PresetCell),
+    Quality: Object.freeze({
+      "mode": "Lossless",
+      "metadata": "None",
+      "iccProfile": "Preserve",
+      "autoOrient": true,
+      "progressive": true,
+      "outputFormat": "Original",
+    } as PresetCell),
+  } as Readonly<Record<PresetLevel, PresetCell>>),
+  "audio_compress": Object.freeze({
+    Size: Object.freeze({
+      "bitrate": "_96",
+      "sampleRate": "_44100",
+      "normalize": true,
+    } as PresetCell),
+    Balanced: Object.freeze({
+      "bitrate": "_192",
+      "sampleRate": "_44100",
+      "normalize": true,
+    } as PresetCell),
+    Quality: Object.freeze({
+      "bitrate": "_320",
+      "sampleRate": "_48000",
+      "normalize": false,
+    } as PresetCell),
+  } as Readonly<Record<PresetLevel, PresetCell>>),
+  "video_compress": Object.freeze({
+    Size: Object.freeze({
+      "codec": "H265",
+      "crf": 30,
+      "preset": "Slow",
+      "faststart": true,
+      "audioCodec": "Aac",
+      "audioBitrate": "_96",
+    } as PresetCell),
+    Balanced: Object.freeze({
+      "codec": "H264",
+      "crf": 23,
+      "preset": "Medium",
+      "faststart": true,
+      "audioCodec": "Aac",
+      "audioBitrate": "_128",
+    } as PresetCell),
+    Quality: Object.freeze({
+      "codec": "H264",
+      "crf": 18,
+      "preset": "Slow",
+      "faststart": true,
+      "audioCodec": "Aac",
+      "audioBitrate": "_192",
+    } as PresetCell),
+  } as Readonly<Record<PresetLevel, PresetCell>>),
+  "document_pdf_compress": Object.freeze({
+    Size: Object.freeze({
+      "profile": "Max",
+      "colorspace": "Grayscale",
+      "flattenForms": false,
+    } as PresetCell),
+    Balanced: Object.freeze({
+      "profile": "Web",
+      "colorspace": "Unchanged",
+      "flattenForms": false,
+    } as PresetCell),
+    Quality: Object.freeze({
+      "profile": "Archive",
+      "colorspace": "Unchanged",
+      "flattenForms": false,
+    } as PresetCell),
+  } as Readonly<Record<PresetLevel, PresetCell>>),
+  "document_office_compress": Object.freeze({
+    Size: Object.freeze({
+      "imageQuality": 60,
+      "stripMacros": true,
+      "stripHiddenData": true,
+      "stripUnusedFonts": true,
+    } as PresetCell),
+    Balanced: Object.freeze({
+      "imageQuality": 80,
+      "stripMacros": true,
+      "stripHiddenData": false,
+      "stripUnusedFonts": false,
+    } as PresetCell),
+    Quality: Object.freeze({
+      "imageQuality": 92,
+      "stripMacros": false,
+      "stripHiddenData": false,
+      "stripUnusedFonts": false,
+    } as PresetCell),
+  } as Readonly<Record<PresetLevel, PresetCell>>),
+  "document_odf_compress": Object.freeze({
+    Size: Object.freeze({
+      "imageQuality": 60,
+      "stripMetadata": true,
+      "stripUnusedStyles": true,
+    } as PresetCell),
+    Balanced: Object.freeze({
+      "imageQuality": 80,
+      "stripMetadata": true,
+      "stripUnusedStyles": false,
+    } as PresetCell),
+    Quality: Object.freeze({
+      "imageQuality": 92,
+      "stripMetadata": false,
+      "stripUnusedStyles": false,
+    } as PresetCell),
+  } as Readonly<Record<PresetLevel, PresetCell>>),
+  "document_epub_compress": Object.freeze({
+    Size: Object.freeze({
+      "imageQuality": 60,
+      "fontSubsetting": true,
+      "stripUnusedCss": true,
+    } as PresetCell),
+    Balanced: Object.freeze({
+      "imageQuality": 80,
+      "fontSubsetting": true,
+      "stripUnusedCss": false,
+    } as PresetCell),
+    Quality: Object.freeze({
+      "imageQuality": 92,
+      "fontSubsetting": false,
+      "stripUnusedCss": false,
+    } as PresetCell),
+  } as Readonly<Record<PresetLevel, PresetCell>>),
+} as PresetMatrix);
+
+/** Lookup the shipped preset cell for (mediaOp, level). Throws on unknown keys. */
+export function shippedDefaultsFor(mediaOp: string, level: PresetLevel): PresetCell {
+  const group = PRESETS[mediaOp];
+  if (!group) throw new Error(`Unknown preset mediaOp: ${mediaOp}`);
+  const cell = group[level];
+  if (!cell) throw new Error(`Unknown preset level for ${mediaOp}: ${level}`);
+  return cell;
+}
