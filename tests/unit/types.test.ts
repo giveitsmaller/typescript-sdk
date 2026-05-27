@@ -230,6 +230,10 @@ describe('JobDefinitionPayload composition', () => {
     // `compress`. The V1 `skip_compression` field is rejected by the API
     // mix-detector (WorkflowDialectDetector) when paired with any V2
     // indicator (`id`, `source.type`).
+    //
+    // Re-introduction of `skip_compression` (or any other additive V1
+    // leak) is caught structurally by the JOB_DEFINITION_PAYLOAD_KEYS
+    // drift sentinel in contract-drift-fields.test.ts (Y3xz94ZX).
     const job: JobDefinitionPayload = {
       id: 'pdf_to_pngs',
       source: uploadSource('upl_pdf'),
@@ -241,7 +245,6 @@ describe('JobDefinitionPayload composition', () => {
       source: { type: 'upload', file_id: 'upl_pdf' },
       operations: [{ type: 'convert', options: { format: 'png', pages: '1-3' } }],
     });
-    expect('skip_compression' in job).toBe(false);
   });
 });
 

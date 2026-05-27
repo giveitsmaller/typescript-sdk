@@ -168,6 +168,42 @@ export interface JobDefinitionPayload {
   deliver?: boolean;
 }
 
+/**
+ * Single source of truth for JobDefinitionPayload's top-level wire keys.
+ * Read by `contract-drift-fields.test.ts` to cross-check against the spec
+ * at `JobDefinition`. Not re-exported from `index.ts`; this is reachable
+ * only via deep imports and should not be treated as public API.
+ *
+ * The V1-only `skip_compression` field is deliberately absent (eQnUMW68);
+ * the runtime drift test will fail if the spec re-introduces it OR adds
+ * any other V1-leak field to the V2 JobDefinition schema.
+ * @internal
+ */
+export const JOB_DEFINITION_PAYLOAD_KEYS = Object.freeze([
+  'id',
+  'source',
+  'inputs',
+  'operations',
+  'deliver',
+] as const);
+
+// Compile-time invariant: JOB_DEFINITION_PAYLOAD_KEYS must exactly equal
+// keyof JobDefinitionPayload. Same load-bearing pattern as
+// _WorkflowCreatePayloadDriftAssertion below — tsc fails at the
+// `_AssertTrue<...>` line with the specific extra/missing keys named in
+// the error tuple.
+type _ExpectedJobDefinitionPayloadKey = (typeof JOB_DEFINITION_PAYLOAD_KEYS)[number];
+type _ExcessJobPayload = Exclude<keyof JobDefinitionPayload, _ExpectedJobDefinitionPayloadKey>;
+type _ExcessJobExpected = Exclude<_ExpectedJobDefinitionPayloadKey, keyof JobDefinitionPayload>;
+type _JobDefinitionPayloadDrift =
+  [_ExcessJobPayload] extends [never]
+    ? [_ExcessJobExpected] extends [never]
+      ? true
+      : ['DRIFT: JobDefinitionPayload is missing keys declared in JOB_DEFINITION_PAYLOAD_KEYS', _ExcessJobExpected]
+    : ['DRIFT: JobDefinitionPayload has EXTRA keys not in JOB_DEFINITION_PAYLOAD_KEYS', _ExcessJobPayload];
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+type _JobDefinitionPayloadDriftAssertion = _AssertTrue<_JobDefinitionPayloadDrift>;
+
 // ---------------------------------------------------------------------------
 // External destination (workflow-level export). Discriminated union over
 // `connection` | `external_import`. Replaces V1 `ExportConfig`.

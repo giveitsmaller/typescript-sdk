@@ -36,7 +36,10 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { parse as parseYaml } from 'yaml';
 import ts from 'typescript';
-import { WORKFLOW_CREATE_PAYLOAD_KEYS } from '../../src/types.js';
+import {
+  WORKFLOW_CREATE_PAYLOAD_KEYS,
+  JOB_DEFINITION_PAYLOAD_KEYS,
+} from '../../src/types.js';
 import { CLIENT_SRC_PATH, GENERATED_SPEC_PATH } from './_contract-paths.js';
 
 interface OpenApiDoc {
@@ -388,6 +391,71 @@ describe('contract drift — workflow create JSON body', () => {
     expect(
       requiredMissing,
       `spec POST /api/workflows requires fields not in WORKFLOW_CREATE_PAYLOAD_KEYS: ${requiredMissing.join(', ')}`,
+    ).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (b.2) JobDefinition (nested in WorkflowCreateRequest.jobs[].items) — drift
+// sentinel for the nested job-level wire shape. Same load-bearing pattern as
+// the workflow-level test above. Filed as Y3xz94ZX after the eQnUMW68 V1
+// skip_compression removal — the by-name `'skip_compression' in job`
+// assertion in types.test.ts only catches that ONE field; this drift test
+// catches any future additive V1 leak (e.g. `skip_thumbnails`) on the V2
+// JobDefinition schema by name-set comparison.
+//
+// Compile-time side (keyof JobDefinitionPayload ⇔ JOB_DEFINITION_PAYLOAD_KEYS)
+// is enforced in src/types.ts — same reason as above (tsconfig excludes
+// tests). Runtime side (spec ⇔ allow-list) is checked here.
+// ---------------------------------------------------------------------------
+
+describe('contract drift — job definition JSON shape', () => {
+  it('spec JobDefinition properties are covered by JOB_DEFINITION_PAYLOAD_KEYS', () => {
+    const doc = loadSpec();
+    const workflowSchema = getRequestBodySchema(doc, '/api/workflows', 'post', 'application/json');
+    const jobsArray = workflowSchema.properties?.jobs;
+    if (typeof jobsArray !== 'object' || jobsArray === null) {
+      throw new Error('spec WorkflowCreateRequest has no `jobs` property — did the schema rename?');
+    }
+    const jobItems = (jobsArray as Record<string, unknown>).items;
+    if (typeof jobItems !== 'object' || jobItems === null) {
+      throw new Error('spec WorkflowCreateRequest.jobs has no `items` schema');
+    }
+    const jobSchema = resolveSchema(doc, jobItems as OpenApiSchemaRef);
+
+    const specProperties = Object.keys(jobSchema.properties ?? {});
+    expect(
+      specProperties.length,
+      'spec JobDefinition has no properties — did the schema rename?',
+    ).toBeGreaterThan(0);
+
+    const allowList = new Set<string>(JOB_DEFINITION_PAYLOAD_KEYS);
+    const specNotInAllowList = specProperties.filter(p => !allowList.has(p));
+    expect(
+      specNotInAllowList,
+      `spec JobDefinition has properties not in JOB_DEFINITION_PAYLOAD_KEYS: ${specNotInAllowList.join(', ')}. Update JOB_DEFINITION_PAYLOAD_KEYS (and JobDefinitionPayload) in packages/typescript/src/types.ts to match. If this fires for 'skip_compression' or another V1-only field, the spec has regressed — eQnUMW68 retired skip_compression for V2.`,
+    ).toEqual([]);
+
+    const allowListNotInSpec = [...allowList].filter(k => !specProperties.includes(k));
+    expect(
+      allowListNotInSpec,
+      `JOB_DEFINITION_PAYLOAD_KEYS has keys not in spec JobDefinition: ${allowListNotInSpec.join(', ')}. The spec may have renamed/removed these — reconcile JobDefinitionPayload in types.ts.`,
+    ).toEqual([]);
+  });
+
+  it('spec-required fields on JobDefinition are covered by JOB_DEFINITION_PAYLOAD_KEYS', () => {
+    const doc = loadSpec();
+    const workflowSchema = getRequestBodySchema(doc, '/api/workflows', 'post', 'application/json');
+    const jobsArray = workflowSchema.properties?.jobs as Record<string, unknown>;
+    const jobItems = jobsArray.items as OpenApiSchemaRef;
+    const jobSchema = resolveSchema(doc, jobItems);
+
+    const specRequired = jobSchema.required ?? [];
+    const allowList = new Set<string>(JOB_DEFINITION_PAYLOAD_KEYS);
+    const requiredMissing = specRequired.filter(r => !allowList.has(r));
+    expect(
+      requiredMissing,
+      `spec JobDefinition requires fields not in JOB_DEFINITION_PAYLOAD_KEYS: ${requiredMissing.join(', ')}`,
     ).toEqual([]);
   });
 });
