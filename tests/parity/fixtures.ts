@@ -149,6 +149,22 @@ export const KNOWN_SDK_METHODS: ReadonlySet<string> = new Set([
   'keepaliveUpload',
   // Webhook mode invokes verifyWebhook() directly; it is not a GislClient method.
   'verifyWebhook',
+  // Ergonomic-facade verbs (PHP P2 / 7QXkzoIi symmetric addition). Dispatched
+  // through `OperationBuilder` (`packages/typescript/src/builder.ts`); the
+  // parity shim at `invoke.ts` constructs the ergonomic client and routes
+  // the fixture-defined terminal (`run` / `submit`) through it. `watermark`
+  // / `archive` / `merge` / `mapEach` / `bundle` remain UNLISTED:
+  //
+  //   - `watermark`: v2 OperationType has no bare `watermark` value
+  //     (split into image_watermark/text_watermark); needs a preset-style
+  //     mapping. Codex caught this gap in PHP P2 review.
+  //   - `archive`: contract-modeled as multi-input (`inputs[]`),
+  //     incompatible with the single-input `OperationBuilder`. Lands
+  //     with P4's `.bundle()` archive sugar.
+  //   - `merge` / `mapEach` / `bundle` land in P3 / P4.
+  'compress',
+  'thumbnail',
+  'convert',
 ]);
 
 // ---------------------------------------------------------------------------

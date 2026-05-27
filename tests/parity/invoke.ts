@@ -8,10 +8,27 @@
 import { createHmac } from 'node:crypto';
 
 import { GislClient } from '../../src/client.js';
+import { OperationBuilder } from '../../src/builder.js';
 import { verifyWebhook } from '../../src/webhook.js';
 
 import type { Fixture, FixtureValue } from './fixtures.js';
 import { decodeBytesValue } from './fetch-stub.js';
+
+// Ergonomic-facade verbs whose dispatch is wired through `OperationBuilder`
+// rather than a direct GislClient method (PHP P2 / 7QXkzoIi symmetric
+// addition). Args shape: `[input, options?, terminal?]` where `input` is
+// either a `bytes` value (materialised to Blob/File by `materialiseArg`)
+// or a string filesystem path; `terminal` is `{run: RunOptions}` or
+// `{submit: SubmitOptions}` and defaults to a webhook-bound submit so a
+// fixture exercising only the upload+create wire shape doesn't need to
+// drive the full run orchestration.
+const ERGONOMIC_DISPATCH_VERBS: ReadonlySet<string> = new Set([
+  'compress',
+  'thumbnail',
+  'convert',
+  // `watermark` / `archive` deliberately omitted — see fixtures.ts for
+  // why (v2 OperationType / multi-input shape mismatches).
+]);
 
 const DEFAULT_CLIENT_CONFIG = {
   baseUrl: 'https://api.test.example.com',
@@ -75,6 +92,19 @@ export async function invokeFixture(fixture: Fixture): Promise<{
   const method = fixture.sdk.method;
   const args = (fixture.sdk.args ?? []).map((a) => materialiseArg(a, fixture.__file));
 
+  // Ergonomic-facade dispatch — PHP P2 (7QXkzoIi) symmetric addition.
+  // Routes through `OperationBuilder` instead of `GislClient`'s direct
+  // method surface (the ergonomic methods are Proxy-installed in
+  // `gisl.create()` and not present on a bare GislClient instance).
+  if (ERGONOMIC_DISPATCH_VERBS.has(method)) {
+    try {
+      const ergonomicReturn = await invokeErgonomic(client, method, args);
+      return { returnValue: ergonomicReturn };
+    } catch (err) {
+      return { returnValue: undefined, thrown: err };
+    }
+  }
+
   // Type: all public GislClient methods return Promise<unknown>.
   const fn = (client as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>)[method];
   if (typeof fn !== 'function') {
@@ -104,6 +134,42 @@ export async function invokeFixture(fixture: Fixture): Promise<{
   }
 
   return { returnValue: raw };
+}
+
+async function invokeErgonomic(
+  client: GislClient,
+  method: string,
+  args: ReadonlyArray<unknown>,
+): Promise<unknown> {
+  const input = args[0];
+  if (typeof input !== 'string' && !(input instanceof Blob)) {
+    throw new Error(
+      `invoke: ergonomic "${method}" first arg must be a string path or Blob, got ${typeof input}`,
+    );
+  }
+  const opOptions = (args[1] ?? {}) as Record<string, unknown>;
+  const terminal = (args[2] ?? { submit: { webhook: 'https://example.com/webhook' } }) as
+    | { submit: { webhook: string } }
+    | { run: { maxWait: string | number; useSSE?: boolean; pollIntervalMs?: number } };
+
+  const builder = new OperationBuilder(client, method, input, opOptions);
+  if ('submit' in terminal) {
+    const handle = await builder.submit({ webhook: terminal.submit.webhook });
+    return handle;
+  }
+  if ('run' in terminal) {
+    const result = await builder.run({
+      maxWait: terminal.run.maxWait,
+      ...(terminal.run.useSSE !== undefined ? { useSSE: terminal.run.useSSE } : {}),
+      ...(terminal.run.pollIntervalMs !== undefined
+        ? { pollIntervalMs: terminal.run.pollIntervalMs }
+        : {}),
+    });
+    return result;
+  }
+  throw new Error(
+    `invoke: ergonomic "${method}" terminal must declare exactly one of 'run' or 'submit'`,
+  );
 }
 
 function invokeWebhook(fixture: Fixture): { returnValue: unknown; thrown?: unknown } {
