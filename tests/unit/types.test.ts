@@ -223,54 +223,25 @@ describe('JobDefinitionPayload composition', () => {
     });
   });
 
-  it('preserves the per-job `skip_compression` opt-out for non-compress-terminated chains', () => {
-    // Convert PDF -> PNG fan-out per ADR-0009 §D2: a chain that ends in
-    // `convert` (not `compress`) must set skip_compression so the server
-    // doesn't reject the chain at validateChainOrdering.
+  it('opts out of compression by sending operations[] without a compress entry (V2 idiom)', () => {
+    // Per contracts api.yaml POST /api/workflows description + ADR-0004:
+    // V2 has no skip_compression flag — `operations[]` IS the chain. A job
+    // opts out by sending an explicit non-empty `operations[]` that omits
+    // `compress`. The V1 `skip_compression` field is rejected by the API
+    // mix-detector (WorkflowDialectDetector) when paired with any V2
+    // indicator (`id`, `source.type`).
     const job: JobDefinitionPayload = {
       id: 'pdf_to_pngs',
       source: uploadSource('upl_pdf'),
       operations: [{ type: 'convert', options: { format: 'png', pages: '1-3' } }],
-      skip_compression: true,
     };
 
-    expect(job.skip_compression).toBe(true);
     expect(job).toEqual({
       id: 'pdf_to_pngs',
       source: { type: 'upload', file_id: 'upl_pdf' },
       operations: [{ type: 'convert', options: { format: 'png', pages: '1-3' } }],
-      skip_compression: true,
     });
-  });
-
-  it('omits skip_compression entirely when not set (no `: undefined` entry)', () => {
-    const job: JobDefinitionPayload = {
-      source: uploadSource('upl_abc'),
-      operations: [{ type: 'compress' }],
-    };
-
     expect('skip_compression' in job).toBe(false);
-  });
-
-  it('preserves skip_compression on a multi-input (inputs[]) job', () => {
-    // skip_compression is structurally orthogonal to source/inputs:
-    // ADR-0009 §D2's PDF fan-out example is single-source, but a
-    // multi-input merge chain skipping the compress gate is also valid.
-    // Pin: skip_compression must land on the wire alongside `inputs`, not
-    // be branch-suppressed inside a source-only code path.
-    const job: JobDefinitionPayload = {
-      id: 'merge_without_compress',
-      inputs: [
-        { source: uploadSource('upl_a') },
-        { source: uploadSource('upl_b') },
-      ],
-      operations: [{ type: 'merge', options: { format: 'pdf' } }],
-      skip_compression: true,
-    };
-
-    expect(job.skip_compression).toBe(true);
-    expect(job.inputs).toHaveLength(2);
-    expect('source' in job).toBe(false);
   });
 });
 
