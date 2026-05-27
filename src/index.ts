@@ -168,6 +168,12 @@ export type {
   MimeGroupSchema,
   OptionSchema,
   PerValueAvailabilityEntry,
+  // Per-role cardinality entry — contracts v2.15 (AJCLLGaG, ADR-0015).
+  // Surfaced on OperationSchemaDefinition.perRoleCardinality so form-
+  // renderers can decide whether a multi-input role accepts 0 or 1 OR
+  // 1+ inputs (audio_to_video's optional `overlay` role is the
+  // first such case).
+  PerRoleCardinalityEntry,
   RetryResponse,
   JobDownload,
   OperationDownload,
@@ -383,7 +389,6 @@ export type {
   // migration guidance lives in T17 (mCRKA1m5).
   ImageWatermarkImageOptions,
   ImageWatermarkImageGifOptions,
-  ImageWatermarkVideoOptions,
   TextWatermarkImageOptions,
   // Planned operation option types. The contract carries full schemas
   // for these (so consumers can type their code today), but the API
@@ -395,12 +400,19 @@ export type {
   AudioOverlayVideoOptions,
   AudioWatermarkAudioOptions,
   AudioWatermarkVideoOptions,
+  // New planned operation option types — contracts v2.15 (AJCLLGaG).
+  AudioToVideoAudioOptions,
+  VideoWatermarkVideoOptions,
+  VideoTextWatermarkVideoOptions,
+  SplitImageGifOptions,
+  SplitDocumentPdfOptions,
+  SplitAudioOptions,
+  SplitVideoOptions,
 } from '@giveitsmaller/contracts/operations';
 
 export {
   ImageWatermarkImageAnchor,
   ImageWatermarkImageGifAnchor,
-  ImageWatermarkVideoAnchor,
   TextWatermarkImageAnchor,
   TextWatermarkImageFontFamily,
   TextWatermarkImageWatermarkMode,
@@ -413,6 +425,20 @@ export {
   AudioWatermarkVideoMethod,
   AudioWatermarkVideoRobustness,
   AudioWatermarkVideoDensity,
+  // New planned operation enums — contracts v2.15 (AJCLLGaG).
+  AudioToVideoAudioOutputResolution,
+  AudioToVideoAudioImageFit,
+  AudioToVideoAudioOutputFormat,
+  VideoWatermarkVideoAnchor,
+  VideoTextWatermarkVideoFontFamily,
+  VideoTextWatermarkVideoWatermarkMode,
+  VideoTextWatermarkVideoAnchor,
+  SplitImageGifOutputFormat,
+  SplitDocumentPdfMode,
+  SplitAudioMode,
+  SplitAudioPrecision,
+  SplitVideoMode,
+  SplitVideoPrecision,
 } from '@giveitsmaller/contracts/operations';
 
 // Per-operation metadata sidecars. Inspect `availability`,
@@ -431,6 +457,11 @@ export {
   mergeMetadata,
   textWatermarkMetadata,
   thumbnailMetadata,
+  // New planned operation metadata sidecars — contracts v2.15 (AJCLLGaG).
+  audioToVideoMetadata,
+  videoWatermarkMetadata,
+  videoTextWatermarkMetadata,
+  splitMetadata,
 } from '@giveitsmaller/contracts/operations';
 export type {
   OperationMetadata,

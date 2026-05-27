@@ -59,6 +59,7 @@ import type {
   MimeGroupSchema,
   OptionSchema,
   PerValueAvailabilityEntry,
+  PerRoleCardinalityEntry,
   OperationInputModel,
 } from '@giveitsmaller/contracts/openapi';
 
@@ -171,6 +172,7 @@ export function _runAudit(): void {
   accept<MimeGroupSchema>();
   accept<OptionSchema>();
   accept<PerValueAvailabilityEntry>();
+  accept<PerRoleCardinalityEntry>();
   accept<OperationInputModel>();
   accept<MultiOutputCompletion>();
   accept<PageIndexed>();
