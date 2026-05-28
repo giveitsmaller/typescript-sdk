@@ -155,6 +155,65 @@ function cellKeyOf(media: PresetMedia, op: PresetOp): CellKey {
 }
 
 /**
+ * Per-cell field-merge: parent fields ⊕ child fields where defined.
+ * Re-construct the leaf DTO via the matching `<LeafClass>.from(merged)`
+ * call so the result is a freshly-frozen `*PresetOptions` instance —
+ * NOT a mutated reference into either input. Used by
+ * {@link PresetDefaults.merge} when both parent and child registered
+ * the same `(cellKey, level)` tuple.
+ *
+ * `definedFieldsOf` filters undefined values out of each instance
+ * BEFORE the merge: with TS `useDefineForClassFields` (the ES2022
+ * default), `readonly mode?: ImageMode` declarations initialise the
+ * field as an enumerable own property with value `undefined` BEFORE
+ * the ctor body runs. A naive `Object.assign({}, parent, child)`
+ * therefore lets child's `undefined` overwrite parent's defined value
+ * — caught by CI on PR #125 first run. Filter-then-spread restores
+ * the documented merge-not-replace semantics.
+ *
+ * @internal
+ */
+function definedFieldsOf<T extends object>(opts: T): Partial<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(opts)) {
+    const value = (opts as unknown as Record<string, unknown>)[key];
+    if (value !== undefined) out[key] = value;
+  }
+  return out;
+}
+
+function mergePresetOptions(
+  cellKey: CellKey,
+  parentOpts: AnyPresetOptions,
+  childOpts: AnyPresetOptions,
+): AnyPresetOptions {
+  // Child fields win on overlap; parent fills the remaining gaps.
+  // `definedFieldsOf` strips undefined-valued slots that TS class
+  // field declarations create even when the ctor body skipped the
+  // assignment (see helper docblock).
+  const mergedFields = {
+    ...definedFieldsOf(parentOpts),
+    ...definedFieldsOf(childOpts),
+  };
+  switch (cellKey) {
+    case 'image_compress':
+      return ImageCompressPresetOptions.from(mergedFields as ImageCompressPresetOptionsInput);
+    case 'audio_compress':
+      return AudioCompressPresetOptions.from(mergedFields as AudioCompressPresetOptionsInput);
+    case 'video_compress':
+      return VideoCompressPresetOptions.from(mergedFields as VideoCompressPresetOptionsInput);
+    case 'document_pdf_compress':
+      return DocumentPdfCompressPresetOptions.from(mergedFields as DocumentPdfCompressPresetOptionsInput);
+    case 'document_office_compress':
+      return DocumentOfficeCompressPresetOptions.from(mergedFields as DocumentOfficeCompressPresetOptionsInput);
+    case 'document_odf_compress':
+      return DocumentOdfCompressPresetOptions.from(mergedFields as DocumentOdfCompressPresetOptionsInput);
+    case 'document_epub_compress':
+      return DocumentEpubCompressPresetOptions.from(mergedFields as DocumentEpubCompressPresetOptionsInput);
+  }
+}
+
+/**
  * Append `(level, options)` into a fresh map under `cellKey`, returning
  * a new outer map. Both layers stay immutable — callers' references to
  * the previous PresetDefaults remain unchanged.
@@ -184,6 +243,51 @@ export class PresetDefaults {
   /** Empty builder — entry point for `presetDefaults()`. @internal */
   static _empty(): PresetDefaults {
     return new PresetDefaults(new Map());
+  }
+
+  /**
+   * Deep-merge two {@link PresetDefaults} into a new instance (T4c —
+   * `ULAlOP6j`). Used by `withPresetDefaults` to stack scoped derives:
+   * `client.withPresetDefaults(a).withPresetDefaults(b)` produces a
+   * scoped layer equivalent to `merge(a, b)` — `b`'s per-cell fields
+   * override `a`'s where defined; `a`'s fields fill gaps.
+   *
+   * Per-cell semantics (codex r2 #5 — scalar-leaf merge):
+   * - If a `(cellKey, level)` entry is present in EITHER only, take it
+   *   verbatim.
+   * - If present in both, merge the per-cell `*Input` shapes via
+   *   `Object.assign({}, parentInput, childInput)` and re-construct
+   *   the leaf DTO. Every cell-DTO field is a scalar (primitive,
+   *   enum-string, or `string | number` for `targetSize`) — shallow
+   *   merge gives the correct field-wise override.
+   *
+   * Parent and child instances are unaffected.
+   */
+  static merge(parent: PresetDefaults, child: PresetDefaults): PresetDefaults {
+    const merged = new Map<CellKey, Map<OptimizeFor, AnyPresetOptions>>();
+    // Seed with a clone of parent's entries (one inner Map per cellKey
+    // so child writes don't bleed back into parent's frozen structure).
+    for (const [cellKey, entries] of parent.cells) {
+      merged.set(cellKey, new Map(entries));
+    }
+    // Overlay child entries. Same (cellKey, level) → field-merge;
+    // child-only → take verbatim.
+    for (const [cellKey, childEntries] of child.cells) {
+      const target = merged.get(cellKey);
+      if (target === undefined) {
+        merged.set(cellKey, new Map(childEntries));
+        continue;
+      }
+      for (const [level, childOpts] of childEntries) {
+        const parentOpts = target.get(level);
+        if (parentOpts === undefined) {
+          target.set(level, childOpts);
+          continue;
+        }
+        target.set(level, mergePresetOptions(cellKey, parentOpts, childOpts));
+      }
+    }
+    return new PresetDefaults(merged);
   }
 
   /** Register a (level, delta) on the image-compress cell. Immutable. */

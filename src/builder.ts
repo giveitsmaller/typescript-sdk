@@ -380,6 +380,15 @@ export class OperationBuilder {
      * verbatim.
      */
     private readonly presetDefaults?: PresetDefaults,
+    /**
+     * Scoped preset defaults from `client.withPresetDefaults(...)`
+     * (T4c — `ULAlOP6j`). Layered between `presetDefaults` and per-call
+     * `presetOverrides` in the resolver chain. `undefined` on clients
+     * that haven't been through a `withPresetDefaults` call. The
+     * derived ergonomic client's Proxy closes over the merged stack
+     * (parent's scoped ⊕ new defaults via `PresetDefaults.merge`).
+     */
+    private readonly scopedPresetDefaults?: PresetDefaults,
   ) {}
 
   /**
@@ -416,6 +425,9 @@ export class OperationBuilder {
     };
     if (this.presetDefaults !== undefined) {
       (input as { presetDefaults?: PresetDefaults }).presetDefaults = this.presetDefaults;
+    }
+    if (this.scopedPresetDefaults !== undefined) {
+      (input as { scopedPresetDefaults?: PresetDefaults }).scopedPresetDefaults = this.scopedPresetDefaults;
     }
     if (presetOverrides !== undefined) {
       (input as { presetOverrides?: Readonly<Record<string, unknown>> }).presetOverrides = presetOverrides;

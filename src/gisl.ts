@@ -32,7 +32,7 @@ import {
 import type { GislClientConfig } from './types.js';
 import { OperationBuilder } from './builder.js';
 import { MergeBuilder, asset, type Asset, type MergeOptions } from './merge.js';
-import type { PresetDefaults } from './ergonomic/presets/index.js';
+import { PresetDefaults } from './ergonomic/presets/index.js';
 
 // ---------------------------------------------------------------------------
 // Anonymous-capable operation allowlist (internal)
@@ -113,7 +113,11 @@ export async function create(opts: GislCreateOptions = {}): Promise<ErgonomicCli
  * builder-wrap INSIDE, anonymous-wrap OUTSIDE so the allowlist gate
  * runs last in `_internalAnonymous` (see `_createInternal`).
  */
-function wrapErgonomic(client: GislClient, presetDefaults?: PresetDefaults): ErgonomicClient {
+function wrapErgonomic(
+  client: GislClient,
+  presetDefaults?: PresetDefaults,
+  scopedPresetDefaults?: PresetDefaults,
+): ErgonomicClient {
   return new Proxy(client, {
     get(target, prop, receiver) {
       if (prop === 'compress' || prop === 'convert' || prop === 'thumbnail') {
@@ -122,7 +126,33 @@ function wrapErgonomic(client: GislClient, presetDefaults?: PresetDefaults): Erg
           // .run()/.submit() consult the preset resolver. The Proxy's
           // closure carries the same reference for every per-call
           // builder construction.
-          return new OperationBuilder(target, prop, input, options, presetDefaults);
+          // T4c — also forward the scopedPresetDefaults closure (from
+          // `withPresetDefaults`); `undefined` on root clients.
+          return new OperationBuilder(
+            target,
+            prop,
+            input,
+            options,
+            presetDefaults,
+            scopedPresetDefaults,
+          );
+        };
+      }
+      if (prop === 'withPresetDefaults') {
+        // T4c — immutable scoped derive. Computes mergedScoped =
+        // (parent.scoped === undefined ? new : PresetDefaults.merge(
+        // parent.scoped, new)) and returns a new Proxy wrapping the SAME
+        // underlying GislClient `target` (identity preservation —
+        // baseUrl / apiKey / headers / timeouts / multipart / session-
+        // cookie all by reference). Does NOT re-trigger _createInternal
+        // / resolveApiKey (codex r2 invariant — derives never re-read
+        // env or profile).
+        return (defaults: PresetDefaults): ErgonomicClient => {
+          const mergedScoped =
+            scopedPresetDefaults === undefined
+              ? defaults
+              : PresetDefaults.merge(scopedPresetDefaults, defaults);
+          return wrapErgonomic(target, presetDefaults, mergedScoped);
         };
       }
       if (prop === 'merge') {
@@ -183,6 +213,26 @@ export type ErgonomicClient = GislClient & {
    * with `.sequence(...)`.
    */
   merge(...args: ReadonlyArray<string | Blob | Asset | MergeOptions>): MergeBuilder;
+  /**
+   * Immutable scoped derive (T4c — `ULAlOP6j`). Returns a new client
+   * with `defaults` layered on top of the parent's scoped defaults.
+   * Use for the "next N jobs" pattern — e.g. an evening batch needing
+   * higher quality without mutating the long-lived parent client.
+   *
+   * Identity: the derived client shares the SAME underlying low-level
+   * transport (baseUrl, apiKey, headers, timeouts, multipart, session
+   * cookie) by reference. Safe for concurrent parent + derived use.
+   *
+   * Merge semantics (codex r2 #5 — scalar leaf): scoped per-cell fields
+   * override the parent's scoped where defined; the parent's
+   * `client.presetDefaults` layer is unaffected and still contributes
+   * fields the scoped layer doesn't set.
+   *
+   * Does NOT re-resolve credentials. The derive never calls the
+   * credential chain or constructor — it composes new closure values
+   * over the existing transport.
+   */
+  withPresetDefaults(defaults: PresetDefaults): ErgonomicClient;
 };
 
 /**

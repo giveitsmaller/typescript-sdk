@@ -108,6 +108,14 @@ export interface ResolveCompressOptionsInput {
   readonly op: PresetOp;
   /** Defaults registered via `gisl.create({ presetDefaults: ... })`. */
   readonly presetDefaults?: PresetDefaults;
+  /**
+   * Scoped defaults attached via `client.withPresetDefaults(...)` (T4c —
+   * `ULAlOP6j`). Layered between `presetDefaults` and `presetOverrides`
+   * in the resolver chain. The derived client closes over this
+   * reference; `undefined` for clients that never went through a
+   * `withPresetDefaults` call.
+   */
+  readonly scopedPresetDefaults?: PresetDefaults;
   /** Per-call `presetOverrides` argument from the operation builder. */
   readonly presetOverrides?: Readonly<Record<string, unknown>>;
   /**
@@ -269,7 +277,14 @@ function sdkDefaultRecord(media: PresetMedia, op: PresetOp, optimize: OptimizeFo
   }
 }
 
-function clientDefaultRecord(
+/**
+ * Look up the `(media, op, optimize)` cell in a `PresetDefaults` and
+ * return a plain Record. Shared between layer 2 (clientDefault) and
+ * layer 3 (scopedDefault — T4c) — both layers ask the same question
+ * against different `PresetDefaults` references. Returns `undefined`
+ * when the defaults aren't supplied or the cell wasn't registered.
+ */
+function presetDefaultsCellRecord(
   defaults: PresetDefaults | undefined,
   media: PresetMedia,
   op: PresetOp,
@@ -570,7 +585,7 @@ function computePresetConfigHash(
 export function resolveCompressOptions(
   input: ResolveCompressOptionsInput,
 ): ResolveCompressOptionsOutput {
-  const { media, op, presetDefaults, presetOverrides, optimize, explicitOptions } = input;
+  const { media, op, presetDefaults, scopedPresetDefaults, presetOverrides, optimize, explicitOptions } = input;
   if (op !== 'compress') {
     throw new GislConfigError(
       `Preset resolution is only wired for compress operations today; got op='${op}'.`,
@@ -590,20 +605,23 @@ export function resolveCompressOptions(
 
   const sdkDefault: Readonly<Record<string, unknown>> | undefined =
     optimize === undefined ? undefined : sdkDefaultRecord(media, op, optimize);
-  const clientDefault = clientDefaultRecord(presetDefaults, media, op, optimize ?? ('Balanced' as OptimizeFor));
-  // Scoped is empty in T4b; declared here so the source bucket order
-  // matches the public ResolvedOptionsSources type.
-  const scopedDefault: Readonly<Record<string, unknown>> | undefined = undefined;
+  const clientDefault = presetDefaultsCellRecord(presetDefaults, media, op, optimize ?? ('Balanced' as OptimizeFor));
+  // Scoped layer (T4c — ULAlOP6j): reads from the derived client's
+  // `_scopedPresetDefaults` closure. `undefined` for non-derived
+  // clients; otherwise the merged stack from `withPresetDefaults`.
+  const scopedDefault = presetDefaultsCellRecord(scopedPresetDefaults, media, op, optimize ?? ('Balanced' as OptimizeFor));
 
-  // optimize-unset skips clientDefault too — the caller chose to opt
-  // out of layered preset resolution entirely. Without an optimize
-  // level there's no cell to look up.
+  // optimize-unset skips clientDefault AND scopedDefault — the caller
+  // chose to opt out of layered preset resolution entirely. Without an
+  // optimize level there's no cell to look up at either layer
+  // (architect adjustment 2 — symmetry with clientDefault).
   const effectiveClientDefault = optimize === undefined ? undefined : clientDefault;
+  const effectiveScopedDefault = optimize === undefined ? undefined : scopedDefault;
   const effectivePresetOverrides = presetOverrides;
 
   mergeLayer(acc, sdkDefault, 'sdkDefault');
   mergeLayer(acc, effectiveClientDefault, 'clientDefault');
-  mergeLayer(acc, scopedDefault, 'scopedDefault');
+  mergeLayer(acc, effectiveScopedDefault, 'scopedDefault');
   mergeLayer(acc, effectivePresetOverrides, 'callPresetOverride');
   mergeLayer(acc, explicitOptions, 'explicit');
 
@@ -625,9 +643,15 @@ export function resolveCompressOptions(
       // whichever layer last set the camelCase `targetSize`. We
       // recover that from the original layer records since acc.winners
       // already lost it on the delete.
+      // Walk the precedence chain HIGH → LOW (architect adjustment 1
+      // for T4c: scopedDefault inserted between callPresetOverride and
+      // clientDefault). Without the scoped arm, a scoped-set targetSize
+      // would mis-attribute to sdkDefault and presetConfigHash /
+      // sources.scopedDefault would be wrong.
       const targetSizeSource: SourceKey = (() => {
         if (explicitOptions['targetSize'] !== undefined) return 'explicit';
         if (effectivePresetOverrides?.['targetSize'] !== undefined) return 'callPresetOverride';
+        if (effectiveScopedDefault?.['targetSize'] !== undefined) return 'scopedDefault';
         if (effectiveClientDefault?.['targetSize'] !== undefined) return 'clientDefault';
         return 'sdkDefault';
       })();
@@ -679,7 +703,7 @@ export function resolveCompressOptions(
   // registered (architect's adjustment 4).
   const presetConfigHash = computePresetConfigHash(
     effectiveClientDefault,
-    scopedDefault,
+    effectiveScopedDefault,
     effectivePresetOverrides,
   );
 
