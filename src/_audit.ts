@@ -107,6 +107,39 @@ import type {
   MergeOptions,
   MergeMediaKind,
   SequenceEntry,
+  // T4a / VhIj4S7T — preset-defaults builder + leaf DTOs + ergonomic enums.
+  PresetDefaults,
+  PresetMedia,
+  PresetOp,
+  AnyPresetOptions,
+  ImageCompressPresetOptions,
+  ImageCompressPresetOptionsInput,
+  AudioCompressPresetOptions,
+  AudioCompressPresetOptionsInput,
+  VideoCompressPresetOptions,
+  VideoCompressPresetOptionsInput,
+  DocumentPdfCompressPresetOptions,
+  DocumentPdfCompressPresetOptionsInput,
+  DocumentOfficeCompressPresetOptions,
+  DocumentOfficeCompressPresetOptionsInput,
+  DocumentOdfCompressPresetOptions,
+  DocumentOdfCompressPresetOptionsInput,
+  DocumentEpubCompressPresetOptions,
+  DocumentEpubCompressPresetOptionsInput,
+  OptimizeFor,
+  ImageMode,
+  ImageFit,
+  ImageMetadataPolicy,
+  IccProfilePolicy,
+  ImageFormat,
+  VideoCodec,
+  VideoPreset,
+  VideoFit,
+  AudioBitrate,
+  AudioCodec,
+  AudioSampleRate,
+  PdfProfile,
+  PdfColorspace,
 } from './index.js';
 import { ANONYMOUS_ALLOWLIST } from './gisl.js';
 
@@ -208,4 +241,37 @@ export function _runAudit(): void {
   accept<SequenceEntry>();
   // T6 / aDR1jnyZ — fan-out surface.
   accept<ArtifactRef>();
+  // T4a / VhIj4S7T — preset-defaults surface.
+  accept<PresetDefaults>();
+  accept<PresetMedia>();
+  accept<PresetOp>();
+  accept<AnyPresetOptions>();
+  accept<ImageCompressPresetOptions>();
+  accept<ImageCompressPresetOptionsInput>();
+  accept<AudioCompressPresetOptions>();
+  accept<AudioCompressPresetOptionsInput>();
+  accept<VideoCompressPresetOptions>();
+  accept<VideoCompressPresetOptionsInput>();
+  accept<DocumentPdfCompressPresetOptions>();
+  accept<DocumentPdfCompressPresetOptionsInput>();
+  accept<DocumentOfficeCompressPresetOptions>();
+  accept<DocumentOfficeCompressPresetOptionsInput>();
+  accept<DocumentOdfCompressPresetOptions>();
+  accept<DocumentOdfCompressPresetOptionsInput>();
+  accept<DocumentEpubCompressPresetOptions>();
+  accept<DocumentEpubCompressPresetOptionsInput>();
+  accept<OptimizeFor>();
+  accept<ImageMode>();
+  accept<ImageFit>();
+  accept<ImageMetadataPolicy>();
+  accept<IccProfilePolicy>();
+  accept<ImageFormat>();
+  accept<VideoCodec>();
+  accept<VideoPreset>();
+  accept<VideoFit>();
+  accept<AudioBitrate>();
+  accept<AudioCodec>();
+  accept<AudioSampleRate>();
+  accept<PdfProfile>();
+  accept<PdfColorspace>();
 }

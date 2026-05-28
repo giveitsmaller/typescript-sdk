@@ -32,6 +32,7 @@ import {
 import type { GislClientConfig } from './types.js';
 import { OperationBuilder } from './builder.js';
 import { MergeBuilder, asset, type Asset, type MergeOptions } from './merge.js';
+import type { PresetDefaults } from './ergonomic/presets/index.js';
 
 // ---------------------------------------------------------------------------
 // Anonymous-capable operation allowlist (internal)
@@ -59,7 +60,15 @@ export const ANONYMOUS_ALLOWLIST = [] as const satisfies readonly string[];
 export interface GislCreateOptions
   extends ResolveCredentialsOptions,
     ResolveEndpointOptions,
-    Omit<GislClientConfig, 'baseUrl' | 'apiKey' | 'useSessionCookie'> {}
+    Omit<GislClientConfig, 'baseUrl' | 'apiKey' | 'useSessionCookie'> {
+  /**
+   * Layered ergonomic preset defaults (T4a / VhIj4S7T). Built via
+   * `presetDefaults().<cell>(level, overrides?)…`. The resolver wiring
+   * that consumes this slot lands in T4b — until then, supplying this
+   * field is a no-op at workflow-create time.
+   */
+  readonly presetDefaults?: PresetDefaults;
+}
 
 /**
  * Internal options shape for `_internalAnonymous()` — extends the public
@@ -185,8 +194,13 @@ async function _createInternal(opts: _InternalCreateOptions): Promise<GislClient
     baseUrl,
     environment,
     allowAnonymous,
+    // T4a slot — stripped from transportConfig so it does not leak
+    // into the low-level `GislClientConfig` spread. The T4b resolver
+    // reads `opts.presetDefaults` directly via its own path.
+    presetDefaults: _presetDefaults,
     ...transportConfig
   } = opts;
+  void _presetDefaults;
 
   const resolvedBaseUrl = resolveEndpoint({ baseUrl, environment });
 

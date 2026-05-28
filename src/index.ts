@@ -98,6 +98,45 @@ export type { GislApiErrorOptions, GislUploadCapKind } from './errors.js';
 export { gisl, create } from './gisl.js';
 export type { GislCreateOptions, Environment, ErgonomicClient } from './gisl.js';
 
+// Ergonomic preset defaults (T4a / VhIj4S7T) — typed leaf DTOs + immutable
+// `PresetDefaults` builder + `presetDefaults()` factory + ergonomic enum
+// re-exports. Resolver wiring (T4b) consumes `PresetDefaults.cellFor()`.
+export {
+  presetDefaults,
+  PresetDefaults,
+  type PresetMedia,
+  type PresetOp,
+  type AnyPresetOptions,
+  ImageCompressPresetOptions,
+  type ImageCompressPresetOptionsInput,
+  AudioCompressPresetOptions,
+  type AudioCompressPresetOptionsInput,
+  VideoCompressPresetOptions,
+  type VideoCompressPresetOptionsInput,
+  DocumentPdfCompressPresetOptions,
+  type DocumentPdfCompressPresetOptionsInput,
+  DocumentOfficeCompressPresetOptions,
+  type DocumentOfficeCompressPresetOptionsInput,
+  DocumentOdfCompressPresetOptions,
+  type DocumentOdfCompressPresetOptionsInput,
+  DocumentEpubCompressPresetOptions,
+  type DocumentEpubCompressPresetOptionsInput,
+  OptimizeFor,
+  ImageMode,
+  ImageFit,
+  ImageMetadataPolicy,
+  IccProfilePolicy,
+  ImageFormat,
+  VideoCodec,
+  VideoPreset,
+  VideoFit,
+  AudioBitrate,
+  AudioCodec,
+  AudioSampleRate,
+  PdfProfile,
+  PdfColorspace,
+} from './ergonomic/presets/index.js';
+
 // Operation-builder surface (T2 / xVDTIm8C) — `client.compress/convert/thumbnail`
 // returns an `OperationBuilder`; `.run()` projects to a flat `Result` /
 // `.submit({webhook})` returns a `Handle`. Progress events are the
