@@ -253,8 +253,9 @@ describe('OperationBuilder.run', () => {
 
   it('resolvedOptions is a data property (not method) so JSON.stringify round-trips', async () => {
     // Codex-reviewer P1: methods silently drop on JSON.stringify. Verify the
-    // shape is plain data, present in stringify output, and matches the T2
-    // placeholder contract (preset:null, presetVersion:1.0).
+    // shape is plain data, present in stringify output, and (T4b) populated
+    // by the preset resolver — no-optimize case: preset:null, quality lands
+    // in sources.explicit (and the back-compat .overrides mirror).
     const mock = makeMockClient();
     const result = await new OperationBuilder(mock.client, 'compress', 'p.jpg', {
       quality: 80,
@@ -263,8 +264,21 @@ describe('OperationBuilder.run', () => {
     expect(typeof resolved).toBe('object');
     expect(resolved.preset).toBeNull();
     expect(resolved.applied).toEqual({ quality: 80 });
-    expect(resolved.overrides).toEqual([]);
+    // Back-compat (deprecated): `.overrides` mirrors `.sources.explicit`.
+    expect(resolved.overrides).toEqual(['quality']);
     expect(resolved.presetVersion).toBe('1.0');
+    // T4b — sources buckets populated by the resolver. Layer-3 (scoped)
+    // stays empty until T4c lands `withPresetDefaults`.
+    expect(resolved.sources).toEqual({
+      sdkDefault: [],
+      clientDefault: [],
+      scopedDefault: [],
+      callPresetOverride: [],
+      explicit: ['quality'],
+    });
+    // No clientDefault / scopedDefault / callPresetOverride participated,
+    // so presetConfigHash is absent.
+    expect(resolved.presetConfigHash).toBeUndefined();
     const roundtrip = JSON.parse(JSON.stringify(result));
     expect(roundtrip.resolvedOptions).toEqual(resolved);
   });
@@ -650,5 +664,235 @@ describe('OperationBuilder.submit', () => {
       webhook: 'https://my.app/cb',
     });
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T4b — preset resolver fail-early + media detection + propagation
+// ---------------------------------------------------------------------------
+
+describe('T4b — OperationBuilder fail-early on GislConfigError (before any I/O)', () => {
+  it('run() throws GislConfigError BEFORE client.uploadFile is called', async () => {
+    const mock = makeMockClient();
+    // mode=Lossless + quality is a post-merge missing_dependency.
+    const builder = new OperationBuilder(mock.client, 'compress', 'p.jpg', {
+      mode: 'lossless',
+      quality: 90,
+    });
+    await expect(builder.run({ maxWait: '30s' })).rejects.toMatchObject({
+      name: 'GislConfigError',
+      reason: 'missing_dependency',
+    });
+    expect(mock.uploadFile).not.toHaveBeenCalled();
+    expect(mock.createWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('submit() throws GislConfigError BEFORE client.uploadFile is called', async () => {
+    const mock = makeMockClient();
+    const builder = new OperationBuilder(mock.client, 'compress', 'p.jpg', {
+      mode: 'lossless',
+      quality: 90,
+    });
+    await expect(builder.submit({ webhook: 'https://x/cb' })).rejects.toMatchObject({
+      name: 'GislConfigError',
+      reason: 'missing_dependency',
+    });
+    expect(mock.uploadFile).not.toHaveBeenCalled();
+    expect(mock.createWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('run() fail-early carries resolvedSnapshot so callers can debug pre-network', async () => {
+    const mock = makeMockClient();
+    const builder = new OperationBuilder(mock.client, 'compress', 'v.mp4', {
+      codec: 'h265',
+      targetSize: '50MB',
+    });
+    try {
+      await builder.run({ maxWait: '30s' });
+      throw new Error('expected throw');
+    } catch (err) {
+      const e = err as { name: string; reason?: string; resolvedSnapshot?: Record<string, unknown> };
+      expect(e.name).toBe('GislConfigError');
+      expect(e.reason).toBe('invalid_combination');
+      expect(e.resolvedSnapshot).toBeDefined();
+      expect(e.resolvedSnapshot?.codec).toBe('h265');
+    }
+    expect(mock.uploadFile).not.toHaveBeenCalled();
+  });
+});
+
+describe('T4b — _detectCompressMedia (input → media classification)', () => {
+  // Import the internal helper directly.
+  it('Blob with image MIME → image', async () => {
+    const { _detectCompressMedia } = await import('../../src/builder.js');
+    const b = new Blob(['x'], { type: 'image/png' });
+    expect(_detectCompressMedia(b)).toBe('image');
+  });
+
+  it('Blob with audio MIME → audio', async () => {
+    const { _detectCompressMedia } = await import('../../src/builder.js');
+    expect(_detectCompressMedia(new Blob(['x'], { type: 'audio/mpeg' }))).toBe('audio');
+  });
+
+  it('Blob with video MIME → video', async () => {
+    const { _detectCompressMedia } = await import('../../src/builder.js');
+    expect(_detectCompressMedia(new Blob(['x'], { type: 'video/mp4' }))).toBe('video');
+  });
+
+  it('application/pdf MIME → document_pdf', async () => {
+    const { _detectCompressMedia } = await import('../../src/builder.js');
+    expect(_detectCompressMedia(new Blob(['x'], { type: 'application/pdf' }))).toBe('document_pdf');
+  });
+
+  it('application/epub+zip MIME → document_epub', async () => {
+    const { _detectCompressMedia } = await import('../../src/builder.js');
+    expect(_detectCompressMedia(new Blob(['x'], { type: 'application/epub+zip' }))).toBe('document_epub');
+  });
+
+  it('docx MIME → document_office', async () => {
+    const { _detectCompressMedia } = await import('../../src/builder.js');
+    const docx = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    expect(_detectCompressMedia(new Blob(['x'], { type: docx }))).toBe('document_office');
+  });
+
+  it('odt MIME → document_odf', async () => {
+    const { _detectCompressMedia } = await import('../../src/builder.js');
+    expect(_detectCompressMedia(new Blob(['x'], { type: 'application/vnd.oasis.opendocument.text' }))).toBe('document_odf');
+  });
+
+  it('filename extension fallback — .jpg → image', async () => {
+    const { _detectCompressMedia } = await import('../../src/builder.js');
+    expect(_detectCompressMedia('photo.jpg')).toBe('image');
+    expect(_detectCompressMedia('PHOTO.JPEG')).toBe('image');
+    expect(_detectCompressMedia('x.heic')).toBe('image');
+  });
+
+  it('filename extension fallback — .mp3 → audio', async () => {
+    const { _detectCompressMedia } = await import('../../src/builder.js');
+    expect(_detectCompressMedia('song.mp3')).toBe('audio');
+    expect(_detectCompressMedia('clip.opus')).toBe('audio');
+  });
+
+  it('filename extension fallback — .mp4 → video', async () => {
+    const { _detectCompressMedia } = await import('../../src/builder.js');
+    expect(_detectCompressMedia('clip.mp4')).toBe('video');
+    expect(_detectCompressMedia('CLIP.MOV')).toBe('video');
+  });
+
+  it('filename extension fallback — .pdf → document_pdf', async () => {
+    const { _detectCompressMedia } = await import('../../src/builder.js');
+    expect(_detectCompressMedia('paper.pdf')).toBe('document_pdf');
+  });
+
+  it('filename extension fallback — .docx → document_office', async () => {
+    const { _detectCompressMedia } = await import('../../src/builder.js');
+    expect(_detectCompressMedia('doc.docx')).toBe('document_office');
+    expect(_detectCompressMedia('sheet.xlsx')).toBe('document_office');
+  });
+
+  it('unrecognised input → undefined (falls back to passthrough)', async () => {
+    const { _detectCompressMedia } = await import('../../src/builder.js');
+    expect(_detectCompressMedia('mystery.zzz')).toBeUndefined();
+    expect(_detectCompressMedia(new Blob(['x']))).toBeUndefined(); // no .type, no .name
+  });
+
+  it('blob.name overrides MIME-less Blob input', async () => {
+    const { _detectCompressMedia } = await import('../../src/builder.js');
+    // A File-shaped object — Blob with a name property
+    const f = new Blob(['x']);
+    Object.defineProperty(f, 'name', { value: 'photo.png' });
+    expect(_detectCompressMedia(f)).toBe('image');
+  });
+});
+
+describe('T4b — non-compress ops bypass the resolver (passthrough)', () => {
+  it('opType="convert" wireOptions === opOptions verbatim (no preset resolution)', async () => {
+    const mock = makeMockClient();
+    await new OperationBuilder(mock.client, 'convert', 'p.jpg', {
+      output_format: 'png',
+    }).run({ maxWait: '30s' });
+    const payload = mock.createWorkflow.mock.calls[0][0];
+    expect(payload.jobs[0].operations[0].options).toEqual({ output_format: 'png' });
+  });
+
+  it('opType="thumbnail" passes opOptions through unchanged', async () => {
+    const mock = makeMockClient();
+    await new OperationBuilder(mock.client, 'thumbnail', 'p.jpg', {
+      width: 200,
+    }).run({ maxWait: '30s' });
+    const payload = mock.createWorkflow.mock.calls[0][0];
+    expect(payload.jobs[0].operations[0].options).toEqual({ width: 200 });
+  });
+
+  it('compress op with unknown media (e.g. Blob without type/name) passes opOptions through verbatim', async () => {
+    const mock = makeMockClient();
+    const blob = new Blob(['x']); // no type, no name → _detectCompressMedia → undefined
+    await new OperationBuilder(mock.client, 'compress', blob, {
+      quality: 80,
+    }).run({ maxWait: '30s' });
+    const payload = mock.createWorkflow.mock.calls[0][0];
+    // Resolver bypassed — opOptions verbatim, no snake_case translation.
+    expect(payload.jobs[0].operations[0].options).toEqual({ quality: 80 });
+  });
+});
+
+describe('T4b — MapEachBuilder child inherits client presetDefaults via Proxy', () => {
+  it("child builder constructed by user's fn(art) carries the SAME presetDefaults the parent ergonomic-client closes over", async () => {
+    // Architect adjustment e1 — pins that the user-supplied fn(art)
+    // calling `client.compress(art, ...)` routes through the wrapErgonomic
+    // Proxy, which transparently passes the closed-over presetDefaults
+    // into the new OperationBuilder for the child. We construct the
+    // child builder via the actual gisl.create() Proxy path.
+    process.env.GISL_API_KEY = 'k';
+    const { create } = await import('../../src/gisl.js');
+    const { presetDefaults } = await import('../../src/ergonomic/presets/index.js');
+    const { OptimizeFor } = await import('../../src/generated/sdk_spec/enums.js');
+
+    const defaults = presetDefaults().imageCompress(OptimizeFor.Size, { quality: 88 });
+    const client = await create({ apiKey: 'k', presetDefaults: defaults });
+
+    // Capture the OperationBuilder produced by client.compress(art) to
+    // assert the presetDefaults handle ends up on the resolver-side.
+    const builder = client.compress('child.jpg', { optimize: OptimizeFor.Size });
+    // The builder's presetDefaults is private — assert observable behaviour
+    // instead by running it through a mock-injected client. Simplest path
+    // here: spy on `_resolve()` outputs via the public Result chain.
+    // We assert the builder TYPE — the Proxy returned a real OperationBuilder
+    // with .run, and the run() output's resolvedOptions includes the
+    // client-default delta.
+    expect(builder).toBeDefined();
+    expect(typeof builder.run).toBe('function');
+
+    // Now drive a full run with the real ergonomic surface, mocking only
+    // the network calls via a vi.spyOn on the underlying GislClient.
+    const { GislClient } = await import('../../src/client.js');
+    vi.spyOn(GislClient.prototype, 'uploadFile').mockResolvedValue({
+      fileId: 'f1',
+      contentType: 'image/jpeg',
+      sizeBytes: 100,
+    } as unknown as Awaited<ReturnType<GislClient['uploadFile']>>);
+    vi.spyOn(GislClient.prototype, 'createWorkflow').mockResolvedValue({
+      workflowId: 'wf_kid',
+      status: 'completed',
+      jobs: [{ jobId: 'j', ref: 'op', status: 'completed' }],
+    } as unknown as Awaited<ReturnType<GislClient['createWorkflow']>>);
+    vi.spyOn(GislClient.prototype, 'getWorkflowDownloads').mockResolvedValue({
+      downloads: [{ jobId: 'j', ref: 'op', files: [] }],
+    } as unknown as Awaited<ReturnType<GislClient['getWorkflowDownloads']>>);
+    vi.spyOn(GislClient.prototype, 'getWorkflowStatus').mockResolvedValue({
+      workflowId: 'wf_kid',
+      status: 'completed',
+      jobs: [{ jobId: 'j', ref: 'op', status: 'completed' }],
+    } as unknown as Awaited<ReturnType<GislClient['getWorkflowStatus']>>);
+
+    const result = await builder.run({ maxWait: '30s', useSSE: false });
+    // clientDefault layer participated → presetConfigHash present.
+    expect(result.resolvedOptions.presetConfigHash).toMatch(/^sha256:[0-9a-f]{64}$/);
+    // quality came from client default, NOT sdkDefault.
+    expect(result.resolvedOptions.sources.clientDefault).toContain('quality');
+    expect(result.resolvedOptions.applied.quality).toBe(88);
+
+    vi.restoreAllMocks();
+    delete process.env.GISL_API_KEY;
   });
 });

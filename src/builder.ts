@@ -45,6 +45,72 @@ import type {
 } from './types.js';
 import { uploadSource } from './types.js';
 import { GislTimeoutError } from './errors.js';
+import type { PresetDefaults, PresetMedia } from './ergonomic/presets/index.js';
+import type { OptimizeFor } from './generated/sdk_spec/enums.js';
+import {
+  resolveCompressOptions,
+  type ResolveCompressOptionsInput,
+} from './ergonomic/preset_resolver.js';
+
+/**
+ * Best-effort detection of the compress-operation media from the
+ * builder's input. T4b only resolves presets for compress; the wire's
+ * operation type union already narrows here (`compress_image`,
+ * `compress_video`, …) but the ergonomic builder takes a single
+ * `compress` op type and infers media from filename extension /
+ * content type at call time. Returns `undefined` when the input is
+ * unresolvable (e.g. raw `Blob` without `.type`) — caller then falls
+ * back to passthrough (no preset resolution).
+ *
+ * @internal — exported for tests + the preset resolver.
+ */
+export function _detectCompressMedia(input: string | Blob): PresetMedia | undefined {
+  let filename: string | undefined;
+  let mime: string | undefined;
+  if (typeof input === 'string') {
+    filename = input;
+  } else {
+    mime = input.type !== '' ? input.type : undefined;
+    const named = (input as { name?: string }).name;
+    if (typeof named === 'string') filename = named;
+  }
+  // MIME-first if present — Blob.type is canonical.
+  if (mime !== undefined) {
+    if (mime.startsWith('image/')) return 'image';
+    if (mime.startsWith('audio/')) return 'audio';
+    if (mime.startsWith('video/')) return 'video';
+    if (mime === 'application/pdf') return 'document_pdf';
+    if (mime === 'application/epub+zip') return 'document_epub';
+    if (
+      mime === 'application/vnd.oasis.opendocument.text' ||
+      mime === 'application/vnd.oasis.opendocument.spreadsheet' ||
+      mime === 'application/vnd.oasis.opendocument.presentation'
+    ) {
+      return 'document_odf';
+    }
+    if (
+      mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+      mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+      mime === 'application/vnd.openxmlformats-officedocument.presentationml.presentation' ||
+      mime === 'application/msword' ||
+      mime === 'application/vnd.ms-excel' ||
+      mime === 'application/vnd.ms-powerpoint'
+    ) {
+      return 'document_office';
+    }
+  }
+  if (filename === undefined) return undefined;
+  const ext = filename.toLowerCase().split('.').pop();
+  if (ext === undefined) return undefined;
+  if (['jpg', 'jpeg', 'png', 'webp', 'avif', 'gif', 'tiff', 'tif', 'bmp', 'heic', 'heif'].includes(ext)) return 'image';
+  if (['mp3', 'aac', 'm4a', 'ogg', 'oga', 'flac', 'wav', 'opus'].includes(ext)) return 'audio';
+  if (['mp4', 'mov', 'mkv', 'webm', 'avi', 'wmv', 'flv', 'm4v'].includes(ext)) return 'video';
+  if (ext === 'pdf') return 'document_pdf';
+  if (ext === 'epub') return 'document_epub';
+  if (['odt', 'ods', 'odp'].includes(ext)) return 'document_odf';
+  if (['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'].includes(ext)) return 'document_office';
+  return undefined;
+}
 
 // ---------------------------------------------------------------------------
 // ArtifactRef — the shape passed to `.mapEach(fn)` callbacks.
@@ -128,15 +194,57 @@ export interface JobBreakdown {
 }
 
 /**
- * Preset → resolved-options projection. T2 placeholder: `preset` is always
- * `null` until T4 ships the preset matrix. The shape itself is normative
- * per `docs/plans/sdk-ergonomics/plan.md` §11b.
+ * Per-source field-name buckets surfaced on
+ * {@link ResolvedOptions.sources}. Each bucket lists the wire field
+ * names (snake_case) contributed by that layer of the preset resolver.
+ * Buckets are populated in resolver order (lowest precedence first);
+ * a field that appears in a higher-precedence bucket WAS NOT also
+ * present in a lower one (the resolver records winners, not all
+ * participants).
+ *
+ * `scopedDefault` is reserved for T4c (`ULAlOP6j`) — `withPresetDefaults`
+ * scoped derive. T4b populates it as `[]`.
+ */
+export interface ResolvedOptionsSources {
+  readonly sdkDefault: readonly string[];
+  readonly clientDefault: readonly string[];
+  readonly scopedDefault: readonly string[];
+  readonly callPresetOverride: readonly string[];
+  readonly explicit: readonly string[];
+}
+
+/**
+ * Preset → resolved-options projection. Plan §11b normative shape with
+ * the T4b extension: `sources` (per-layer field-name buckets) +
+ * `presetConfigHash` (sha256 over caller-side deltas, present iff any
+ * non-SDK layer participated).
+ *
+ * `overrides: readonly string[]` is RETAINED for backward compat (T2
+ * surface; current callers may read it). It is now a duplicate of
+ * `sources.explicit` and will be removed in a future major. New code
+ * should read `sources` instead.
  */
 export interface ResolvedOptions {
   readonly preset: string | null;
   readonly applied: Record<string, unknown>;
+  /**
+   * @deprecated Use {@link ResolvedOptions.sources}.explicit. Retained
+   * for backward compat with T2; mirrors `sources.explicit` exactly.
+   */
   readonly overrides: readonly string[];
   readonly presetVersion: string;
+  /**
+   * Per-layer field-name buckets for the preset resolver. Populated by
+   * T4b (`27rE1fZn`); legacy placeholder rows emit empty buckets.
+   */
+  readonly sources: ResolvedOptionsSources;
+  /**
+   * SHA-256 over the canonical JSON of `{clientDefault, scopedDefault,
+   * callPresetOverride}` (sorted keys, no whitespace), hex-encoded,
+   * prefix `sha256:`. ABSENT when only `sdkDefault` participated (or
+   * when no preset resolution ran at all — pre-T4b placeholder).
+   */
+  readonly presetConfigHash?: string;
 }
 
 /**
@@ -263,7 +371,60 @@ export class OperationBuilder {
     // level SDK must type-check through the ergonomic surface too).
     private readonly input: string | Blob,
     private readonly opOptions: Record<string, unknown>,
+    /**
+     * Client-scope preset defaults wired through `wrapErgonomic` from
+     * `gisl.create({ presetDefaults })` (T4b). When provided AND the
+     * op type is `compress`, `run()`/`submit()` walk the preset
+     * resolver before constructing the workflow payload. `undefined`
+     * preserves the pre-T4b behaviour: pass `opOptions` through
+     * verbatim.
+     */
+    private readonly presetDefaults?: PresetDefaults,
   ) {}
+
+  /**
+   * Run the preset resolver for compress operations and return the
+   * resolved `{wireOptions, resolvedOptions}` tuple. For non-compress
+   * operations (or when the op doesn't have a known compress media
+   * fingerprint), returns the legacy passthrough — `opOptions` direct
+   * to the wire, placeholder `ResolvedOptions`.
+   *
+   * Throws `GislConfigError` for invalid combos BEFORE any network
+   * round-trip — caller's signal is propagated, but we want fail-early
+   * before the upload too.
+   */
+  private _resolve(): { wireOptions: Record<string, unknown>; resolvedOptions?: ResolvedOptions } {
+    if (this.opType !== 'compress') {
+      return { wireOptions: { ...this.opOptions } };
+    }
+    const media = _detectCompressMedia(this.input);
+    if (media === undefined) {
+      // Unknown media (e.g. Blob without a recognised filename
+      // extension) — fall back to passthrough. The wire will still
+      // accept the call, just no preset resolution.
+      return { wireOptions: { ...this.opOptions } };
+    }
+    const { optimize, presetOverrides, ...explicitOptions } = this.opOptions as {
+      optimize?: OptimizeFor;
+      presetOverrides?: Readonly<Record<string, unknown>>;
+      [k: string]: unknown;
+    };
+    const input: ResolveCompressOptionsInput = {
+      media,
+      op: 'compress',
+      explicitOptions,
+    };
+    if (this.presetDefaults !== undefined) {
+      (input as { presetDefaults?: PresetDefaults }).presetDefaults = this.presetDefaults;
+    }
+    if (presetOverrides !== undefined) {
+      (input as { presetOverrides?: Readonly<Record<string, unknown>> }).presetOverrides = presetOverrides;
+    }
+    if (optimize !== undefined) {
+      (input as { optimize?: OptimizeFor }).optimize = optimize;
+    }
+    return resolveCompressOptions(input);
+  }
 
   /**
    * Execute the operation end-to-end. Uploads the input, creates the
@@ -276,6 +437,10 @@ export class OperationBuilder {
     const signal = options.signal;
     const onProgress = options.onProgress;
     const useSSE = options.useSSE ?? true;
+
+    // 0. Resolve presets FIRST so a GislConfigError fails the call
+    // before any I/O — the SDK promised fail-early for invalid combos.
+    const resolved = this._resolve();
 
     // 1. Upload — emits {phase:'upload'} progress events from byte-counter.
     const uploadOpts: UploadOptions = { signal };
@@ -299,7 +464,7 @@ export class OperationBuilder {
     const job: JobDefinitionPayload = {
       id: 'op',
       source: uploadSource(uploadResp.fileId),
-      operations: [{ type: this.opType as OperationDef['type'], options: this.opOptions }],
+      operations: [{ type: this.opType as OperationDef['type'], options: resolved.wireOptions }],
     };
     const payload: WorkflowCreatePayload = { jobs: [job] };
     const created = await this.client.createWorkflow(payload);
@@ -325,7 +490,7 @@ export class OperationBuilder {
       );
     }
     const downloads = await this.client.getWorkflowDownloads(created.workflowId);
-    return _projectResult(finalStatus, downloads.downloads, this.opOptions);
+    return _projectResult(finalStatus, downloads.downloads, resolved.wireOptions, resolved.resolvedOptions);
   }
 
   /**
@@ -335,12 +500,15 @@ export class OperationBuilder {
    * receives completion + the `webhookSecret` is the verifier seed.
    */
   async submit(options: SubmitOptions): Promise<Handle> {
+    // Resolve presets before any I/O so a GislConfigError fails the
+    // call before the upload — same fail-early contract as run().
+    const resolved = this._resolve();
     const uploadResp = await this.client.uploadFile(this.input);
 
     const job: JobDefinitionPayload = {
       id: 'op',
       source: uploadSource(uploadResp.fileId),
-      operations: [{ type: this.opType as OperationDef['type'], options: this.opOptions }],
+      operations: [{ type: this.opType as OperationDef['type'], options: resolved.wireOptions }],
     };
     const payload: WorkflowCreatePayload = {
       jobs: [job],
@@ -705,11 +873,19 @@ export async function _pollToTerminal(
 // Projection
 // ---------------------------------------------------------------------------
 
-/** @internal — exported for reuse by `merge.ts` (T3) and future builders. */
+/** @internal — exported for reuse by `merge.ts` (T3) and future builders.
+ *
+ * T4b adds the optional `resolvedOptionsOverride` argument. When provided,
+ * it supplants the placeholder ResolvedOptions the projector would
+ * otherwise emit. `MergeBuilder` and other non-resolver builders omit
+ * this argument and receive the legacy placeholder shape unchanged
+ * (back-compat — merge does NOT go through the preset resolver in T4b).
+ */
 export function _projectResult(
   status: WorkflowStatusResponse,
   jobDownloads: readonly { ref: string; jobId: string; files: readonly OperationDownload[] }[],
   appliedOptions: Record<string, unknown>,
+  resolvedOptionsOverride?: ResolvedOptions,
 ): Result {
   const artifacts: Artifact[] = [];
   for (const job of jobDownloads) {
@@ -775,11 +951,18 @@ export function _projectResult(
     artifacts,
     jobs,
     ...(artifacts.length === 1 ? { url: artifacts[0].url } : {}),
-    resolvedOptions: {
+    resolvedOptions: resolvedOptionsOverride ?? {
       preset: null,
       applied: { ...appliedOptions },
       overrides: [],
       presetVersion: '1.0',
+      sources: {
+        sdkDefault: [],
+        clientDefault: [],
+        scopedDefault: [],
+        callPresetOverride: [],
+        explicit: [],
+      },
     },
   };
   return result;

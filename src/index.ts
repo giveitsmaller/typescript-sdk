@@ -56,6 +56,9 @@ export {
   connectionSource,
 } from './types.js';
 
+// T4b — typed error metadata interface for GislConfigError.
+export type { GislConfigErrorMetadata } from './errors.js';
+
 // Errors
 export {
   GislError,
@@ -160,11 +163,18 @@ export type {
   ProcessingProgressEvent,
   ProgressEvent,
   ResolvedOptions,
+  ResolvedOptionsSources,
   Result,
   RunOptions,
   SubmitOptions,
   UploadProgressEvent,
 } from './builder.js';
+// T4b — preset resolver public surface (PRESET_VERSION constant + types).
+export { PRESET_VERSION, resolveCompressOptions } from './ergonomic/preset_resolver.js';
+export type {
+  ResolveCompressOptionsInput,
+  ResolveCompressOptionsOutput,
+} from './ergonomic/preset_resolver.js';
 
 // Re-export key contract types so users only need @giveitsmaller/sdk
 export type {

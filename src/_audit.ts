@@ -140,6 +140,11 @@ import type {
   AudioSampleRate,
   PdfProfile,
   PdfColorspace,
+  // T4b / 27rE1fZn — resolver public surface + augmented GislConfigError metadata.
+  GislConfigErrorMetadata,
+  ResolvedOptionsSources,
+  ResolveCompressOptionsInput,
+  ResolveCompressOptionsOutput,
 } from './index.js';
 import { ANONYMOUS_ALLOWLIST } from './gisl.js';
 
@@ -274,4 +279,9 @@ export function _runAudit(): void {
   accept<AudioSampleRate>();
   accept<PdfProfile>();
   accept<PdfColorspace>();
+  // T4b / 27rE1fZn — preset resolver public types.
+  accept<GislConfigErrorMetadata>();
+  accept<ResolvedOptionsSources>();
+  accept<ResolveCompressOptionsInput>();
+  accept<ResolveCompressOptionsOutput>();
 }

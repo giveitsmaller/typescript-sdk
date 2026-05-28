@@ -98,7 +98,12 @@ interface _InternalCreateOptions extends GislCreateOptions {
  * legitimately have no apiKey at construction time.
  */
 export async function create(opts: GislCreateOptions = {}): Promise<ErgonomicClient> {
-  return wrapErgonomic(await _createInternal(opts));
+  // Extract presetDefaults BEFORE `_createInternal` destructures and
+  // strips it — the resolver needs the value for every operation call,
+  // not just construction. `_createInternal` still strips the slot
+  // from the low-level `GislClient` config (no leak into transport).
+  const presetDefaults = opts.presetDefaults;
+  return wrapErgonomic(await _createInternal(opts), presetDefaults);
 }
 
 /**
@@ -108,12 +113,16 @@ export async function create(opts: GislCreateOptions = {}): Promise<ErgonomicCli
  * builder-wrap INSIDE, anonymous-wrap OUTSIDE so the allowlist gate
  * runs last in `_internalAnonymous` (see `_createInternal`).
  */
-function wrapErgonomic(client: GislClient): ErgonomicClient {
+function wrapErgonomic(client: GislClient, presetDefaults?: PresetDefaults): ErgonomicClient {
   return new Proxy(client, {
     get(target, prop, receiver) {
       if (prop === 'compress' || prop === 'convert' || prop === 'thumbnail') {
         return (input: string | Blob, options: Record<string, unknown> = {}): OperationBuilder => {
-          return new OperationBuilder(target, prop, input, options);
+          // T4b — pass client-scope presetDefaults into the builder so
+          // .run()/.submit() consult the preset resolver. The Proxy's
+          // closure carries the same reference for every per-call
+          // builder construction.
+          return new OperationBuilder(target, prop, input, options, presetDefaults);
         };
       }
       if (prop === 'merge') {

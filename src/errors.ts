@@ -377,16 +377,71 @@ export class GislMultipartSessionAuthRequiredError extends GislApiError {
 }
 
 /**
+ * Optional structured metadata attached to a {@link GislConfigError}. The
+ * preset resolver (T4b) raises errors with these fields populated so
+ * callers can branch on machine-readable codes rather than parsing the
+ * human message. Every field is optional — existing call sites that
+ * throw `new GislConfigError(message)` keep working unchanged.
+ */
+export interface GislConfigErrorMetadata {
+  /**
+   * Machine-readable error code. Resolver-side values today:
+   * `'invalid_combination'`, `'missing_dependency'`, `'type_mismatch'`,
+   * `'unknown_field'`, `'invalid_target_size'`. Other call sites may add
+   * codes — the union is open.
+   */
+  readonly reason?: string;
+  /**
+   * Field names (camelCase) that participated in the rejection. For
+   * `invalid_combination` reasons this is the *pair* that conflicts
+   * (e.g. `['targetSize', 'codec']`); for `missing_dependency` this is
+   * the dependent field plus the field whose value blocks it.
+   */
+  readonly conflictingFields?: readonly string[];
+  /**
+   * The merged wire-shape snapshot the resolver computed BEFORE the
+   * validation rejected it. Lets callers see "what would have been
+   * sent" for debugging without re-running the chain.
+   */
+  readonly resolvedSnapshot?: Readonly<Record<string, unknown>>;
+  /**
+   * Short human-readable remediation hint specific to the error. E.g.
+   * "Switch codec to H264, or drop targetSize and use crf instead."
+   */
+  readonly suggestion?: string;
+}
+
+/**
  * Root of the LOCAL config-error tree — thrown before any HTTP/file I/O.
  * Sibling of `GislApiError` (which represents server-side error envelopes).
  * Reserve for fail-early errors raised by the ergonomic-layer factory or
  * credential-chain resolver when the caller hasn't supplied something the
  * SDK needs to make a request. Never carries an HTTP status code.
+ *
+ * Optional `metadata` (T4b — `27rE1fZn`) carries structured fields used
+ * by the preset resolver and other ergonomic-layer validators. Existing
+ * call sites that pass `(message)` keep working — metadata is purely
+ * additive and defaults to `undefined`.
  */
 export class GislConfigError extends GislError {
-  constructor(message: string) {
+  readonly reason?: string;
+  readonly conflictingFields?: readonly string[];
+  readonly resolvedSnapshot?: Readonly<Record<string, unknown>>;
+  readonly suggestion?: string;
+
+  constructor(message: string, metadata?: GislConfigErrorMetadata) {
     super(message);
     this.name = 'GislConfigError';
+    if (metadata !== undefined) {
+      if (metadata.reason !== undefined) this.reason = metadata.reason;
+      if (metadata.conflictingFields !== undefined) {
+        this.conflictingFields = metadata.conflictingFields;
+      }
+      if (metadata.resolvedSnapshot !== undefined) {
+        this.resolvedSnapshot = metadata.resolvedSnapshot;
+      }
+      if (metadata.suggestion !== undefined) this.suggestion = metadata.suggestion;
+    }
   }
 }
 
