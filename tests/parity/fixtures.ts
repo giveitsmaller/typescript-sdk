@@ -152,8 +152,10 @@ export const KNOWN_SDK_METHODS: ReadonlySet<string> = new Set([
   // Ergonomic-facade verbs (PHP P2 / 7QXkzoIi symmetric addition). Dispatched
   // through `OperationBuilder` (`packages/typescript/src/builder.ts`); the
   // parity shim at `invoke.ts` constructs the ergonomic client and routes
-  // the fixture-defined terminal (`run` / `submit`) through it. `watermark`
-  // / `archive` / `merge` / `mapEach` / `bundle` remain UNLISTED:
+  // the fixture-defined terminal (`run` / `submit`) through it.
+  // `merge` was added in PHP P3 (dxIeLVbP) via a multi-input dispatch
+  // path mirrored on the TS side. `watermark` / `archive` / `mapEach`
+  // / `bundle` remain UNLISTED:
   //
   //   - `watermark`: v2 OperationType has no bare `watermark` value
   //     (split into image_watermark/text_watermark); needs a preset-style
@@ -161,10 +163,11 @@ export const KNOWN_SDK_METHODS: ReadonlySet<string> = new Set([
   //   - `archive`: contract-modeled as multi-input (`inputs[]`),
   //     incompatible with the single-input `OperationBuilder`. Lands
   //     with P4's `.bundle()` archive sugar.
-  //   - `merge` / `mapEach` / `bundle` land in P3 / P4.
+  //   - `mapEach` / `bundle` land in P4.
   'compress',
   'thumbnail',
   'convert',
+  'merge',
 ]);
 
 // ---------------------------------------------------------------------------

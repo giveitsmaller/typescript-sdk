@@ -9,6 +9,16 @@ import { createHmac } from 'node:crypto';
 
 import { GislClient } from '../../src/client.js';
 import { OperationBuilder } from '../../src/builder.js';
+import {
+  MergeBuilder,
+  asset as mergeAsset,
+  clip as mergeClip,
+  handle as mergeHandle,
+  type Asset as MergeAsset,
+  type ClipOptions,
+  type MergeOptions,
+  type SequenceEntry,
+} from '../../src/merge.js';
 import { verifyWebhook } from '../../src/webhook.js';
 
 import type { Fixture, FixtureValue } from './fixtures.js';
@@ -29,6 +39,12 @@ const ERGONOMIC_DISPATCH_VERBS: ReadonlySet<string> = new Set([
   // `watermark` / `archive` deliberately omitted — see fixtures.ts for
   // why (v2 OperationType / multi-input shape mismatches).
 ]);
+
+// Multi-input ergonomic verbs — symmetric to PHP P3's
+// ERGONOMIC_MULTI_INPUT_VERBS (dxIeLVbP). Dispatched through
+// `MergeBuilder` with a per-asset list arg shape; see
+// `invokeMergeMultiInput` below for the fixture contract.
+const ERGONOMIC_MULTI_INPUT_VERBS: ReadonlySet<string> = new Set(['merge']);
 
 const DEFAULT_CLIENT_CONFIG = {
   baseUrl: 'https://api.test.example.com',
@@ -105,6 +121,15 @@ export async function invokeFixture(fixture: Fixture): Promise<{
     }
   }
 
+  if (ERGONOMIC_MULTI_INPUT_VERBS.has(method)) {
+    try {
+      const multiInputReturn = await invokeMergeMultiInput(client, method, args);
+      return { returnValue: multiInputReturn };
+    } catch (err) {
+      return { returnValue: undefined, thrown: err };
+    }
+  }
+
   // Type: all public GislClient methods return Promise<unknown>.
   const fn = (client as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>)[method];
   if (typeof fn !== 'function') {
@@ -169,6 +194,104 @@ async function invokeErgonomic(
   }
   throw new Error(
     `invoke: ergonomic "${method}" terminal must declare exactly one of 'run' or 'submit'`,
+  );
+}
+
+/**
+ * Multi-input merge dispatch — symmetric to PHP P3
+ * (`packages/php/tests/parity/Invoke.php::dispatchErgonomicMultiInput`).
+ * Args shape:
+ *   args[0]: list of asset entries. Each is either a Blob/File (from a
+ *     materialised `{kind: bytes, ...}` fixture entry) OR a plain object
+ *     `{kind: 'handle', fileId: <uuid>}`.
+ *   args[1]: optional `MergeOptions` mapping; `null`/`undefined` defaults.
+ *   args[2]: optional sequence list — each entry `{asset: <int>, options?: {...}}`.
+ *     `null`/`undefined` → declared order, no per-input options.
+ *   args[3]: optional terminal `{submit: {webhook}}` or `{run: {...}}`;
+ *     defaults to `{submit: {webhook: 'https://example.com/webhook'}}`.
+ */
+async function invokeMergeMultiInput(
+  client: GislClient,
+  method: string,
+  args: ReadonlyArray<unknown>,
+): Promise<unknown> {
+  const rawAssets = args[0];
+  if (!Array.isArray(rawAssets) || rawAssets.length === 0) {
+    throw new Error(
+      `invoke: multi-input "${method}" args[0] must be a non-empty list of asset entries`,
+    );
+  }
+
+  const assets: MergeAsset[] = rawAssets.map((entry, idx) => {
+    if (entry instanceof Blob) {
+      return mergeAsset(entry);
+    }
+    if (entry !== null && typeof entry === 'object' && (entry as { kind?: string }).kind === 'handle') {
+      const fileId = (entry as { fileId?: string }).fileId;
+      if (typeof fileId !== 'string' || fileId === '') {
+        throw new Error(
+          `invoke: multi-input "${method}" args[0][${idx}] handle requires non-empty fileId`,
+        );
+      }
+      return mergeHandle(fileId);
+    }
+    throw new Error(
+      `invoke: multi-input "${method}" args[0][${idx}] must be a materialised Blob or '{kind:"handle",fileId}' object`,
+    );
+  });
+
+  const mergeOpts = (args[1] ?? {}) as MergeOptions;
+  const builder = new MergeBuilder(client, assets, mergeOpts);
+  void method; // currently 'merge' only — kept for symmetry with the future bundle/archive multi-input verbs
+
+  const rawSequence = args[2];
+  if (Array.isArray(rawSequence)) {
+    const entries: SequenceEntry[] = rawSequence.map((entry, idx) => {
+      if (entry === null || typeof entry !== 'object') {
+        throw new Error(`invoke: multi-input merge sequence[${idx}] must be a mapping`);
+      }
+      const assetIdx = (entry as { asset?: unknown }).asset;
+      if (typeof assetIdx !== 'number' || !Number.isInteger(assetIdx)) {
+        throw new Error(
+          `invoke: multi-input merge sequence[${idx}].asset must be an int index into args[0]`,
+        );
+      }
+      const asset = assets[assetIdx];
+      if (asset === undefined) {
+        throw new Error(
+          `invoke: multi-input merge sequence[${idx}].asset index ${assetIdx} out of range (declared ${assets.length} assets)`,
+        );
+      }
+      const options = (entry as { options?: unknown }).options;
+      if (options !== undefined && options !== null) {
+        if (typeof options !== 'object') {
+          throw new Error(`invoke: multi-input merge sequence[${idx}].options must be a mapping or null`);
+        }
+        return mergeClip(asset, options as ClipOptions);
+      }
+      return asset;
+    });
+    builder.sequence(...entries);
+  }
+
+  const terminal = (args[3] ?? { submit: { webhook: 'https://example.com/webhook' } }) as
+    | { submit: { webhook: string } }
+    | { run: { maxWait: string | number; useSSE?: boolean; pollIntervalMs?: number } };
+
+  if ('submit' in terminal) {
+    return builder.submit({ webhook: terminal.submit.webhook });
+  }
+  if ('run' in terminal) {
+    return builder.run({
+      maxWait: terminal.run.maxWait,
+      ...(terminal.run.useSSE !== undefined ? { useSSE: terminal.run.useSSE } : {}),
+      ...(terminal.run.pollIntervalMs !== undefined
+        ? { pollIntervalMs: terminal.run.pollIntervalMs }
+        : {}),
+    });
+  }
+  throw new Error(
+    `invoke: multi-input merge terminal must declare exactly one of 'run' or 'submit'`,
   );
 }
 
