@@ -16,14 +16,15 @@ export type ErrorCode =
   | "validation_failed"
   | "auth_failed"
   | "feature_tier_restricted"
-  | "tier_restricted"
+  | "tier_restriction"
   | "multipart_session_ownership"
   | "multipart_session_auth_required"
   | "multipart_session_not_found"
   | "workflow_expired"
   | "balance_exhausted"
   | "feature_not_available"
-  | "upload_cap_exceeded"
+  | "upload_size_exceeds_tier"
+  | "upload_duration_exceeds_tier"
   | "probe_pending"
   | "requires_reencode"
   | "invalid_options"
@@ -233,15 +234,15 @@ export const ERROR_CODES: Readonly<Record<ErrorCode, ErrorEntry>> = Object.freez
       "currentTier": "string",
     }),
   }),
-  "tier_restricted": Object.freeze({
-    code: "tier_restricted",
+  "tier_restriction": Object.freeze({
+    code: "tier_restriction",
     category: "api" as ErrorCategory,
     source: "error_type",
     status: "wired" as ErrorStatus,
     httpStatus: 403,
     retryable: false,
     sdkClass: "GislTierRestrictedError",
-    description: "403 — general tier restriction (not feature-specific).",
+    description: "403 — general tier restriction (not feature-specific). Wire emits `error_type: \"tier_restriction\"`; the SDK class name keeps the `TierRestricted` adjective form per packages/typescript/src/errors.ts.",
     metadataSchema: Object.freeze({
       "requiredTier": "string",
       "currentTier": "string",
@@ -327,18 +328,31 @@ export const ERROR_CODES: Readonly<Record<ErrorCode, ErrorEntry>> = Object.freez
       "feature": "string",
     }),
   }),
-  "upload_cap_exceeded": Object.freeze({
-    code: "upload_cap_exceeded",
+  "upload_size_exceeds_tier": Object.freeze({
+    code: "upload_size_exceeds_tier",
     category: "api" as ErrorCategory,
-    source: "ErrorEnvelope.error",
+    source: "error_type",
     status: "wired" as ErrorStatus,
     httpStatus: 422,
     retryable: false,
     sdkClass: "GislUploadCapExceededError",
-    description: "422 — uploaded file exceeds the per-tier size cap. `kind` discriminates which cap; surfaced post-upload from the probe envelope.",
+    description: "422 — uploaded file size exceeds the per-tier cap. Wire `error_type: \"upload_size_exceeds_tier\"`. SDK class GislUploadCapExceededError covers this + upload_duration_exceeds_tier (sibling code below).",
     metadataSchema: Object.freeze({
-      "kind": "string",
       "size": "integer",
+      "ceiling": "integer",
+    }),
+  }),
+  "upload_duration_exceeds_tier": Object.freeze({
+    code: "upload_duration_exceeds_tier",
+    category: "api" as ErrorCategory,
+    source: "error_type",
+    status: "wired" as ErrorStatus,
+    httpStatus: 422,
+    retryable: false,
+    sdkClass: "GislUploadCapExceededError",
+    description: "422 — uploaded media duration exceeds the per-tier cap. Wire `error_type: \"upload_duration_exceeds_tier\"`. Shares SDK class GislUploadCapExceededError with upload_size_exceeds_tier; consumers branch on the metadata.",
+    metadataSchema: Object.freeze({
+      "duration": "integer",
       "ceiling": "integer",
     }),
   }),
@@ -346,11 +360,11 @@ export const ERROR_CODES: Readonly<Record<ErrorCode, ErrorEntry>> = Object.freez
     code: "probe_pending",
     category: "api" as ErrorCategory,
     source: "error_type",
-    status: "planned" as ErrorStatus,
+    status: "wired" as ErrorStatus,
     httpStatus: 422,
     retryable: true,
     sdkClass: "GislApiError",
-    description: "422 on workflow create — upload probing not yet complete; retry after the upload finishes probing.",
+    description: "422 on workflow create — upload probing not yet complete; retry after the upload finishes probing. Wire `error_type: \"probe_pending\"`.",
     metadataSchema: Object.freeze({
       "jobRef": "string",
     }),
@@ -472,12 +486,13 @@ export const ERROR_CODES: Readonly<Record<ErrorCode, ErrorEntry>> = Object.freez
 export const ERROR_CATEGORIES: Readonly<Record<ErrorCategory, readonly ErrorCode[]>> = Object.freeze({
   api: Object.freeze([
     "feature_tier_restricted",
-    "tier_restricted",
+    "tier_restriction",
     "multipart_session_not_found",
     "workflow_expired",
     "balance_exhausted",
     "feature_not_available",
-    "upload_cap_exceeded",
+    "upload_size_exceeds_tier",
+    "upload_duration_exceeds_tier",
     "probe_pending",
     "requires_reencode",
     "workflow_failed",
