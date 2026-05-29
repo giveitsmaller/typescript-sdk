@@ -594,6 +594,57 @@ describe('resolveCompressOptions — presetConfigHash', () => {
     }).resolvedOptions.presetConfigHash;
     expect(a).not.toBe(b);
   });
+
+  // CROSS-LANGUAGE DETERMINISM ANCHOR (koMKJjLY / P6). These exact digests
+  // are ALSO pinned in the PHP suite (PresetResolverTest.php) for the SAME
+  // logical inputs. If TS and PHP canonical-JSON serialisation ever diverge
+  // (key ordering, the empty-cell `{}` edge, number formatting), one side's
+  // pin breaks — that is the whole point of `presetConfigHash`. Do NOT relax
+  // to a regex; the byte-identity across runners IS the contract.
+  it('exact hash — single override {quality:70}, no optimize', () => {
+    const { resolvedOptions } = resolveCompressOptions({
+      media: 'image',
+      op: 'compress',
+      presetOverrides: { quality: 70 },
+      explicitOptions: {},
+    });
+    expect(resolvedOptions.presetConfigHash).toBe(
+      'sha256:5a5b9d555e824e78f2a06f0b57fe9c5c09c9e2fc396d79f2b0510a457018bd23',
+    );
+  });
+
+  it('exact hash — override {quality:70, autoOrient:true} sorts keys', () => {
+    const { resolvedOptions } = resolveCompressOptions({
+      media: 'image',
+      op: 'compress',
+      presetOverrides: { quality: 70, autoOrient: true },
+      explicitOptions: {},
+    });
+    expect(resolvedOptions.presetConfigHash).toBe(
+      'sha256:1c312c5c010b9da62ccc1050776179b736dab241d839fe827f85e5f745abe9e4',
+    );
+  });
+
+  it('exact hash — empty registered override serialises as {}', () => {
+    const { resolvedOptions } = resolveCompressOptions({
+      media: 'image',
+      op: 'compress',
+      presetOverrides: {},
+      explicitOptions: {},
+    });
+    expect(resolvedOptions.presetConfigHash).toBe(
+      'sha256:1ff6cf5e4bcbc2dbeb458597b0726417ab369f013c4696b3b1a485a475cfb25d',
+    );
+  });
+
+  // NOTE: the clientDefault-layer hash is deliberately NOT cross-anchored.
+  // PHP and TS reconstruct a REGISTERED client-default cell into different
+  // record shapes (PHP a sparse {quality:75}; TS carries extra structure), so
+  // the same logical client config hashes differently across the two SDKs.
+  // The override-path anchors above prove the canonicalJson serialiser itself
+  // is byte-identical; the clientDefault representational divergence is tracked
+  // as a follow-up (cross-SDK presetConfigHash for client defaults). The PHP
+  // suite keeps a within-PHP determinism pin for the clientDefault path.
 });
 
 // ---------------------------------------------------------------------------
