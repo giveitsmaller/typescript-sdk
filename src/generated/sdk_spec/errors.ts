@@ -196,12 +196,12 @@ export const ERROR_CODES: Readonly<Record<ErrorCode, ErrorEntry>> = Object.freez
   "validation_failed": Object.freeze({
     code: "validation_failed",
     category: "validation" as ErrorCategory,
-    source: "SDK_local",
+    source: "ErrorEnvelope.error",
     status: "wired" as ErrorStatus,
-    httpStatus: 400,
+    httpStatus: 422,
     retryable: false,
     sdkClass: "GislValidationError",
-    description: "Server-side request validation failure. Carries per-field details array.",
+    description: "422 — request validation failure; emitted on the wire as `VALIDATION_FAILED` (e.g. invalid limit/offset on GET /api/v2/credits/usage). Carries `details[]`.",
     metadataSchema: Object.freeze({
       "details": "array",
     }),
