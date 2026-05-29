@@ -4,8 +4,17 @@ import { stringify as stringifyYaml, parse as parseYaml } from 'yaml';
 
 import { loadFixtures, isToken, type Fixture } from './fixtures.js';
 import { createFetchStub, type FetchStub } from './fetch-stub.js';
-import { compareRequests, compareValue } from './comparators.js';
+import {
+  compareRequests,
+  compareValue,
+  compareResolvedOptions,
+  compareOmittedFromWire,
+  compareLocalValidationError,
+  type CapturedResolvedOptions,
+  type CapturedLocalValidationError,
+} from './comparators.js';
 import { invokeFixture } from './invoke.js';
+import { GislConfigError } from '../../src/errors.js';
 
 // ---------------------------------------------------------------------------
 // Regeneration mode. Run via `npm run parity:update`. Refuses to run in CI —
@@ -65,6 +74,37 @@ describe('cross-SDK parity', () => {
         return;
       }
 
+      if (fixture.mode === 'local_validation_error') {
+        // F4-A — the SDK is expected to throw BEFORE any HTTP call. Stub
+        // installed so a regression that DOES leak a request fails loudly
+        // (captured.length > 0 surfaces via the post-invoke assertion).
+        stub = createFetchStub();
+        stub.install([], fixture.__file);
+        const { thrown } = await invokeFixture(fixture);
+        if (stub.captured.length !== 0) {
+          throw new Error(
+            `[${fixture.name}] mode=local_validation_error must not issue any HTTP calls; captured ${stub.captured.length}`,
+          );
+        }
+        if (thrown === undefined) {
+          throw new Error(
+            `[${fixture.name}] mode=local_validation_error expected the SDK to throw, but no error was caught`,
+          );
+        }
+        if (fixture.localValidationError !== undefined) {
+          const diff = compareLocalValidationError(
+            fixture.localValidationError,
+            extractLocalValidationError(thrown),
+          );
+          if (!diff.ok) {
+            throw new Error(
+              `[${fixture.name}] localValidationError parity failure:\n  - ${diff.issues.join('\n  - ')}`,
+            );
+          }
+        }
+        return;
+      }
+
       stub = createFetchStub();
       stub.install(fixture.responses, fixture.__file);
 
@@ -111,9 +151,83 @@ describe('cross-SDK parity', () => {
           );
         }
       }
+
+      // F4-A — v2 assertion blocks. resolvedOptions + omittedFromWire are
+      // additive on top of the wire+return comparisons. Skipped for v1
+      // fixtures (the loader rejects these keys on v1 so they can't be
+      // present here).
+      if (fixture.resolvedOptions !== undefined) {
+        const actual = extractResolvedOptions(returnValue);
+        const diff = compareResolvedOptions(fixture.resolvedOptions, actual);
+        if (!diff.ok) {
+          throw new Error(
+            `[${fixture.name}] resolvedOptions parity failure:\n  - ${diff.issues.join('\n  - ')}`,
+          );
+        }
+      }
+      if (fixture.omittedFromWire !== undefined && fixture.omittedFromWire.length > 0) {
+        const diff = compareOmittedFromWire(fixture.omittedFromWire, stub.captured);
+        if (!diff.ok) {
+          throw new Error(
+            `[${fixture.name}] omittedFromWire parity failure:\n  - ${diff.issues.join('\n  - ')}`,
+          );
+        }
+      }
     });
   });
 });
+
+/**
+ * Project a caught error into the shape the localValidationError
+ * comparator consumes. Recognises `GislConfigError` (T4b augmented
+ * metadata) and falls back to `category: 'unknown'` for anything
+ * else.
+ */
+function extractLocalValidationError(thrown: unknown): CapturedLocalValidationError {
+  if (thrown === null || typeof thrown !== 'object') {
+    return { category: 'unknown' };
+  }
+  // `instanceof GislConfigError` catches the full subclass tree
+  // (`GislMissingCredentialsError`, `GislFeatureRequiresAuthError`,
+  // `GislUndeclaredAssetError`, `GislUnusedAssetError`,
+  // `GislPerInputOptionsNotSupportedError`,
+  // `GislChainCardinalityMismatchError`) — code-review F4-A R1 caught
+  // the name-string check was brittle; the equivalent PHP path at
+  // `ParityTest::projectLocalValidationError` already uses `instanceof`.
+  if (thrown instanceof GislConfigError) {
+    const err = thrown as GislConfigError & {
+      reason?: string;
+      conflictingFields?: readonly string[];
+    };
+    return {
+      category: 'validation',
+      ...(err.reason !== undefined ? { code: err.reason } : {}),
+      ...(err.conflictingFields !== undefined
+        ? { conflictingFields: err.conflictingFields }
+        : {}),
+      ...(err.message !== undefined ? { message: err.message } : {}),
+    };
+  }
+  const err = thrown as { message?: string };
+  return {
+    category: 'unknown',
+    ...(err.message !== undefined ? { message: err.message } : {}),
+  };
+}
+
+/**
+ * Extract `result.resolvedOptions` from the ergonomic `Result`
+ * returned by `.run()`. The runner's `returnValue` is the SDK
+ * method's raw return value — for compress/convert/thumbnail it's a
+ * `Result`; for other methods it's whatever the low-level method
+ * returned.
+ */
+function extractResolvedOptions(returnValue: unknown): CapturedResolvedOptions | undefined {
+  if (returnValue === null || typeof returnValue !== 'object') return undefined;
+  const r = returnValue as { resolvedOptions?: unknown };
+  if (r.resolvedOptions === undefined) return undefined;
+  return r.resolvedOptions as CapturedResolvedOptions;
+}
 
 function writeExpectedReturn(fixture: Fixture, observed: unknown): void {
   // Round-trip through the YAML parser so the output preserves the author's

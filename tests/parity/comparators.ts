@@ -464,3 +464,252 @@ export function matchString(expected: string, actual: string): boolean {
       return false;
   }
 }
+
+// ---------------------------------------------------------------------------
+// F4-A — v2 assertion-block comparators.
+// ---------------------------------------------------------------------------
+
+import type {
+  FixtureResolvedOptions,
+  FixtureLocalValidationError,
+} from './fixtures.js';
+
+/**
+ * Shape the runner extracts from `Result.resolvedOptions`. Mirrors the
+ * SDK's `ResolvedOptions` interface but uses plain types for diff
+ * generation. The `overrides[]` field is intentionally absent — the
+ * comparator asserts against `sources.explicit` (TS/PHP divergence per
+ * karen F4 #8).
+ */
+export interface CapturedResolvedOptions {
+  readonly preset: string | null;
+  readonly applied: Record<string, unknown>;
+  readonly sources: {
+    readonly sdkDefault: readonly string[];
+    readonly clientDefault: readonly string[];
+    readonly scopedDefault: readonly string[];
+    readonly callPresetOverride: readonly string[];
+    readonly explicit: readonly string[];
+  };
+  readonly presetVersion: string;
+  readonly presetConfigHash?: string;
+}
+
+const PRESET_CONFIG_HASH_RE = /^sha256:[0-9a-f]{64}$/;
+
+export function compareResolvedOptions(
+  expected: FixtureResolvedOptions,
+  actual: CapturedResolvedOptions | undefined,
+  path = 'resolvedOptions',
+): ParityDiff {
+  if (actual === undefined) {
+    return fail(path, 'expected resolvedOptions but result carried none');
+  }
+  const result = passing();
+  if (expected.preset !== actual.preset) {
+    merge(
+      result,
+      fail(`${path}.preset`, `expected ${JSON.stringify(expected.preset)}, got ${JSON.stringify(actual.preset)}`),
+    );
+  }
+  if (expected.presetVersion !== actual.presetVersion) {
+    merge(
+      result,
+      fail(
+        `${path}.presetVersion`,
+        `expected ${JSON.stringify(expected.presetVersion)}, got ${JSON.stringify(actual.presetVersion)}`,
+      ),
+    );
+  }
+  // applied — deep-equal via the existing token-aware comparator so
+  // ISO-string / etag tokens still work inside the wire payload mirror.
+  merge(
+    result,
+    compareValue(
+      expected.applied as FixtureValue,
+      actual.applied as FixtureValue,
+      `${path}.applied`,
+    ),
+  );
+  // sources — deep-equal at array level (order matters; runners that
+  // bucket out of order would silently disagree). Per-bucket compare
+  // with stable diff messages.
+  for (const bucket of [
+    'sdkDefault',
+    'clientDefault',
+    'scopedDefault',
+    'callPresetOverride',
+    'explicit',
+  ] as const) {
+    const exp = expected.sources[bucket];
+    const act = actual.sources[bucket];
+    if (exp.length !== act.length || exp.some((v, i) => v !== act[i])) {
+      merge(
+        result,
+        fail(
+          `${path}.sources.${bucket}`,
+          `expected ${JSON.stringify(exp)}, got ${JSON.stringify(act)}`,
+        ),
+      );
+    }
+  }
+  // presetConfigHash — content-derived; the fixture pins presence (a
+  // non-null string) and the runner regex-matches against the SHA256
+  // shape, OR pins null/omitted (the field must be absent).
+  if (expected.presetConfigHash === null) {
+    if (actual.presetConfigHash !== undefined) {
+      merge(
+        result,
+        fail(
+          `${path}.presetConfigHash`,
+          `expected absent, got ${JSON.stringify(actual.presetConfigHash)}`,
+        ),
+      );
+    }
+  } else if (expected.presetConfigHash !== undefined) {
+    if (actual.presetConfigHash === undefined) {
+      merge(result, fail(`${path}.presetConfigHash`, 'expected a sha256: hash, got undefined'));
+    } else if (!PRESET_CONFIG_HASH_RE.test(actual.presetConfigHash)) {
+      merge(
+        result,
+        fail(
+          `${path}.presetConfigHash`,
+          `expected /^sha256:[0-9a-f]{64}$/, got ${JSON.stringify(actual.presetConfigHash)}`,
+        ),
+      );
+    }
+  }
+  return result;
+}
+
+/**
+ * Assert that no field in `omittedFromWire` appears in any captured
+ * request body. Currently scans JSON bodies + multipart `json`/`text`
+ * parts at top level. Raw/empty bodies trivially satisfy the
+ * assertion.
+ */
+export function compareOmittedFromWire(
+  omitted: readonly string[],
+  captured: readonly CapturedRequest[],
+  path = 'omittedFromWire',
+): ParityDiff {
+  const result = passing();
+  for (const field of omitted) {
+    for (let i = 0; i < captured.length; i++) {
+      const body = captured[i].body;
+      if (bodyContainsField(body, field)) {
+        merge(
+          result,
+          fail(
+            `${path}.${field}`,
+            `field appeared in captured requests[${i}] body but fixture asserts it should be omitted from the wire`,
+          ),
+        );
+      }
+    }
+  }
+  return result;
+}
+
+function bodyContainsField(body: CapturedBody | undefined, field: string): boolean {
+  if (body === undefined) return false;
+  if (body.type === 'json') {
+    return objectContainsField(body.value, field);
+  }
+  if (body.type === 'multipart') {
+    return body.parts.some((part) => {
+      // Multipart parts carry their decoded payload as `text` or
+      // `bytes`. If the part is JSON (by `contentType` or by
+      // first-character sniff), parse and recurse. Non-JSON parts
+      // can't carry structured fields, so they trivially satisfy
+      // the omitted-from-wire assertion.
+      const text =
+        part.text
+        ?? (part.bytes !== undefined ? new TextDecoder().decode(part.bytes) : undefined);
+      if (text === undefined) return false;
+      const ct = (part.contentType ?? '').toLowerCase();
+      const trimmed = text.trimStart();
+      const looksJson = ct.includes('json') || trimmed.startsWith('{') || trimmed.startsWith('[');
+      if (!looksJson) return false;
+      try {
+        return objectContainsField(JSON.parse(text), field);
+      } catch {
+        return false;
+      }
+    });
+  }
+  return false;
+}
+
+function objectContainsField(value: unknown, field: string): boolean {
+  if (value === null || typeof value !== 'object') return false;
+  if (Array.isArray(value)) return value.some((entry) => objectContainsField(entry, field));
+  const obj = value as Record<string, unknown>;
+  if (Object.prototype.hasOwnProperty.call(obj, field)) return true;
+  return Object.values(obj).some((nested) => objectContainsField(nested, field));
+}
+
+/**
+ * Shape the runner extracts from a caught `GislConfigError`. Mirrors
+ * the public `GislConfigErrorMetadata` interface (T4b). When the SDK
+ * throws a non-`GislConfigError`, `category` is `'unknown'` and the
+ * comparator reports a kind mismatch.
+ */
+export interface CapturedLocalValidationError {
+  readonly category: 'validation' | 'config' | 'unknown';
+  readonly code?: string;
+  readonly conflictingFields?: readonly string[];
+  readonly message?: string;
+}
+
+export function compareLocalValidationError(
+  expected: FixtureLocalValidationError,
+  actual: CapturedLocalValidationError | undefined,
+  path = 'localValidationError',
+): ParityDiff {
+  if (actual === undefined) {
+    return fail(path, 'expected a local validation error to be thrown, but no error was caught');
+  }
+  const result = passing();
+  if (expected.category !== actual.category) {
+    merge(
+      result,
+      fail(
+        `${path}.category`,
+        `expected ${JSON.stringify(expected.category)}, got ${JSON.stringify(actual.category)}`,
+      ),
+    );
+  }
+  if (expected.code !== actual.code) {
+    merge(
+      result,
+      fail(
+        `${path}.code`,
+        `expected ${JSON.stringify(expected.code)}, got ${JSON.stringify(actual.code)}`,
+      ),
+    );
+  }
+  if (expected.conflictingFields !== undefined) {
+    const exp = expected.conflictingFields;
+    const act = actual.conflictingFields ?? [];
+    if (exp.length !== act.length || exp.some((v, i) => v !== act[i])) {
+      merge(
+        result,
+        fail(
+          `${path}.conflictingFields`,
+          `expected ${JSON.stringify(exp)}, got ${JSON.stringify(act)}`,
+        ),
+      );
+    }
+  }
+  if (expected.message !== undefined && expected.message !== actual.message) {
+    merge(
+      result,
+      fail(
+        `${path}.message`,
+        `expected ${JSON.stringify(expected.message)}, got ${JSON.stringify(actual.message)}`,
+      ),
+    );
+  }
+  return result;
+}

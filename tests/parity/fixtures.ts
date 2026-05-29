@@ -12,7 +12,64 @@ import { resolveParityFixturesDir } from './_fixture-paths.js';
 // fixture authors and future language runners.
 // ---------------------------------------------------------------------------
 
-export type FixtureMode = 'request_response' | 'sse' | 'webhook';
+export type FixtureMode = 'request_response' | 'sse' | 'webhook' | 'local_validation_error';
+
+/**
+ * Fixture schema version. Absent or `'1.0.0'` → v1 (legacy shape); v2
+ * blocks (`resolvedOptions`, `omittedFromWire`, `localValidationError`)
+ * are rejected. `'2.0.0'` → v2: the v2 blocks are accepted and asserted
+ * by the runner. F4-A — `C45ogrGx`.
+ */
+export type FixtureSchemaVersion = '1.0.0' | '2.0.0';
+
+/**
+ * Per-layer field-name buckets the parity comparator asserts against
+ * `result.resolvedOptions.sources`. Mirror of `ResolvedOptionsSources`
+ * from `packages/typescript/src/builder.ts` (T4b). NOT asserting on the
+ * deprecated `overrides[]` field — TS aliases it to `sources.explicit`
+ * but PHP keeps it empty (TS/PHP divergence; karen F4 #8).
+ */
+export interface FixtureResolvedOptionsSources {
+  readonly sdkDefault: readonly string[];
+  readonly clientDefault: readonly string[];
+  readonly scopedDefault: readonly string[];
+  readonly callPresetOverride: readonly string[];
+  readonly explicit: readonly string[];
+}
+
+/**
+ * v2 assertion block: expected `result.resolvedOptions` shape for the
+ * compress-op chain ending in `.run()` / `.submit()`. F4-A — declared
+ * by fixtures with `fixtureSchemaVersion: '2.0.0'`.
+ *
+ * `presetConfigHash`: when expected to be present, fixtures write
+ * `'<sha256>'` — the runner regex-matches the actual value against
+ * `/^sha256:[0-9a-f]{64}$/` (presence + format; content is content-
+ * derived). When `null`, the comparator asserts the field is absent.
+ */
+export interface FixtureResolvedOptions {
+  readonly preset: string | null;
+  readonly applied: Record<string, FixtureValue>;
+  readonly sources: FixtureResolvedOptionsSources;
+  readonly presetVersion: string;
+  readonly presetConfigHash?: string | null;
+}
+
+/**
+ * v2 assertion block: shape of a `GislConfigError` the SDK threw
+ * BEFORE any HTTP call. Fixtures using this block declare
+ * `mode: 'local_validation_error'` (which permits zero requests +
+ * zero responses, sidestepping the length-pair check).
+ *
+ * Maps to the augmented `GislConfigError` from T4b — `reason` lines
+ * up with `code` here; `conflictingFields` matches directly.
+ */
+export interface FixtureLocalValidationError {
+  readonly category: 'validation' | 'config';
+  readonly code: string;
+  readonly conflictingFields?: readonly string[];
+  readonly message?: string;
+}
 
 export type FixtureValue =
   | null
@@ -99,6 +156,14 @@ export interface Fixture {
   // error paths can assert the outbound call was well-formed; the return
   // value / thrown shape is not compared (captured but unchecked).
   expects_error?: boolean;
+
+  // F4-A (C45ogrGx) v2 fields — only valid when `fixtureSchemaVersion`
+  // is '2.0.0'. Absent on v1 fixtures (the rejection set at line below
+  // refuses them on v1 to keep the discriminated-variant intent).
+  fixtureSchemaVersion?: FixtureSchemaVersion;
+  resolvedOptions?: FixtureResolvedOptions;
+  omittedFromWire?: readonly string[];
+  localValidationError?: FixtureLocalValidationError;
 
   // Meta — not part of the schema; used by the runner.
   __file: string;
@@ -192,7 +257,12 @@ export function loadFixtures(): Fixture[] {
 // authors can find typos in seconds.
 // ---------------------------------------------------------------------------
 
-const FIXTURE_KEYS = new Set([
+// v1 fixtures (no `fixtureSchemaVersion` or `fixtureSchemaVersion: '1.0.0'`)
+// reject any of the v2 assertion-block keys — preserves discriminated-
+// variant semantics. `fixtureSchemaVersion` itself is permitted on v1
+// fixtures (explicit `'1.0.0'` is legal) but the v2-only block keys
+// stay locked behind a real v2 declaration.
+const FIXTURE_KEYS_V1 = new Set([
   'name',
   'description',
   'mode',
@@ -202,6 +272,16 @@ const FIXTURE_KEYS = new Set([
   'expected_return',
   'webhook',
   'expects_error',
+  'fixtureSchemaVersion',
+]);
+// v2 fixtures (`fixtureSchemaVersion: '2.0.0'`) accept the v1 keys plus
+// the four v2 assertion-block keys.
+const FIXTURE_KEYS_V2 = new Set([
+  ...FIXTURE_KEYS_V1,
+  'fixtureSchemaVersion',
+  'resolvedOptions',
+  'omittedFromWire',
+  'localValidationError',
 ]);
 const SDK_KEYS = new Set(['method', 'args', 'client_config']);
 const REQUEST_KEYS = new Set(['method', 'path', 'query', 'headers', 'body']);
@@ -233,7 +313,23 @@ export function validateFixture(raw: unknown, file: string): Fixture {
   const ctx = `[${basename(file)}]`;
   requireObject(raw, ctx, 'root');
   const r = raw as Record<string, unknown>;
-  rejectUnknownKeys(r, FIXTURE_KEYS, ctx);
+
+  // Schema-version-discriminated unknown-key rejection (F4-A — C45ogrGx,
+  // architect adjustment 2). v2 keys are illegal on v1 fixtures so a typo
+  // in a v1 fixture (e.g. `omittedFromWire: …` without bumping the schema
+  // version) still fails fast.
+  const schemaVersionRaw = r.fixtureSchemaVersion;
+  if (schemaVersionRaw !== undefined && schemaVersionRaw !== '1.0.0' && schemaVersionRaw !== '2.0.0') {
+    throw new Error(
+      `${ctx} fixtureSchemaVersion must be '1.0.0' or '2.0.0', got ${JSON.stringify(schemaVersionRaw)}`,
+    );
+  }
+  const schemaVersion: FixtureSchemaVersion = (schemaVersionRaw as FixtureSchemaVersion | undefined) ?? '1.0.0';
+  rejectUnknownKeys(
+    r,
+    schemaVersion === '2.0.0' ? FIXTURE_KEYS_V2 : FIXTURE_KEYS_V1,
+    ctx,
+  );
 
   const name = requireString(r.name, ctx, 'name');
   if (!/^[a-z][a-z0-9_]*$/.test(name)) {
@@ -246,8 +342,13 @@ export function validateFixture(raw: unknown, file: string): Fixture {
   }
 
   const mode: FixtureMode = (r.mode as FixtureMode | undefined) ?? 'request_response';
-  if (!['request_response', 'sse', 'webhook'].includes(mode)) {
+  if (!['request_response', 'sse', 'webhook', 'local_validation_error'].includes(mode)) {
     throw new Error(`${ctx} invalid mode "${r.mode}"`);
+  }
+  if (mode === 'local_validation_error' && schemaVersion !== '2.0.0') {
+    throw new Error(
+      `${ctx} mode='local_validation_error' requires fixtureSchemaVersion: '2.0.0'`,
+    );
   }
 
   requireObject(r.sdk, ctx, 'sdk');
@@ -279,6 +380,20 @@ export function validateFixture(raw: unknown, file: string): Fixture {
     if (requests.length !== responses.length) {
       throw new Error(
         `${ctx} requests.length (${requests.length}) must equal responses.length (${responses.length})`,
+      );
+    }
+  }
+  if (mode === 'local_validation_error') {
+    // The SDK throws before any HTTP call lands. Zero requests, zero
+    // responses; localValidationError block is mandatory.
+    if (requests.length !== 0 || responses.length !== 0) {
+      throw new Error(
+        `${ctx} mode=local_validation_error must declare zero requests + zero responses (got ${requests.length}/${responses.length})`,
+      );
+    }
+    if (r.localValidationError === undefined) {
+      throw new Error(
+        `${ctx} mode=local_validation_error requires a localValidationError block`,
       );
     }
   }
@@ -346,6 +461,28 @@ export function validateFixture(raw: unknown, file: string): Fixture {
     }
   }
 
+  // F4-A v2 block validation. Each block runs ONLY when present + schema
+  // version is '2.0.0' (rejection set already enforces that v2 keys
+  // can't appear on a v1 fixture).
+  let resolvedOptions: FixtureResolvedOptions | undefined;
+  if (r.resolvedOptions !== undefined) {
+    resolvedOptions = validateResolvedOptions(r.resolvedOptions, `${ctx} resolvedOptions`);
+  }
+  let omittedFromWire: readonly string[] | undefined;
+  if (r.omittedFromWire !== undefined) {
+    if (!Array.isArray(r.omittedFromWire) || !r.omittedFromWire.every((s) => typeof s === 'string')) {
+      throw new Error(`${ctx} omittedFromWire must be an array of strings`);
+    }
+    omittedFromWire = [...(r.omittedFromWire as string[])];
+  }
+  let localValidationError: FixtureLocalValidationError | undefined;
+  if (r.localValidationError !== undefined) {
+    localValidationError = validateLocalValidationError(
+      r.localValidationError,
+      `${ctx} localValidationError`,
+    );
+  }
+
   return {
     name,
     description: r.description as string | undefined,
@@ -360,7 +497,109 @@ export function validateFixture(raw: unknown, file: string): Fixture {
     expected_return: r.expected_return as FixtureValue | undefined,
     webhook,
     expects_error: r.expects_error === true,
+    ...(schemaVersion !== '1.0.0' ? { fixtureSchemaVersion: schemaVersion } : {}),
+    ...(resolvedOptions !== undefined ? { resolvedOptions } : {}),
+    ...(omittedFromWire !== undefined ? { omittedFromWire } : {}),
+    ...(localValidationError !== undefined ? { localValidationError } : {}),
     __file: file,
+  };
+}
+
+function validateResolvedOptions(value: unknown, ctx: string): FixtureResolvedOptions {
+  requireObject(value, ctx, '(root)');
+  const v = value as Record<string, unknown>;
+  const allowed = new Set([
+    'preset',
+    'applied',
+    'sources',
+    'presetVersion',
+    'presetConfigHash',
+  ]);
+  rejectUnknownKeys(v, allowed, ctx);
+
+  // `preset` may be a string (OptimizeFor literal) OR null.
+  if (v.preset !== null && typeof v.preset !== 'string') {
+    throw new Error(`${ctx} preset must be a string or null`);
+  }
+  requireObject(v.applied, ctx, 'applied');
+  requireObject(v.sources, ctx, 'sources');
+  const s = v.sources as Record<string, unknown>;
+  const sourceKeys = new Set([
+    'sdkDefault',
+    'clientDefault',
+    'scopedDefault',
+    'callPresetOverride',
+    'explicit',
+  ]);
+  rejectUnknownKeys(s, sourceKeys, `${ctx} sources`);
+  for (const key of sourceKeys) {
+    const bucket = s[key];
+    if (!Array.isArray(bucket) || !bucket.every((entry) => typeof entry === 'string')) {
+      throw new Error(`${ctx} sources.${key} must be an array of strings`);
+    }
+  }
+  if (typeof v.presetVersion !== 'string') {
+    throw new Error(`${ctx} presetVersion must be a string`);
+  }
+  if (v.presetConfigHash !== undefined && v.presetConfigHash !== null) {
+    if (typeof v.presetConfigHash !== 'string') {
+      throw new Error(`${ctx} presetConfigHash must be a string, null, or omitted`);
+    }
+  }
+  const sources: FixtureResolvedOptionsSources = {
+    sdkDefault: [...(s.sdkDefault as string[])],
+    clientDefault: [...(s.clientDefault as string[])],
+    scopedDefault: [...(s.scopedDefault as string[])],
+    callPresetOverride: [...(s.callPresetOverride as string[])],
+    explicit: [...(s.explicit as string[])],
+  };
+  return {
+    preset: v.preset as string | null,
+    applied: v.applied as Record<string, FixtureValue>,
+    sources,
+    presetVersion: v.presetVersion as string,
+    ...(v.presetConfigHash !== undefined
+      ? { presetConfigHash: v.presetConfigHash as string | null }
+      : {}),
+  };
+}
+
+function validateLocalValidationError(
+  value: unknown,
+  ctx: string,
+): FixtureLocalValidationError {
+  requireObject(value, ctx, '(root)');
+  const v = value as Record<string, unknown>;
+  const allowed = new Set(['category', 'code', 'conflictingFields', 'message']);
+  rejectUnknownKeys(v, allowed, ctx);
+  if (v.category !== 'validation' && v.category !== 'config') {
+    throw new Error(`${ctx} category must be 'validation' or 'config'`);
+  }
+  if (typeof v.code !== 'string' || v.code.length === 0) {
+    throw new Error(`${ctx} code must be a non-empty string`);
+  }
+  let conflictingFields: readonly string[] | undefined;
+  if (v.conflictingFields !== undefined) {
+    if (
+      !Array.isArray(v.conflictingFields) ||
+      !v.conflictingFields.every((s) => typeof s === 'string')
+    ) {
+      throw new Error(`${ctx} conflictingFields must be an array of strings`);
+    }
+    conflictingFields = [...(v.conflictingFields as string[])];
+  }
+  let message: string | undefined;
+  if (v.message !== undefined) {
+    if (typeof v.message !== 'string') {
+      throw new Error(`${ctx} message must be a string or omitted`);
+    }
+    message = v.message;
+  }
+  return {
+    category: v.category as 'validation' | 'config',
+    code: v.code as string,
+    ...(conflictingFields !== undefined ? { conflictingFields } : {}),
+    ...(message !== undefined ? { message } : {}),
   };
 }
 
