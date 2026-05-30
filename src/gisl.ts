@@ -33,6 +33,7 @@ import type { GislClientConfig } from './types.js';
 import { OperationBuilder } from './builder.js';
 import { MergeBuilder, asset, type Asset, type MergeOptions } from './merge.js';
 import { PresetDefaults } from './ergonomic/presets/index.js';
+import { Recipe, fileInput, type FileInput } from './file-first.js';
 
 // ---------------------------------------------------------------------------
 // Anonymous-capable operation allowlist (internal)
@@ -120,6 +121,23 @@ function wrapErgonomic(
 ): ErgonomicClient {
   return new Proxy(client, {
     get(target, prop, receiver) {
+      if (prop === 'file') {
+        // File-first entry point — the subject of the file-first surface.
+        // A bare string is a filesystem path, a Blob/File an in-memory input;
+        // pass a `FileInput` (e.g. `fileInput.uploadId(...)`) to reuse a
+        // pre-uploaded file. `key` is RESULT-addressing only. The Proxy's
+        // closure forwards the same preset-defaults references the op builders
+        // get, so a file-first `compress()` resolves presets identically.
+        return (input: string | Blob | FileInput, key?: string): Recipe => {
+          const resolved: FileInput =
+            typeof input === 'string'
+              ? fileInput.path(input)
+              : input instanceof Blob
+                ? fileInput.blob(input)
+                : input;
+          return new Recipe(resolved, key, [], presetDefaults, scopedPresetDefaults);
+        };
+      }
       if (prop === 'compress' || prop === 'convert' || prop === 'thumbnail') {
         return (input: string | Blob, options: Record<string, unknown> = {}): OperationBuilder => {
           // T4b — pass client-scope presetDefaults into the builder so
@@ -203,6 +221,15 @@ function isMergeOptions(value: unknown): value is MergeOptions {
  * ergonomic factory's narrower string-only typing).
  */
 export type ErgonomicClient = GislClient & {
+  /**
+   * File-first entry point (FF2a). Returns an immutable {@link Recipe} you
+   * call operations on (`.compress()` / `.convert()` / `.thumbnail()` /
+   * `.textWatermark()`), chaining sequentially. A bare string is a filesystem
+   * path; pass a {@link FileInput} (e.g. `fileInput.uploadId(...)`) to reuse a
+   * pre-uploaded file. `key` is RESULT-addressing only — never input wiring.
+   * Execution (`run()`) lands in FF2b.
+   */
+  file(input: string | Blob | FileInput, key?: string): Recipe;
   compress(input: string | Blob, options?: Record<string, unknown>): OperationBuilder;
   convert(input: string | Blob, options?: Record<string, unknown>): OperationBuilder;
   thumbnail(input: string | Blob, options?: Record<string, unknown>): OperationBuilder;

@@ -13,7 +13,7 @@ import {
   type CapturedResolvedOptions,
   type CapturedLocalValidationError,
 } from './comparators.js';
-import { invokeFixture } from './invoke.js';
+import { invokeFixture, lowerFixture } from './invoke.js';
 import { GislConfigError } from '../../src/errors.js';
 
 // ---------------------------------------------------------------------------
@@ -101,6 +101,24 @@ describe('cross-SDK parity', () => {
               `[${fixture.name}] localValidationError parity failure:\n  - ${diff.issues.join('\n  - ')}`,
             );
           }
+        }
+        return;
+      }
+
+      if (fixture.mode === 'lowering') {
+        // FF2a — build the file-first Recipe from the chain spec, lower it
+        // (network-free), and deep-compare the wire payload to
+        // expected_payload. Tokens are a no-op (lowering is deterministic).
+        const lowered = lowerFixture(fixture);
+        const diff = compareValue(
+          fixture.expected_payload,
+          lowered as unknown as never,
+          'expected_payload',
+        );
+        if (!diff.ok) {
+          throw new Error(
+            `[${fixture.name}] lowering parity failure:\n  - ${diff.issues.join('\n  - ')}`,
+          );
         }
         return;
       }

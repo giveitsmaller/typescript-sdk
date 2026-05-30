@@ -20,8 +20,11 @@ import {
   type SequenceEntry,
 } from '../../src/merge.js';
 import { verifyWebhook } from '../../src/webhook.js';
+import { Recipe, fileInput, type FileInput } from '../../src/file-first.js';
+import type { OptimizeFor } from '../../src/generated/sdk_spec/enums.js';
+import type { WorkflowCreatePayload } from '../../src/types.js';
 
-import type { Fixture, FixtureValue } from './fixtures.js';
+import type { Fixture, FixtureValue, FixtureLoweringOp } from './fixtures.js';
 import { decodeBytesValue } from './fetch-stub.js';
 
 // Ergonomic-facade verbs whose dispatch is wired through `OperationBuilder`
@@ -159,6 +162,49 @@ export async function invokeFixture(fixture: Fixture): Promise<{
   }
 
   return { returnValue: raw };
+}
+
+/**
+ * FF2a (`MfV0PDok`) — mode=lowering dispatch. Builds a file-first `Recipe`
+ * from the fixture's `lowering` block, applies each op in order, and lowers
+ * against `resolvedFileId` to the wire payload. Pure + network-free — no
+ * client, no fetch stub. The caller deep-compares the result to
+ * `expected_payload`. Mirrors PHP `Invoke::lower`.
+ */
+export function lowerFixture(fixture: Fixture): WorkflowCreatePayload {
+  const spec = fixture.lowering;
+  if (spec === undefined) {
+    throw new Error(`[${fixture.name}] mode=lowering requires a lowering block`);
+  }
+  const input: FileInput =
+    spec.file.kind === 'upload_id'
+      ? fileInput.uploadId(spec.file.uploadId as string)
+      : fileInput.path(spec.file.path as string);
+
+  let recipe = new Recipe(input, spec.file.key ?? undefined);
+  for (const op of spec.operations) {
+    recipe = applyLoweringOp(recipe, op);
+  }
+  return recipe.toWorkflowPayload(spec.resolvedFileId);
+}
+
+function applyLoweringOp(recipe: Recipe, op: FixtureLoweringOp): Recipe {
+  switch (op.op) {
+    case 'compress':
+      return recipe.compress(op.optimize as OptimizeFor | undefined);
+    case 'convert':
+      return recipe.convert(op.format as string);
+    case 'thumbnail': {
+      const dims: { width?: number; height?: number } = {};
+      if (op.width !== undefined) dims.width = op.width;
+      if (op.height !== undefined) dims.height = op.height;
+      return recipe.thumbnail(dims);
+    }
+    case 'text_watermark':
+      return recipe.textWatermark(op.text as string);
+    default:
+      throw new Error(`[lowering] unknown op '${String((op as { op: string }).op)}'`);
+  }
 }
 
 async function invokeErgonomic(

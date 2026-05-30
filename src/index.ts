@@ -108,6 +108,9 @@ export type {
   Manifest,
   Downloader,
 } from './file-first.js';
+// File-first builder (FF2a / MfV0PDok) — `client.file(path).op()...` lowering.
+export { Recipe, fileInput } from './file-first.js';
+export type { FileInput } from './file-first.js';
 
 // Ergonomic-layer entrypoint (T1 / wVU4xHx3) — `gisl.create()` factory +
 // credential-chain types. `gisl.anonymous()` (public export) lands once

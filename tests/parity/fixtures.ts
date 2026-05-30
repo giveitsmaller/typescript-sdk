@@ -12,7 +12,12 @@ import { resolveParityFixturesDir } from './_fixture-paths.js';
 // fixture authors and future language runners.
 // ---------------------------------------------------------------------------
 
-export type FixtureMode = 'request_response' | 'sse' | 'webhook' | 'local_validation_error';
+export type FixtureMode =
+  | 'request_response'
+  | 'sse'
+  | 'webhook'
+  | 'local_validation_error'
+  | 'lowering';
 
 /**
  * Fixture schema version. Absent or `'1.0.0'` → v1 (legacy shape); v2
@@ -69,6 +74,35 @@ export interface FixtureLocalValidationError {
   readonly code: string;
   readonly conflictingFields?: readonly string[];
   readonly message?: string;
+}
+
+/**
+ * FF2a (`MfV0PDok`) — file-first builder-chain LOWERING spec. The runner
+ * builds a `Recipe` from this block, applies each op in order, and lowers it
+ * against `resolvedFileId`; the wire payload is deep-compared to
+ * `expected_payload`. Network-free (no requests/responses). Requires
+ * `fixtureSchemaVersion: '2.0.0'`.
+ */
+export interface FixtureLoweringFile {
+  readonly kind: 'path' | 'upload_id';
+  readonly path?: string;
+  readonly uploadId?: string;
+  readonly key?: string | null;
+}
+
+export interface FixtureLoweringOp {
+  readonly op: 'compress' | 'convert' | 'thumbnail' | 'text_watermark';
+  readonly optimize?: string;
+  readonly format?: string;
+  readonly width?: number;
+  readonly height?: number;
+  readonly text?: string;
+}
+
+export interface FixtureLowering {
+  readonly file: FixtureLoweringFile;
+  readonly resolvedFileId: string;
+  readonly operations: readonly FixtureLoweringOp[];
 }
 
 export type FixtureValue =
@@ -165,6 +199,10 @@ export interface Fixture {
   omittedFromWire?: readonly string[];
   localValidationError?: FixtureLocalValidationError;
 
+  // FF2a (MfV0PDok) — file-first builder-chain lowering (mode='lowering').
+  lowering?: FixtureLowering;
+  expected_payload?: FixtureValue;
+
   // Meta — not part of the schema; used by the runner.
   __file: string;
 }
@@ -233,6 +271,9 @@ export const KNOWN_SDK_METHODS: ReadonlySet<string> = new Set([
   'thumbnail',
   'convert',
   'merge',
+  // File-first builder-chain LOWERING marker (FF2a / MfV0PDok). Not a
+  // GislClient method — mode=lowering dispatches off the `lowering` block.
+  'file',
 ]);
 
 // ---------------------------------------------------------------------------
@@ -282,6 +323,9 @@ const FIXTURE_KEYS_V2 = new Set([
   'resolvedOptions',
   'omittedFromWire',
   'localValidationError',
+  // FF2a (MfV0PDok) — file-first lowering blocks.
+  'lowering',
+  'expected_payload',
 ]);
 const SDK_KEYS = new Set(['method', 'args', 'client_config']);
 const REQUEST_KEYS = new Set(['method', 'path', 'query', 'headers', 'body']);
@@ -342,13 +386,16 @@ export function validateFixture(raw: unknown, file: string): Fixture {
   }
 
   const mode: FixtureMode = (r.mode as FixtureMode | undefined) ?? 'request_response';
-  if (!['request_response', 'sse', 'webhook', 'local_validation_error'].includes(mode)) {
+  if (!['request_response', 'sse', 'webhook', 'local_validation_error', 'lowering'].includes(mode)) {
     throw new Error(`${ctx} invalid mode "${r.mode}"`);
   }
   if (mode === 'local_validation_error' && schemaVersion !== '2.0.0') {
     throw new Error(
       `${ctx} mode='local_validation_error' requires fixtureSchemaVersion: '2.0.0'`,
     );
+  }
+  if (mode === 'lowering' && schemaVersion !== '2.0.0') {
+    throw new Error(`${ctx} mode='lowering' requires fixtureSchemaVersion: '2.0.0'`);
   }
 
   requireObject(r.sdk, ctx, 'sdk');
@@ -394,6 +441,21 @@ export function validateFixture(raw: unknown, file: string): Fixture {
     if (r.localValidationError === undefined) {
       throw new Error(
         `${ctx} mode=local_validation_error requires a localValidationError block`,
+      );
+    }
+  }
+  if (mode === 'lowering') {
+    if (requests.length !== 0 || responses.length !== 0) {
+      throw new Error(
+        `${ctx} mode=lowering must declare zero requests + zero responses (lowering is network-free)`,
+      );
+    }
+    if (method !== 'file') {
+      throw new Error(`${ctx} mode=lowering requires sdk.method="file" (got "${method}")`);
+    }
+    if (r.lowering === undefined || r.expected_payload === undefined) {
+      throw new Error(
+        `${ctx} mode=lowering requires both a lowering block and an expected_payload block`,
       );
     }
   }
@@ -482,6 +544,10 @@ export function validateFixture(raw: unknown, file: string): Fixture {
       `${ctx} localValidationError`,
     );
   }
+  let lowering: FixtureLowering | undefined;
+  if (r.lowering !== undefined) {
+    lowering = validateLowering(r.lowering, `${ctx} lowering`);
+  }
 
   return {
     name,
@@ -501,8 +567,105 @@ export function validateFixture(raw: unknown, file: string): Fixture {
     ...(resolvedOptions !== undefined ? { resolvedOptions } : {}),
     ...(omittedFromWire !== undefined ? { omittedFromWire } : {}),
     ...(localValidationError !== undefined ? { localValidationError } : {}),
+    ...(lowering !== undefined ? { lowering } : {}),
+    ...(r.expected_payload !== undefined ? { expected_payload: r.expected_payload as FixtureValue } : {}),
     __file: file,
   };
+}
+
+const LOWERING_OPS = new Set(['compress', 'convert', 'thumbnail', 'text_watermark']);
+const LOWERING_KEYS = new Set(['file', 'resolvedFileId', 'operations']);
+const LOWERING_FILE_KEYS = new Set(['kind', 'path', 'uploadId', 'key']);
+const LOWERING_OP_KEYS = new Set(['op', 'optimize', 'format', 'width', 'height', 'text']);
+
+/**
+ * FF2a — validate the `lowering` block. Mirrors the PHP `FixtureLoader::
+ * validateLowering` so both runners reject the same authoring typos.
+ */
+function validateLowering(value: unknown, ctx: string): FixtureLowering {
+  requireObject(value, ctx, '(root)');
+  const v = value as Record<string, unknown>;
+  rejectUnknownKeys(v, LOWERING_KEYS, ctx);
+
+  requireObject(v.file, ctx, 'file');
+  const file = v.file as Record<string, unknown>;
+  rejectUnknownKeys(file, LOWERING_FILE_KEYS, `${ctx} file`);
+  const kind = file.kind;
+  if (kind !== 'path' && kind !== 'upload_id') {
+    throw new Error(`${ctx} file.kind must be 'path' or 'upload_id'`);
+  }
+  if (kind === 'path' && (typeof file.path !== 'string' || file.path === '')) {
+    throw new Error(`${ctx} file.path must be a non-empty string when kind=path`);
+  }
+  if (kind === 'upload_id' && (typeof file.uploadId !== 'string' || file.uploadId === '')) {
+    throw new Error(`${ctx} file.uploadId must be a non-empty string when kind=upload_id`);
+  }
+
+  const resolvedFileId = requireString(v.resolvedFileId, ctx, 'resolvedFileId');
+  // For a pre-uploaded input the resolved source id IS the upload id — enforce
+  // they match so a mismatched fixture can't silently lower against
+  // resolvedFileId and mask the wrong intent.
+  if (kind === 'upload_id' && file.uploadId !== resolvedFileId) {
+    throw new Error(`${ctx} resolvedFileId must equal file.uploadId for kind=upload_id`);
+  }
+
+  if (!Array.isArray(v.operations) || v.operations.length === 0) {
+    throw new Error(`${ctx} operations must be a non-empty array`);
+  }
+  const operations = v.operations.map((op, i): FixtureLoweringOp => {
+    requireObject(op, ctx, `operations[${i}]`);
+    const o = op as Record<string, unknown>;
+    rejectUnknownKeys(o, LOWERING_OP_KEYS, `${ctx} operations[${i}]`);
+    if (typeof o.op !== 'string' || !LOWERING_OPS.has(o.op)) {
+      throw new Error(
+        `${ctx} operations[${i}].op must be one of ${[...LOWERING_OPS].join('|')}`,
+      );
+    }
+    validateLoweringOpParams(o.op, o, `${ctx} operations[${i}]`);
+    return o as unknown as FixtureLoweringOp;
+  });
+
+  const result: FixtureLowering = {
+    file: file as unknown as FixtureLoweringFile,
+    resolvedFileId,
+    operations,
+  };
+  return result;
+}
+
+/**
+ * Validate per-op required params + scalar types so a malformed fixture fails
+ * at load instead of dispatching `undefined`/wrong-typed values. Mirrors the
+ * PHP `FixtureLoader::validateLoweringOpParams`.
+ */
+function validateLoweringOpParams(op: string, o: Record<string, unknown>, ctx: string): void {
+  switch (op) {
+    case 'convert':
+      if (typeof o.format !== 'string' || o.format === '') {
+        throw new Error(`${ctx} convert requires a non-empty string 'format'`);
+      }
+      break;
+    case 'text_watermark':
+      if (typeof o.text !== 'string' || o.text === '') {
+        throw new Error(`${ctx} text_watermark requires a non-empty string 'text'`);
+      }
+      break;
+    case 'thumbnail':
+      for (const dim of ['width', 'height'] as const) {
+        if (dim in o && (!Number.isInteger(o[dim]) || (o[dim] as number) < 1)) {
+          throw new Error(`${ctx} thumbnail '${dim}' must be a positive integer`);
+        }
+      }
+      if (!('width' in o) && !('height' in o)) {
+        throw new Error(`${ctx} thumbnail requires at least one of width/height`);
+      }
+      break;
+    case 'compress':
+      if ('optimize' in o && (typeof o.optimize !== 'string' || o.optimize === '')) {
+        throw new Error(`${ctx} compress 'optimize' must be a non-empty string when present`);
+      }
+      break;
+  }
 }
 
 function validateResolvedOptions(value: unknown, ctx: string): FixtureResolvedOptions {

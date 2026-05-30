@@ -10,7 +10,20 @@
  * Mirrors `packages/php/src/FileFirst/*`.
  */
 
-import { GislNoSuchKeyError, GislSinkError } from './errors.js';
+import { GislConfigError, GislNoSuchKeyError, GislSinkError } from './errors.js';
+import { _detectCompressMedia } from './builder.js';
+import {
+  resolveCompressOptions,
+  type ResolveCompressOptionsInput,
+} from './ergonomic/preset_resolver.js';
+import { OptimizeFor } from './generated/sdk_spec/enums.js';
+import type { PresetDefaults, PresetMedia } from './ergonomic/presets/index.js';
+import type {
+  JobDefinitionPayload,
+  OperationDef,
+  WorkflowCreatePayload,
+} from './types.js';
+import { uploadSource } from './types.js';
 
 /**
  * Streams a single output URL to a local path. The seam between the
@@ -255,5 +268,202 @@ export class RunResult {
       );
     }
     return this.downloader;
+  }
+}
+
+/**
+ * The primary file a {@link Recipe} operates on — the "subject" of the
+ * file-first surface. A discriminated union over the ways a caller names an
+ * input:
+ *
+ *  - `path`     — a local filesystem path (Node; the common case).
+ *  - `blob`     — an in-memory `Blob`/`File` (browser, or Node 18+).
+ *  - `uploadId` — a previously-uploaded `file_id` (reuse across recipes).
+ *
+ * FF2a does NO upload, so only the `path` + `uploadId` arms are exercised
+ * end-to-end here; the `blob` arm is DEFINED and type-checked but its upload
+ * is wired by FF2b (`run()`). Mirrors the PHP `FileInput` value object.
+ */
+export type FileInput =
+  | { readonly kind: 'path'; readonly path: string }
+  | { readonly kind: 'blob'; readonly blob: Blob }
+  | { readonly kind: 'uploadId'; readonly fileId: string };
+
+/** Named constructors for {@link FileInput} — mirror the PHP static factories. */
+export const fileInput = {
+  path(path: string): FileInput {
+    return { kind: 'path', path };
+  },
+  blob(blob: Blob): FileInput {
+    return { kind: 'blob', blob };
+  },
+  uploadId(fileId: string): FileInput {
+    return { kind: 'uploadId', fileId };
+  },
+} as const;
+
+/** One step in a {@link Recipe}'s chain — an op kind + captured ergonomic args. */
+interface RecipeStep {
+  readonly opType: 'compress' | 'convert' | 'thumbnail' | 'text_watermark';
+  readonly options: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * The file-first builder value. `client.file(path)` returns a `Recipe`;
+ * single-input operations called on it (`compress`, `convert`, `thumbnail`,
+ * `textWatermark`) chain SEQUENTIALLY — each op feeds the next, and the chain
+ * lowers to ONE workflow job with an ordered `operations[]` (per ADR-0004:
+ * operations execute sequentially, each consuming the previous output). A
+ * chain yields the TERMINAL output only; intermediates are consumed (surfaced
+ * by FF2b's `run()`/{@link RunResult}).
+ *
+ * **Immutable / clone-on-write.** Every op returns a NEW `Recipe` carrying the
+ * appended step — `this` is never mutated. A Recipe is therefore a reusable
+ * value: branching the same base recipe two different ways cannot let one
+ * branch observe the other's steps (the aliasing trap mutable builders fall
+ * into).
+ *
+ * FF2a is network-free: there is NO `run()` here (that is FF2b). The lowering
+ * seam {@link toWorkflowPayload} takes the resolved upload id as a parameter
+ * so it stays pure — FF2b's `run()` calls the SAME method after uploading, and
+ * the parity harness calls it with a fixed id to assert the lowered shape.
+ *
+ * Mirrors the PHP `Recipe`.
+ */
+export class Recipe {
+  constructor(
+    private readonly input: FileInput,
+    private readonly recipeKey: string | undefined = undefined,
+    private readonly steps: readonly RecipeStep[] = [],
+    private readonly presetDefaults?: PresetDefaults,
+    private readonly scopedPresetDefaults?: PresetDefaults,
+  ) {}
+
+  /**
+   * Reduce file size. `optimize` selects a per-media preset (resolved to
+   * concrete wire fields at lower-time, exactly as `client.compress()` does).
+   */
+  compress(optimize?: OptimizeFor): Recipe {
+    if (optimize !== undefined && !Object.values(OptimizeFor).includes(optimize)) {
+      const allowed = Object.values(OptimizeFor).join(', ');
+      throw new GislConfigError(
+        `compress 'optimize' must be one of ${allowed}; got '${String(optimize)}'.`,
+        { reason: 'invalid_optimize', conflictingFields: ['optimize'] },
+      );
+    }
+    return this.withStep({ opType: 'compress', options: optimize === undefined ? {} : { optimize } });
+  }
+
+  /** Change format. `format` is lowered verbatim to the `format` wire option. */
+  convert(format: string): Recipe {
+    return this.withStep({ opType: 'convert', options: { format } });
+  }
+
+  /**
+   * Generate a preview. Width and/or height in pixels; an omitted dimension is
+   * dropped from the wire options (not sent as `undefined`).
+   */
+  thumbnail(options: { width?: number; height?: number } = {}): Recipe {
+    const wire: Record<string, unknown> = {};
+    if (options.width !== undefined) wire.width = options.width;
+    if (options.height !== undefined) wire.height = options.height;
+    return this.withStep({ opType: 'thumbnail', options: wire });
+  }
+
+  /**
+   * Apply a text watermark. Single-input (the text is an option, not a
+   * secondary file) — lowers to the `text_watermark` op with a `text` option.
+   */
+  textWatermark(text: string): Recipe {
+    return this.withStep({ opType: 'text_watermark', options: { text } });
+  }
+
+  /**
+   * Lower this recipe to a workflow-create payload against a resolved upload
+   * id. Single-input chain → ONE job, `source: upload(fileId)`, ordered
+   * `operations[]`; the job `id` is omitted (a single job referenced by
+   * nothing — the server auto-assigns `job_N`).
+   *
+   * @internal Consumed by FF2b's `run()` (after a real upload) and by the
+   *   cross-language parity harness (with a fixed id). Not part of the
+   *   caller-facing fluent surface.
+   */
+  toWorkflowPayload(fileId: string): WorkflowCreatePayload {
+    const operations: OperationDef[] = this.steps.map((step) => this.lowerStep(step));
+    // Key order (source, operations) matches the PHP `toWire()` so the
+    // JSON-string serialisation is byte-identical across languages.
+    const job: JobDefinitionPayload = { source: uploadSource(fileId), operations };
+    return { jobs: [job] };
+  }
+
+  /** The result-addressing key passed to `file()`, or undefined. */
+  key(): string | undefined {
+    return this.recipeKey;
+  }
+
+  /** The number of operations chained so far (introspection / tests). */
+  get stepCount(): number {
+    return this.steps.length;
+  }
+
+  private withStep(step: RecipeStep): Recipe {
+    return new Recipe(
+      this.input,
+      this.recipeKey,
+      [...this.steps, step],
+      this.presetDefaults,
+      this.scopedPresetDefaults,
+    );
+  }
+
+  private lowerStep(step: RecipeStep): OperationDef {
+    const options =
+      step.opType === 'compress' ? this.lowerCompressOptions(step.options) : { ...step.options };
+    // Empty options omit the `options` wire key entirely, so TS (undefined →
+    // absent) and PHP (null → absent) serialise byte-identically.
+    return Object.keys(options).length === 0
+      ? { type: step.opType }
+      : { type: step.opType, options };
+  }
+
+  private lowerCompressOptions(options: Readonly<Record<string, unknown>>): Record<string, unknown> {
+    const optimize = options.optimize as OptimizeFor | undefined;
+    const media = this.compressMediaHint();
+    if (media === undefined) {
+      // Cannot infer a media class (a Blob without a recognised name, or a
+      // bare upload id) → preset resolution is impossible. Fail FAST rather
+      // than silently dropping an explicit `optimize`; bare compress() is fine.
+      if (optimize !== undefined) {
+        throw new GislConfigError(
+          `compress(optimize: ${String(optimize)}) needs a media type to resolve the preset, but the ` +
+            'input has no inferable media (a pre-uploaded file id or unnamed Blob carries no extension). ' +
+            'Use a path with a file extension, or call compress() without optimize.',
+          { reason: 'media_unknown', conflictingFields: ['optimize'] },
+        );
+      }
+      return {};
+    }
+    const input: ResolveCompressOptionsInput = { media, op: 'compress', explicitOptions: {} };
+    if (this.presetDefaults !== undefined) {
+      (input as { presetDefaults?: PresetDefaults }).presetDefaults = this.presetDefaults;
+    }
+    if (this.scopedPresetDefaults !== undefined) {
+      (input as { scopedPresetDefaults?: PresetDefaults }).scopedPresetDefaults =
+        this.scopedPresetDefaults;
+    }
+    if (optimize !== undefined) {
+      (input as { optimize?: OptimizeFor }).optimize = optimize;
+    }
+    return { ...resolveCompressOptions(input).wireOptions };
+  }
+
+  private compressMediaHint(): PresetMedia | undefined {
+    if (this.input.kind === 'path') {
+      return _detectCompressMedia(this.input.path);
+    }
+    if (this.input.kind === 'blob') {
+      return _detectCompressMedia(this.input.blob);
+    }
+    return undefined;
   }
 }
