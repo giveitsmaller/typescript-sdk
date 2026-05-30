@@ -92,8 +92,22 @@ export {
   // methods on OperationBuilder ship; type + audit registration land
   // here so the future chain-method PR is a pure addition).
   GislChainCardinalityMismatchError,
+  // FF1 / 3BIxEnfR — file-first result sink errors.
+  GislNoSuchKeyError,
+  GislSinkError,
 } from './errors.js';
 export type { GislApiErrorOptions, GislUploadCapKind } from './errors.js';
+
+// File-first result surface (FF1 / 3BIxEnfR) — coexists with the
+// operation-first `Result`/`Artifact` until FF6 removes the old layer.
+export { RunResult } from './file-first.js';
+export type {
+  OutputFile,
+  ItemResult,
+  ItemFailure,
+  Manifest,
+  Downloader,
+} from './file-first.js';
 
 // Ergonomic-layer entrypoint (T1 / wVU4xHx3) — `gisl.create()` factory +
 // credential-chain types. `gisl.anonymous()` (public export) lands once
@@ -406,6 +420,26 @@ type _ArtifactDriftAssertion = [
   _AssertTrue<_OperationDownloadHasFields>,
   _AssertTrue<_OperationDownloadHasDownloadUrl>,
   _AssertTrue<_ArtifactSurfaceComplete>,
+];
+
+// FF1 / 3BIxEnfR — drift assertion: the file-first `OutputFile` is a lean
+// projection of `OperationDownload` (`url` aliases `downloadUrl`;
+// `filename`/`sizeBytes`/`operation` verbatim). A contracts regen that
+// renames or drops one of these breaks here at `tsc --noEmit` (same gating
+// pattern as `_ArtifactDriftAssertion` above).
+import type { OutputFile as _OutputFile } from './file-first.js';
+type _OutputFileFromDownload = 'filename' | 'sizeBytes' | 'operation';
+type _OperationDownloadHasOutputFileFields =
+  Extract<_OutputFileFromDownload, keyof _OperationDownload> extends _OutputFileFromDownload
+    ? true
+    : ['DRIFT: OperationDownload missing one of', _OutputFileFromDownload];
+type _OutputFileHasUrl = 'url' extends keyof _OutputFile
+  ? true
+  : ['DRIFT: OutputFile.url missing'];
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+type _OutputFileDriftAssertion = [
+  _AssertTrue<_OperationDownloadHasOutputFileFields>,
+  _AssertTrue<_OutputFileHasUrl>,
 ];
 
 // Re-export all operation option types

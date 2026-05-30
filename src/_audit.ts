@@ -79,6 +79,18 @@ import type {
 // on the public surface.
 import type { OperationResultOutputEntry } from './index.js';
 
+// FF1 (3BIxEnfR) — file-first result surface. Imported via `./index.js`
+// so dropping the re-export breaks `tsc --noEmit` here.
+import type {
+  RunResult,
+  OutputFile,
+  ItemResult,
+  ItemFailure,
+  Manifest,
+  Downloader,
+} from './index.js';
+import type { GislNoSuchKeyError, GislSinkError } from './index.js';
+
 // Ergonomic-layer entry points (T1 / wVU4xHx3) — `gisl.create()` factory
 // + credential-chain types + the new local-error tree (GislConfigError +
 // GislMissingCredentialsError + GislFeatureRequiresAuthError). Sibling to
@@ -284,4 +296,13 @@ export function _runAudit(): void {
   accept<ResolvedOptionsSources>();
   accept<ResolveCompressOptionsInput>();
   accept<ResolveCompressOptionsOutput>();
+  // FF1 / 3BIxEnfR — file-first result surface + sink errors.
+  accept<RunResult>();
+  accept<OutputFile>();
+  accept<ItemResult>();
+  accept<ItemFailure>();
+  accept<Manifest>();
+  accept<Downloader>();
+  accept<GislNoSuchKeyError>();
+  accept<GislSinkError>();
 }

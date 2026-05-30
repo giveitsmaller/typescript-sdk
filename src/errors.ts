@@ -608,3 +608,52 @@ export class GislMultipartPartCountError extends GislError {
     this.maxParts = maxParts;
   }
 }
+
+/**
+ * Thrown by the file-first `RunResult.byKey()` (FF1) when no result entry
+ * matches the requested key. A keyless run (no `key:` supplied to `file()`)
+ * is addressable positionally only — `byKey()` always throws.
+ *
+ * Mirrors the PHP `Gisl\Sdk\Errors\GislNoSuchKeyError`.
+ */
+export class GislNoSuchKeyError extends GislError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'GislNoSuchKeyError';
+  }
+}
+
+/** Machine-readable cause carried by {@link GislSinkError}. */
+export type GislSinkErrorReason =
+  | 'not_single_output'
+  | 'downloader_unavailable'
+  | 'partial_failure'
+  | 'duplicate_filename'
+  | 'invalid_directory';
+
+/**
+ * Thrown by the file-first `RunResult` sinks (`toFile()` / `downloadTo()`,
+ * FF1) when they cannot deliver. The machine-readable `reason` discriminates
+ * the three cases, mirroring the `reason`-bag convention on
+ * {@link GislConfigError}:
+ *
+ *  - `not_single_output`      — `toFile()` requires exactly one output but the
+ *                               run produced zero or more than one.
+ *  - `downloader_unavailable` — the `RunResult` has no downloader bound (e.g. a
+ *                               browser / no-I/O context).
+ *  - `partial_failure`        — `downloadTo({ failOnPartial: true })` and the
+ *                               run had at least one failed input.
+ *  - `duplicate_filename`     — two outputs share a destination filename in one
+ *                               `downloadTo(dir)`, which would silently overwrite.
+ *
+ * Mirrors the PHP `Gisl\Sdk\Errors\GislSinkError`.
+ */
+export class GislSinkError extends GislError {
+  readonly reason: GislSinkErrorReason;
+
+  constructor(message: string, options: { readonly reason: GislSinkErrorReason }) {
+    super(message);
+    this.name = 'GislSinkError';
+    this.reason = options.reason;
+  }
+}
