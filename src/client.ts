@@ -611,6 +611,7 @@ export class GislClient {
       success?: boolean;
       data?: unknown;
       error?: string;
+      message?: string;
       details?: unknown;
       error_type?: string;
       message_key?: string;
@@ -635,12 +636,22 @@ export class GislClient {
         messageParams: json.message_params,
       };
 
+      // Human-readable text comes from `message` (the I26 localised field).
+      // `error` is the stable, never-localised SCREAMING_SNAKE machine code —
+      // NOT display text. Surfacing `error` as the thrown error's `.message`
+      // regressed consumers that render the human string (x9Lbf6uy). Fall back
+      // to `error` when `message` is absent (deployed contract guarantees
+      // `message` on conforming error envelopes). Machine dispatch keys off
+      // `error_type` (below), unchanged.
+      const status = response.status;
+      const errorMessage = json.message ?? json.error ?? 'Unknown error';
+
       // Validation-details branch first — preserve existing shape so callers
       // matching on `instanceof GislValidationError` keep working.
       if (isValidationDetails(json.details)) {
         throw new GislValidationError(
           response.status,
-          json.error ?? 'Validation error',
+          errorMessage,
           json.details,
           path,
           i18n,
@@ -659,8 +670,6 @@ export class GislClient {
       // fall through to the base `GislApiError` rather than handing the
       // caller silently-corrupted typed metadata.
       const errorType = json.error_type;
-      const status = response.status;
-      const errorMessage = json.error ?? 'Unknown error';
 
       // Build the typed payload via FromJSON, then validate that all
       // required typed fields are well-formed. FromJSON does not throw on
@@ -2419,8 +2428,10 @@ export class GislClient {
     if (!response.ok) {
       let errorMessage = 'Unknown error';
       try {
-        const errJson = (await response.json()) as { error?: string };
-        if (errJson.error) errorMessage = errJson.error;
+        const errJson = (await response.json()) as { error?: string; message?: string };
+        // Prefer the human `message`; `error` is the machine code (x9Lbf6uy).
+        if (errJson.message) errorMessage = errJson.message;
+        else if (errJson.error) errorMessage = errJson.error;
       } catch {
         // Non-JSON body — keep generic message.
       }

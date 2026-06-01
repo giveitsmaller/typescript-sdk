@@ -82,6 +82,37 @@ describe('GislClient', () => {
       }
     });
 
+    it('surfaces the human `message` (not the machine `error` code) as errorMessage (x9Lbf6uy)', async () => {
+      // Deployed contract: `error` is the SCREAMING_SNAKE machine code,
+      // `message` is the human-readable text, `error_type` is the lowercase
+      // discriminator. The thrown error's display text MUST be `message`, not
+      // the code — frontend renders it. Regression guard for x9Lbf6uy.
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'NOT_FOUND',
+            message: 'The requested upload could not be found.',
+            error_type: 'not_found',
+          },
+          404,
+        ),
+      );
+
+      try {
+        await client.getMetadata('xyz');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislApiError);
+        const apiErr = err as GislApiError;
+        // Human text, NOT the 'NOT_FOUND' machine code.
+        expect(apiErr.errorMessage).toBe('The requested upload could not be found.');
+        expect(apiErr.message).toBe(
+          'API error 404 at /api/uploads/xyz/metadata: The requested upload could not be found.',
+        );
+      }
+    });
+
     it('throws GislValidationError on validation error envelope (array-shape details)', async () => {
       fetchSpy.mockResolvedValueOnce(
         jsonResponse(
