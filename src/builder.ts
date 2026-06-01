@@ -45,6 +45,10 @@ import type {
 } from './types.js';
 import { uploadSource } from './types.js';
 import { GislTimeoutError } from './errors.js';
+// Deferred-usage-only import: `Handle` is constructed inside submit() at call
+// time, not at module load, so the builder.ts <-> handle.ts cycle is safe
+// under ESM (handle.ts imports the await-primitives from this module).
+import { Handle } from './handle.js';
 import type { PresetDefaults, PresetMedia } from './ergonomic/presets/index.js';
 import type { OptimizeFor } from './generated/sdk_spec/enums.js';
 import {
@@ -268,15 +272,6 @@ export interface Result {
    * `JSON.stringify`).
    */
   readonly resolvedOptions: ResolvedOptions;
-}
-
-/**
- * Lighter return value from `.submit({webhook})` — no SSE/poll wait,
- * caller reconciles completion via the webhook.
- */
-export interface Handle {
-  readonly workflowId: string;
-  readonly webhookSecret?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -528,11 +523,12 @@ export class OperationBuilder {
     };
     const created = await this.client.createWorkflow(payload);
 
-    const handle: Handle = {
-      workflowId: created.workflowId,
-      ...(created.webhookSecret != null ? { webhookSecret: created.webhookSecret } : {}),
-    };
-    return handle;
+    // No client passed → the returned Handle's status()/wait()/result()
+    // throw `no_client`; the operation-first submit reconciles via webhook.
+    return new Handle(
+      created.workflowId,
+      created.webhookSecret != null ? created.webhookSecret : undefined,
+    );
   }
 
   /**

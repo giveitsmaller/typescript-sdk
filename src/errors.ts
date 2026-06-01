@@ -639,6 +639,32 @@ export class GislNoSuchKeyError extends GislError {
   }
 }
 
+/**
+ * Thrown by the file-first `Handle.result()` (FF5a) when the workflow has not
+ * yet reached a terminal state. `result()` is the NON-blocking accessor: it
+ * fetches the current status once and, if the workflow is still
+ * `pending`/`in_progress`, throws this rather than waiting. Use `Handle.wait()`
+ * to block until terminal instead.
+ *
+ * Carries the `workflowId` and the current (non-terminal) `state`.
+ *
+ * Mirrors the PHP `Gisl\Sdk\Errors\GislResultNotReadyError`.
+ */
+export class GislResultNotReadyError extends GislError {
+  readonly workflowId: string;
+  readonly state: string;
+
+  constructor(workflowId: string, state: string) {
+    super(
+      `Workflow ${workflowId} is not ready (state '${state}'); its result is not available yet. ` +
+        'Call wait() to block until it reaches a terminal state, or poll result() again later.',
+    );
+    this.name = 'GislResultNotReadyError';
+    this.workflowId = workflowId;
+    this.state = state;
+  }
+}
+
 /** Machine-readable cause carried by {@link GislSinkError}. */
 export type GislSinkErrorReason =
   | 'not_single_output'

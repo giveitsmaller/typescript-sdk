@@ -20,6 +20,7 @@ import {
   type ProgressEvent,
 } from './builder.js';
 import type { GislClient } from './client.js';
+import type { OperationDownload, WorkflowStatusResponse } from '@giveitsmaller/contracts/openapi';
 import { HttpDownloader } from './http-downloader.js';
 import {
   resolveCompressOptions,
@@ -281,6 +282,63 @@ export class RunResult {
 }
 
 /**
+ * Flatten the terminal workflow status + its downloads into a {@link RunResult}.
+ *
+ * Shared by {@link Recipe.run} (passes its recipe key) and the file-first
+ * {@link Handle} reattach surface (`Handle.wait()`/`Handle.result()`, FF5a —
+ * passes `null` because a reattached handle carries no recipe key).
+ *
+ * **Partition invariant (carries a prior codex-review fix — do NOT let it
+ * drift):** success is ONLY `state === 'completed'`. Every other terminal
+ * state — `failed`, `partially_failed`, `cancelled`, `expired`,
+ * `paused_insufficient_credits` — partitions into `failed[]` so a caller's
+ * `ok`/`succeeded` check can never treat a cancelled/expired/paused run as a
+ * clean result.
+ *
+ * @internal Exported for reuse by the file-first `Handle`; not part of the
+ *   caller-facing fluent surface.
+ */
+export function projectDownloadsToRunResult(
+  workflowId: string,
+  finalStatus: WorkflowStatusResponse,
+  jobDownloads: readonly { files: readonly OperationDownload[] }[],
+  key: string | null,
+  downloader?: Downloader,
+): RunResult {
+  // Flatten to the lean OutputFile[] (the four file-first fields only).
+  const artifacts: OutputFile[] = [];
+  for (const job of jobDownloads) {
+    for (const f of job.files) {
+      artifacts.push({
+        url: f.downloadUrl,
+        filename: f.filename,
+        sizeBytes: f.sizeBytes,
+        operation: f.operation,
+      });
+    }
+  }
+
+  const state = finalStatus.status;
+  let succeeded: ItemResult[];
+  let failed: ItemFailure[];
+  if (state === 'completed') {
+    succeeded = [{ key, outputs: artifacts }];
+    failed = [];
+  } else {
+    const firstError = ((finalStatus as unknown as { jobs?: readonly { operations?: readonly { errorMessage?: string }[] }[] }).jobs ?? [])
+      .flatMap((j) => j.operations ?? [])
+      .map((op) => op.errorMessage)
+      .find((m): m is string => m !== undefined);
+    succeeded = [];
+    failed = [
+      { key, error: new Error(firstError !== undefined ? `${state}: ${firstError}` : state) },
+    ];
+  }
+
+  return new RunResult(workflowId, state, artifacts, succeeded, failed, downloader);
+}
+
+/**
  * The primary file a {@link Recipe} operates on — the "subject" of the
  * file-first surface. A discriminated union over the ways a caller names an
  * input:
@@ -513,47 +571,16 @@ export class Recipe {
     }
     const downloads = await this.client.getWorkflowDownloads(created.workflowId);
 
-    // Flatten to the lean OutputFile[] (the four file-first fields only).
-    const artifacts: OutputFile[] = [];
-    for (const job of downloads.downloads) {
-      for (const f of job.files) {
-        artifacts.push({
-          url: f.downloadUrl,
-          filename: f.filename,
-          sizeBytes: f.sizeBytes,
-          operation: f.operation,
-        });
-      }
-    }
-
-    // Partition the single input into succeeded / failed by terminal state.
-    // Success is ONLY `completed`: every other terminal state — `failed`,
-    // `partially_failed`, `cancelled`, `expired`,
-    // `paused_insufficient_credits` — is a non-success and partitions into
-    // `failed` so a caller's `ok`/`succeeded` check can never treat a
-    // cancelled/expired/paused run as a clean result (codex review high).
-    const state = finalStatus.status;
-    const key = this.recipeKey ?? null;
-    let succeeded: ItemResult[];
-    let failed: ItemFailure[];
-    if (state === 'completed') {
-      succeeded = [{ key, outputs: artifacts }];
-      failed = [];
-    } else {
-      const firstError = ((finalStatus as unknown as { jobs?: readonly { operations?: readonly { errorMessage?: string }[] }[] }).jobs ?? [])
-        .flatMap((j) => j.operations ?? [])
-        .map((op) => op.errorMessage)
-        .find((m): m is string => m !== undefined);
-      succeeded = [];
-      failed = [
-        { key, error: new Error(firstError !== undefined ? `${state}: ${firstError}` : state) },
-      ];
-    }
-
     // Download URLs from getWorkflowDownloads are pre-signed and require no SDK
     // auth, so the downloader issues a plain unauthenticated fetch.
     const downloader = new HttpDownloader();
-    return new RunResult(created.workflowId, state, artifacts, succeeded, failed, downloader);
+    return projectDownloadsToRunResult(
+      created.workflowId,
+      finalStatus,
+      downloads.downloads,
+      this.recipeKey ?? null,
+      downloader,
+    );
   }
 
   private withStep(step: RecipeStep): Recipe {

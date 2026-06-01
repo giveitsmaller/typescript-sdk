@@ -98,6 +98,9 @@ export {
   // FF1 / 3BIxEnfR — file-first result sink errors.
   GislNoSuchKeyError,
   GislSinkError,
+  // FF5a / Ao8RPVxD — thrown by the file-first Handle.result() when the
+  // workflow is not yet terminal (the non-blocking accessor).
+  GislResultNotReadyError,
 } from './errors.js';
 export type { GislApiErrorOptions, GislUploadCapKind } from './errors.js';
 
@@ -117,6 +120,14 @@ export type { FileInput } from './file-first.js';
 // File-first execution (FF2b / MfV0PDok) — Node streaming downloader bound by
 // `Recipe.run()` to write pre-signed output URLs to disk.
 export { HttpDownloader } from './http-downloader.js';
+// `projectDownloadsToRunResult` is intentionally NOT re-exported here — it is an
+// @internal helper shared between `file-first.ts` (Recipe.run) and `handle.ts`
+// (Handle.wait/result) via direct intra-package import, not public API (codex).
+// File-first Handle + StatusSnapshot (FF5a / Ao8RPVxD) — method-bearing,
+// client-bound value objects. `Handle` is the return of `submit()` (no client)
+// AND `client.workflow(id)` (client-bound, reattach). Exported as VALUES (the
+// prior `export type { Handle }` is replaced) because `Handle` is now a class.
+export { Handle, StatusSnapshot } from './handle.js';
 
 // Ergonomic-layer entrypoint (T1 / wVU4xHx3) — `gisl.create()` factory +
 // credential-chain types. `gisl.anonymous()` (public export) lands once
@@ -180,7 +191,6 @@ export type {
 export type {
   Artifact,
   ArtifactRef,
-  Handle,
   JobBreakdown,
   OperationBreakdown,
   ProcessingProgressEvent,

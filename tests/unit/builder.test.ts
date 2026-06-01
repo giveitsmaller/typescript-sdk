@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { OperationBuilder, type Result, type ProgressEvent } from '../../src/builder.js';
 import { GislTimeoutError } from '../../src/errors.js';
+import { Handle } from '../../src/handle.js';
 import type { GislClient } from '../../src/client.js';
 
 // ---------------------------------------------------------------------------
@@ -664,6 +665,39 @@ describe('OperationBuilder.submit', () => {
       webhook: 'https://my.app/cb',
     });
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  // FF5a back-compat regression: submit() now returns a `Handle` CLASS, but its
+  // toJSON()/toArray() shape must stay byte-identical to the prior plain-object
+  // `{ workflowId, webhookSecret }` — no `client` leakage, no extra keys.
+  it('returns a Handle whose toJSON/toArray is {workflowId, webhookSecret} byte-identical', async () => {
+    const mock = makeMockClient();
+    const handle = await new OperationBuilder(mock.client, 'compress', 'p.jpg', {}).submit({
+      webhook: 'https://my.app/cb',
+    });
+    expect(handle).toBeInstanceOf(Handle);
+    expect(handle.toJSON()).toEqual({ workflowId: 'wf_1', webhookSecret: 'wh_secret_abc' });
+    expect(handle.toArray()).toEqual({ workflowId: 'wf_1', webhookSecret: 'wh_secret_abc' });
+    expect(Object.keys(handle.toJSON())).toEqual(['workflowId', 'webhookSecret']);
+    // The bound client is NEVER serialised.
+    expect('client' in handle.toJSON()).toBe(false);
+    expect(JSON.parse(JSON.stringify(handle))).toEqual({
+      workflowId: 'wf_1',
+      webhookSecret: 'wh_secret_abc',
+    });
+  });
+
+  it('returns a Handle that drops webhookSecret from toJSON when the server omits it', async () => {
+    const mock = makeMockClient();
+    mock.createWorkflow.mockResolvedValueOnce({
+      workflowId: 'wf_no_secret',
+      status: 'running',
+      webhookSecret: null,
+    });
+    const handle = await new OperationBuilder(mock.client, 'compress', 'p.jpg', {}).submit({
+      webhook: 'https://my.app/cb',
+    });
+    expect(handle.toJSON()).toEqual({ workflowId: 'wf_no_secret' });
   });
 });
 

@@ -47,12 +47,12 @@ import {
   _parseMaxWait,
   _pollToTerminal,
   _projectResult,
-  type Handle,
   type ProgressEvent,
   type Result,
   type RunOptions,
   type SubmitOptions,
 } from './builder.js';
+import { Handle } from './handle.js';
 
 // ---------------------------------------------------------------------------
 // Asset + Clip types
@@ -239,11 +239,12 @@ export class MergeBuilder {
     payload.callback_url = options.webhook;
     const created = await this.client.createWorkflow(payload);
 
-    const handle: Handle = {
-      workflowId: created.workflowId,
-      ...(created.webhookSecret != null ? { webhookSecret: created.webhookSecret } : {}),
-    };
-    return handle;
+    // No client passed → the returned Handle's status()/wait()/result()
+    // throw `no_client`; the merge submit reconciles via webhook.
+    return new Handle(
+      created.workflowId,
+      created.webhookSecret != null ? created.webhookSecret : undefined,
+    );
   }
 
   // ---------------------------------------------------------------------------

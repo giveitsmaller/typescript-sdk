@@ -34,6 +34,7 @@ import { OperationBuilder } from './builder.js';
 import { MergeBuilder, asset, type Asset, type MergeOptions } from './merge.js';
 import { PresetDefaults } from './ergonomic/presets/index.js';
 import { Recipe, fileInput, type FileInput } from './file-first.js';
+import { Handle } from './handle.js';
 
 // ---------------------------------------------------------------------------
 // Anonymous-capable operation allowlist (internal)
@@ -138,6 +139,12 @@ function wrapErgonomic(
           return new Recipe(resolved, key, [], presetDefaults, scopedPresetDefaults, target);
         };
       }
+      if (prop === 'workflow') {
+        // Reattach to a previously-created workflow (FF5a). Returns a
+        // client-bound Handle with no webhookSecret and no recipe key —
+        // its RunResult is therefore keyless (succeeded[].key === null).
+        return (id: string): Handle => new Handle(id, undefined, target);
+      }
       if (prop === 'compress' || prop === 'convert' || prop === 'thumbnail') {
         return (input: string | Blob, options: Record<string, unknown> = {}): OperationBuilder => {
           // T4b — pass client-scope presetDefaults into the builder so
@@ -230,6 +237,14 @@ export type ErgonomicClient = GislClient & {
    * Execution (`run()`) lands in FF2b.
    */
   file(input: string | Blob | FileInput, key?: string): Recipe;
+  /**
+   * Reattach to a previously-created workflow (FF5a). Returns a client-bound
+   * {@link Handle} you can `.status()` / `.wait()` / `.result()`. The handle
+   * carries no `webhookSecret` and no recipe key, so the {@link RunResult}
+   * from `wait()`/`result()` is keyless (`succeeded[].key === null`) — address
+   * outputs positionally or via the sinks.
+   */
+  workflow(id: string): Handle;
   compress(input: string | Blob, options?: Record<string, unknown>): OperationBuilder;
   convert(input: string | Blob, options?: Record<string, unknown>): OperationBuilder;
   thumbnail(input: string | Blob, options?: Record<string, unknown>): OperationBuilder;
