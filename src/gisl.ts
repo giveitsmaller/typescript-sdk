@@ -135,7 +135,7 @@ function wrapErgonomic(
               : input instanceof Blob
                 ? fileInput.blob(input)
                 : input;
-          return new Recipe(resolved, key, [], presetDefaults, scopedPresetDefaults);
+          return new Recipe(resolved, key, [], presetDefaults, scopedPresetDefaults, target);
         };
       }
       if (prop === 'compress' || prop === 'convert' || prop === 'thumbnail') {

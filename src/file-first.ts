@@ -10,8 +10,17 @@
  * Mirrors `packages/php/src/FileFirst/*`.
  */
 
-import { GislConfigError, GislNoSuchKeyError, GislSinkError } from './errors.js';
-import { _detectCompressMedia } from './builder.js';
+import { GislApiError, GislConfigError, GislNoSuchKeyError, GislSinkError, GislTimeoutError } from './errors.js';
+import {
+  _detectCompressMedia,
+  _consumeSseToTerminal,
+  _pollToTerminal,
+  _parseMaxWait,
+  _checkAborted,
+  type ProgressEvent,
+} from './builder.js';
+import type { GislClient } from './client.js';
+import { HttpDownloader } from './http-downloader.js';
 import {
   resolveCompressOptions,
   type ResolveCompressOptionsInput,
@@ -337,6 +346,7 @@ export class Recipe {
     private readonly steps: readonly RecipeStep[] = [],
     private readonly presetDefaults?: PresetDefaults,
     private readonly scopedPresetDefaults?: PresetDefaults,
+    private readonly client?: GislClient,
   ) {}
 
   /**
@@ -406,6 +416,146 @@ export class Recipe {
     return this.steps.length;
   }
 
+  /**
+   * Execute the recipe end-to-end: upload the input (when required), create
+   * the workflow, await a terminal state (SSE with poll fallback), then
+   * resolve the produced downloads into a flat {@link RunResult}. Throws
+   * {@link GislTimeoutError} if `maxWait` elapses before terminal status.
+   *
+   * Mirrors the operation-first `OperationBuilder.run` (in `builder.ts`).
+   * Requires a client bound at construction time — `gisl().file(...)` wires
+   * it; a directly-constructed `Recipe` (e.g. in a lowering-only test) has no
+   * client and throws {@link GislConfigError}.
+   */
+  async run(
+    options: {
+      maxWait?: string | number;
+      onProgress?: (event: ProgressEvent) => void;
+      signal?: AbortSignal;
+      pollIntervalMs?: number;
+    } = {},
+  ): Promise<RunResult> {
+    const signal = options.signal;
+    const onProgress = options.onProgress;
+    if (this.client === undefined) {
+      throw new GislConfigError(
+        'Recipe.run() requires a client; build the recipe via gisl().file(...) rather than constructing Recipe directly.',
+        { reason: 'no_client' },
+      );
+    }
+    const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 300_000);
+
+    // 1. Resolve the upload id. A pre-uploaded id skips the upload entirely;
+    // a path / blob is uploaded now, emitting {phase:'upload'} progress.
+    let fileId: string;
+    if (this.input.kind === 'uploadId') {
+      fileId = this.input.fileId;
+    } else {
+      const source = this.input.kind === 'path' ? this.input.path : this.input.blob;
+      const up = await this.client.uploadFile(source, {
+        signal,
+        ...(onProgress !== undefined
+          ? {
+              onProgress: (uploadedBytes: number, totalBytes: number): void => {
+                onProgress({ phase: 'upload', uploadedBytes, totalBytes });
+              },
+            }
+          : {}),
+      });
+      fileId = up.fileId;
+    }
+    _checkAborted(signal);
+    if (Date.now() >= deadline) {
+      throw new GislTimeoutError(
+        'Upload completed but maxWait elapsed before workflow could be created',
+      );
+    }
+
+    // 2. Create the workflow from the lowered payload.
+    const payload = this.toWorkflowPayload(fileId);
+    const created = await this.client.createWorkflow(payload);
+    _checkAborted(signal);
+
+    // 3. Wait to terminal status — SSE first, poll on a genuine SSE error.
+    // Caller-aborted + deadline-elapsed errors MUST propagate (not transient).
+    let finalStatus;
+    try {
+      finalStatus = await _consumeSseToTerminal(this.client, {
+        workflowId: created.workflowId,
+        deadline,
+        signal,
+        onProgress,
+      });
+    } catch (err) {
+      // Only genuine SSE transport / clean-stream-end failures fall through to
+      // poll. Caller-deadline, abort, and API errors (a 401/402/etc. from
+      // /events, or an onProgress callback throw surfacing as GislApiError)
+      // MUST propagate — re-issuing the same doomed request via poll would mask
+      // them. Mirrors the PHP BuilderInternals::awaitTerminal sealed-marker
+      // discipline (codex review medium).
+      if (err instanceof GislTimeoutError) throw err;
+      if (err instanceof DOMException && err.name === 'AbortError') throw err;
+      if (err instanceof GislApiError) throw err;
+      finalStatus = await _pollToTerminal(this.client, {
+        workflowId: created.workflowId,
+        deadline,
+        signal,
+        pollIntervalMs: options.pollIntervalMs,
+      });
+    }
+
+    // 4. Fetch downloads. The maxWait deadline covers upload + create + wait +
+    // downloads, so check before issuing the request (mirrors builder.ts).
+    if (Date.now() >= deadline) {
+      throw new GislTimeoutError(
+        `Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`,
+      );
+    }
+    const downloads = await this.client.getWorkflowDownloads(created.workflowId);
+
+    // Flatten to the lean OutputFile[] (the four file-first fields only).
+    const artifacts: OutputFile[] = [];
+    for (const job of downloads.downloads) {
+      for (const f of job.files) {
+        artifacts.push({
+          url: f.downloadUrl,
+          filename: f.filename,
+          sizeBytes: f.sizeBytes,
+          operation: f.operation,
+        });
+      }
+    }
+
+    // Partition the single input into succeeded / failed by terminal state.
+    // Success is ONLY `completed`: every other terminal state — `failed`,
+    // `partially_failed`, `cancelled`, `expired`,
+    // `paused_insufficient_credits` — is a non-success and partitions into
+    // `failed` so a caller's `ok`/`succeeded` check can never treat a
+    // cancelled/expired/paused run as a clean result (codex review high).
+    const state = finalStatus.status;
+    const key = this.recipeKey ?? null;
+    let succeeded: ItemResult[];
+    let failed: ItemFailure[];
+    if (state === 'completed') {
+      succeeded = [{ key, outputs: artifacts }];
+      failed = [];
+    } else {
+      const firstError = ((finalStatus as unknown as { jobs?: readonly { operations?: readonly { errorMessage?: string }[] }[] }).jobs ?? [])
+        .flatMap((j) => j.operations ?? [])
+        .map((op) => op.errorMessage)
+        .find((m): m is string => m !== undefined);
+      succeeded = [];
+      failed = [
+        { key, error: new Error(firstError !== undefined ? `${state}: ${firstError}` : state) },
+      ];
+    }
+
+    // Download URLs from getWorkflowDownloads are pre-signed and require no SDK
+    // auth, so the downloader issues a plain unauthenticated fetch.
+    const downloader = new HttpDownloader();
+    return new RunResult(created.workflowId, state, artifacts, succeeded, failed, downloader);
+  }
+
   private withStep(step: RecipeStep): Recipe {
     return new Recipe(
       this.input,
@@ -413,6 +563,7 @@ export class Recipe {
       [...this.steps, step],
       this.presetDefaults,
       this.scopedPresetDefaults,
+      this.client,
     );
   }
 

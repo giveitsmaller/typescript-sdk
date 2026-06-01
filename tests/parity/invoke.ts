@@ -188,6 +188,47 @@ export function lowerFixture(fixture: Fixture): WorkflowCreatePayload {
   return recipe.toWorkflowPayload(spec.resolvedFileId);
 }
 
+/**
+ * FF2b (`tywwynmN`) — mode=run dispatch. Builds a file-first `Recipe` from the
+ * fixture's `run` block bound to a `GislClient` (so `run()` has a client),
+ * applies each op in order, and drives `.run()` against the installed fetch
+ * stub. Returns the hydrated `RunResult` projected via `toJSON()` so the caller
+ * can deep-compare to `expected_run_result`. Mirrors PHP `Invoke::runRecipe`.
+ *
+ * HARNESS NOTE: depends on the fetch stub serving the canned
+ * upload/create/terminal/downloads responses in call order — see the SCHEMA.md
+ * "mode: run" HARNESS NOTE. The download URLs are canned strings; the
+ * `Downloader` is not exercised (RunResult DATA shape only).
+ */
+export async function runRecipeFixture(fixture: Fixture): Promise<unknown> {
+  const spec = fixture.run;
+  if (spec === undefined) {
+    throw new Error(`[${fixture.name}] mode=run requires a run block`);
+  }
+  const client = new GislClient(
+    DEFAULT_CLIENT_CONFIG as ConstructorParameters<typeof GislClient>[0],
+  );
+  const input: FileInput =
+    spec.file.kind === 'upload_id'
+      ? fileInput.uploadId(spec.file.uploadId as string)
+      : fileInput.path(spec.file.path as string);
+
+  // Bind the client as the Recipe's execution-only last ctor arg so run() has
+  // a client (the lowering path constructs without one). The fixture's file
+  // path is canned — the stub serves the upload response without real bytes.
+  let recipe = new Recipe(input, spec.file.key ?? undefined, [], undefined, undefined, client);
+  for (const op of spec.operations) {
+    recipe = applyLoweringOp(recipe, op);
+  }
+
+  const result = await recipe.run({
+    ...(spec.maxWait !== undefined ? { maxWait: spec.maxWait } : {}),
+    ...(spec.pollIntervalMs !== undefined ? { pollIntervalMs: spec.pollIntervalMs } : {}),
+  });
+  // RunResult.toJSON() is the canonical DATA projection (mirrors PHP toArray()).
+  return result.toJSON();
+}
+
 function applyLoweringOp(recipe: Recipe, op: FixtureLoweringOp): Recipe {
   switch (op.op) {
     case 'compress':

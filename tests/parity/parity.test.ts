@@ -13,7 +13,7 @@ import {
   type CapturedResolvedOptions,
   type CapturedLocalValidationError,
 } from './comparators.js';
-import { invokeFixture, lowerFixture } from './invoke.js';
+import { invokeFixture, lowerFixture, runRecipeFixture } from './invoke.js';
 import { GislConfigError } from '../../src/errors.js';
 
 // ---------------------------------------------------------------------------
@@ -101,6 +101,29 @@ describe('cross-SDK parity', () => {
               `[${fixture.name}] localValidationError parity failure:\n  - ${diff.issues.join('\n  - ')}`,
             );
           }
+        }
+        return;
+      }
+
+      // FF2b (tywwynmN) — mode=run drives the recipe through .run() against the
+      // fetch stub and deep-compares the hydrated RunResult DATA shape. The
+      // Downloader is NOT exercised (canned download URLs). HARNESS NOTE: the
+      // fetch stub serves the upload/create/terminal/downloads responses in
+      // call order; the run-mode assertion depends on that wiring landing with
+      // the rest of the harness build-out (F4-B / cEUWPgKW).
+      if (fixture.mode === 'run') {
+        stub = createFetchStub();
+        stub.install(fixture.responses, fixture.__file);
+        const actualRun = await runRecipeFixture(fixture);
+        const diff = compareValue(
+          fixture.expected_run_result,
+          actualRun as unknown as never,
+          'expected_run_result',
+        );
+        if (!diff.ok) {
+          throw new Error(
+            `[${fixture.name}] run parity failure:\n  - ${diff.issues.join('\n  - ')}`,
+          );
         }
         return;
       }

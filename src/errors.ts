@@ -565,6 +565,22 @@ export class GislTimeoutError extends GislError {
   }
 }
 
+/**
+ * Transport-level failure: the underlying `fetch` (or other transport) could
+ * not produce a usable response — DNS, TCP, TLS, a mid-stream disconnect, or a
+ * non-ok status / empty body when fetching a result download. Mirrors the PHP
+ * `Gisl\Sdk\Errors\GislNetworkError`. Subclasses `GislError` (not
+ * `GislApiError`) because it carries no contract error envelope. The concrete
+ * file-first {@link Downloader} raises this when the output URL cannot be read
+ * (a destination-WRITE failure is `GislSinkError` reason `write_failed`).
+ */
+export class GislNetworkError extends GislError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'GislNetworkError';
+  }
+}
+
 export class GislAbortError extends GislError {
   constructor(message: string) {
     super(message);
@@ -629,7 +645,8 @@ export type GislSinkErrorReason =
   | 'downloader_unavailable'
   | 'partial_failure'
   | 'duplicate_filename'
-  | 'invalid_directory';
+  | 'invalid_directory'
+  | 'write_failed';
 
 /**
  * Thrown by the file-first `RunResult` sinks (`toFile()` / `downloadTo()`,
@@ -645,6 +662,8 @@ export type GislSinkErrorReason =
  *                               run had at least one failed input.
  *  - `duplicate_filename`     — two outputs share a destination filename in one
  *                               `downloadTo(dir)`, which would silently overwrite.
+ *  - `write_failed`           — a concrete {@link Downloader} could not open or
+ *                               stream to the destination path.
  *
  * Mirrors the PHP `Gisl\Sdk\Errors\GislSinkError`.
  */

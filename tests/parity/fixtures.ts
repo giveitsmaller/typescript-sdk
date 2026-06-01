@@ -17,7 +17,9 @@ export type FixtureMode =
   | 'sse'
   | 'webhook'
   | 'local_validation_error'
-  | 'lowering';
+  | 'lowering'
+  // FF2b (tywwynmN) — file-first run-mode execution fixtures.
+  | 'run';
 
 /**
  * Fixture schema version. Absent or `'1.0.0'` → v1 (legacy shape); v2
@@ -103,6 +105,20 @@ export interface FixtureLowering {
   readonly file: FixtureLoweringFile;
   readonly resolvedFileId: string;
   readonly operations: readonly FixtureLoweringOp[];
+}
+
+/**
+ * FF2b (`tywwynmN`) — file-first run-mode block. Drives
+ * `client.file(path).op()...run()` against the fixture's mocked responses
+ * and asserts the hydrated RunResult DATA shape (`expected_run_result`).
+ * Reuses {@link FixtureLoweringFile} + {@link FixtureLoweringOp} for the
+ * file + operation grammar.
+ */
+export interface FixtureRun {
+  readonly file: FixtureLoweringFile;
+  readonly operations: readonly FixtureLoweringOp[];
+  readonly maxWait?: string | number;
+  readonly pollIntervalMs?: number;
 }
 
 export type FixtureValue =
@@ -202,6 +218,12 @@ export interface Fixture {
   // FF2a (MfV0PDok) — file-first builder-chain lowering (mode='lowering').
   lowering?: FixtureLowering;
   expected_payload?: FixtureValue;
+
+  // FF2b (tywwynmN) — file-first run-mode execution (mode='run'). The runner
+  // drives the recipe through .run() against the mocked responses and asserts
+  // the hydrated RunResult DATA shape (expected_run_result).
+  run?: FixtureRun;
+  expected_run_result?: FixtureValue;
 
   // Meta — not part of the schema; used by the runner.
   __file: string;
@@ -326,6 +348,9 @@ const FIXTURE_KEYS_V2 = new Set([
   // FF2a (MfV0PDok) — file-first lowering blocks.
   'lowering',
   'expected_payload',
+  // FF2b (tywwynmN) — file-first run-mode blocks.
+  'run',
+  'expected_run_result',
 ]);
 const SDK_KEYS = new Set(['method', 'args', 'client_config']);
 const REQUEST_KEYS = new Set(['method', 'path', 'query', 'headers', 'body']);
@@ -386,7 +411,11 @@ export function validateFixture(raw: unknown, file: string): Fixture {
   }
 
   const mode: FixtureMode = (r.mode as FixtureMode | undefined) ?? 'request_response';
-  if (!['request_response', 'sse', 'webhook', 'local_validation_error', 'lowering'].includes(mode)) {
+  if (
+    !['request_response', 'sse', 'webhook', 'local_validation_error', 'lowering', 'run'].includes(
+      mode,
+    )
+  ) {
     throw new Error(`${ctx} invalid mode "${r.mode}"`);
   }
   if (mode === 'local_validation_error' && schemaVersion !== '2.0.0') {
@@ -396,6 +425,9 @@ export function validateFixture(raw: unknown, file: string): Fixture {
   }
   if (mode === 'lowering' && schemaVersion !== '2.0.0') {
     throw new Error(`${ctx} mode='lowering' requires fixtureSchemaVersion: '2.0.0'`);
+  }
+  if (mode === 'run' && schemaVersion !== '2.0.0') {
+    throw new Error(`${ctx} mode='run' requires fixtureSchemaVersion: '2.0.0'`);
   }
 
   requireObject(r.sdk, ctx, 'sdk');
@@ -456,6 +488,25 @@ export function validateFixture(raw: unknown, file: string): Fixture {
     if (r.lowering === undefined || r.expected_payload === undefined) {
       throw new Error(
         `${ctx} mode=lowering requires both a lowering block and an expected_payload block`,
+      );
+    }
+  }
+  if (mode === 'run') {
+    // FF2b (tywwynmN) — run-mode declares the mocked upload/create/terminal/
+    // downloads `responses` but NO `requests` assertions (wire parity is
+    // covered by mode=lowering + the low-level method fixtures; run-mode pins
+    // the hydrated RunResult).
+    if (requests.length !== 0) {
+      throw new Error(
+        `${ctx} mode=run must declare zero requests (it asserts the hydrated RunResult, not wire requests)`,
+      );
+    }
+    if (method !== 'file') {
+      throw new Error(`${ctx} mode=run requires sdk.method="file" (got "${method}")`);
+    }
+    if (r.run === undefined || r.expected_run_result === undefined) {
+      throw new Error(
+        `${ctx} mode=run requires both a run block and an expected_run_result block`,
       );
     }
   }
@@ -548,6 +599,11 @@ export function validateFixture(raw: unknown, file: string): Fixture {
   if (r.lowering !== undefined) {
     lowering = validateLowering(r.lowering, `${ctx} lowering`);
   }
+  // FF2b (tywwynmN) — run-mode block.
+  let run: FixtureRun | undefined;
+  if (r.run !== undefined) {
+    run = validateRun(r.run, `${ctx} run`);
+  }
 
   return {
     name,
@@ -569,6 +625,11 @@ export function validateFixture(raw: unknown, file: string): Fixture {
     ...(localValidationError !== undefined ? { localValidationError } : {}),
     ...(lowering !== undefined ? { lowering } : {}),
     ...(r.expected_payload !== undefined ? { expected_payload: r.expected_payload as FixtureValue } : {}),
+    // FF2b (tywwynmN) — run-mode block + expected hydrated RunResult shape.
+    ...(run !== undefined ? { run } : {}),
+    ...(r.expected_run_result !== undefined
+      ? { expected_run_result: r.expected_run_result as FixtureValue }
+      : {}),
     __file: file,
   };
 }
@@ -577,6 +638,63 @@ const LOWERING_OPS = new Set(['compress', 'convert', 'thumbnail', 'text_watermar
 const LOWERING_KEYS = new Set(['file', 'resolvedFileId', 'operations']);
 const LOWERING_FILE_KEYS = new Set(['kind', 'path', 'uploadId', 'key']);
 const LOWERING_OP_KEYS = new Set(['op', 'optimize', 'format', 'width', 'height', 'text']);
+// FF2b (tywwynmN) — run-mode block keys: lowering's file + operations plus the
+// run-only maxWait / pollIntervalMs.
+const RUN_KEYS = new Set(['file', 'operations', 'maxWait', 'pollIntervalMs']);
+
+/**
+ * FF2b — validate the `run` block. Reuses the lowering `file` + op-param
+ * validators (the chain grammar is identical) and adds the run-only `maxWait` /
+ * `pollIntervalMs` keys. Mirrors the PHP `FixtureLoader::validateRun`.
+ */
+function validateRun(value: unknown, ctx: string): FixtureRun {
+  requireObject(value, ctx, '(root)');
+  const v = value as Record<string, unknown>;
+  rejectUnknownKeys(v, RUN_KEYS, ctx);
+
+  requireObject(v.file, ctx, 'file');
+  const file = v.file as Record<string, unknown>;
+  rejectUnknownKeys(file, LOWERING_FILE_KEYS, `${ctx} file`);
+  const kind = file.kind;
+  if (kind !== 'path' && kind !== 'upload_id') {
+    throw new Error(`${ctx} file.kind must be 'path' or 'upload_id'`);
+  }
+  if (kind === 'path' && (typeof file.path !== 'string' || file.path === '')) {
+    throw new Error(`${ctx} file.path must be a non-empty string when kind=path`);
+  }
+  if (kind === 'upload_id' && (typeof file.uploadId !== 'string' || file.uploadId === '')) {
+    throw new Error(`${ctx} file.uploadId must be a non-empty string when kind=upload_id`);
+  }
+
+  if (!Array.isArray(v.operations) || v.operations.length === 0) {
+    throw new Error(`${ctx} operations must be a non-empty array`);
+  }
+  const operations = v.operations.map((op, i): FixtureLoweringOp => {
+    requireObject(op, ctx, `operations[${i}]`);
+    const o = op as Record<string, unknown>;
+    rejectUnknownKeys(o, LOWERING_OP_KEYS, `${ctx} operations[${i}]`);
+    if (typeof o.op !== 'string' || !LOWERING_OPS.has(o.op)) {
+      throw new Error(`${ctx} operations[${i}].op must be one of ${[...LOWERING_OPS].join('|')}`);
+    }
+    validateLoweringOpParams(o.op, o, `${ctx} operations[${i}]`);
+    return o as unknown as FixtureLoweringOp;
+  });
+
+  if (v.maxWait !== undefined && typeof v.maxWait !== 'string' && typeof v.maxWait !== 'number') {
+    throw new Error(`${ctx} maxWait must be a string or number when present`);
+  }
+  if (v.pollIntervalMs !== undefined && !Number.isInteger(v.pollIntervalMs)) {
+    throw new Error(`${ctx} pollIntervalMs must be an integer when present`);
+  }
+
+  const result: FixtureRun = {
+    file: file as unknown as FixtureLoweringFile,
+    operations,
+    ...(v.maxWait !== undefined ? { maxWait: v.maxWait as string | number } : {}),
+    ...(v.pollIntervalMs !== undefined ? { pollIntervalMs: v.pollIntervalMs as number } : {}),
+  };
+  return result;
+}
 
 /**
  * FF2a — validate the `lowering` block. Mirrors the PHP `FixtureLoader::

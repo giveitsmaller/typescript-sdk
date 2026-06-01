@@ -80,6 +80,9 @@ export {
   GislMultipartSessionAuthRequiredError,
   GislTimeoutError,
   GislAbortError,
+  // FF2b / tywwynmN — transport-level failure (mirrors PHP GislNetworkError);
+  // raised by the file-first HttpDownloader when an output URL cannot be read.
+  GislNetworkError,
   // T1 / wVU4xHx3 — local config-error tree (pre-I/O; sibling of GislApiError).
   GislConfigError,
   GislMissingCredentialsError,
@@ -111,6 +114,9 @@ export type {
 // File-first builder (FF2a / MfV0PDok) — `client.file(path).op()...` lowering.
 export { Recipe, fileInput } from './file-first.js';
 export type { FileInput } from './file-first.js';
+// File-first execution (FF2b / MfV0PDok) — Node streaming downloader bound by
+// `Recipe.run()` to write pre-signed output URLs to disk.
+export { HttpDownloader } from './http-downloader.js';
 
 // Ergonomic-layer entrypoint (T1 / wVU4xHx3) — `gisl.create()` factory +
 // credential-chain types. `gisl.anonymous()` (public export) lands once

@@ -88,8 +88,10 @@ import type {
   ItemFailure,
   Manifest,
   Downloader,
+  // FF2b (tywwynmN) — Node streaming downloader bound by Recipe.run().
+  HttpDownloader,
 } from './index.js';
-import type { GislNoSuchKeyError, GislSinkError } from './index.js';
+import type { GislNoSuchKeyError, GislSinkError, GislNetworkError } from './index.js';
 
 // Ergonomic-layer entry points (T1 / wVU4xHx3) — `gisl.create()` factory
 // + credential-chain types + the new local-error tree (GislConfigError +
@@ -303,6 +305,8 @@ export function _runAudit(): void {
   accept<ItemFailure>();
   accept<Manifest>();
   accept<Downloader>();
+  accept<HttpDownloader>();
   accept<GislNoSuchKeyError>();
   accept<GislSinkError>();
+  accept<GislNetworkError>();
 }
