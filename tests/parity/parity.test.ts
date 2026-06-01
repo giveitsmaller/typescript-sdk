@@ -13,7 +13,7 @@ import {
   type CapturedResolvedOptions,
   type CapturedLocalValidationError,
 } from './comparators.js';
-import { invokeFixture, lowerFixture, runRecipeFixture } from './invoke.js';
+import { invokeFixture, lowerFixture, runRecipeFixture, submitRecipeFixture } from './invoke.js';
 import { GislConfigError } from '../../src/errors.js';
 
 // ---------------------------------------------------------------------------
@@ -142,6 +142,38 @@ describe('cross-SDK parity', () => {
           throw new Error(
             `[${fixture.name}] lowering parity failure:\n  - ${diff.issues.join('\n  - ')}`,
           );
+        }
+        return;
+      }
+
+      // FF5b (u8M49LU2) — a submit block routes a file-first chain through the
+      // standard request_response flow: install the stub, drive .submit(), then
+      // assert BOTH the captured create request (callback_url) AND the returned
+      // Handle (expected_return). Mode is request_response, so the generic path
+      // below would route method:file to a non-existent GislClient method — this
+      // arm intercepts it.
+      if (fixture.submit !== undefined) {
+        stub = createFetchStub();
+        stub.install(fixture.responses, fixture.__file);
+        const handleJson = await submitRecipeFixture(fixture);
+
+        const requestDiff = compareRequests(fixture.requests, stub.captured, fixture.__file);
+        if (!requestDiff.ok) {
+          throw new Error(
+            `[${fixture.name}] request parity failure:\n  - ${requestDiff.issues.join('\n  - ')}`,
+          );
+        }
+        if (fixture.expected_return !== undefined) {
+          const returnDiff = compareValue(
+            fixture.expected_return,
+            handleJson as never,
+            'expected_return',
+          );
+          if (!returnDiff.ok) {
+            throw new Error(
+              `[${fixture.name}] return parity failure:\n  - ${returnDiff.issues.join('\n  - ')}`,
+            );
+          }
         }
         return;
       }

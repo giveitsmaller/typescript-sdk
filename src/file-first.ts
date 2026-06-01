@@ -20,7 +20,11 @@ import {
   type ProgressEvent,
 } from './builder.js';
 import type { GislClient } from './client.js';
-import type { OperationDownload, WorkflowStatusResponse } from '@giveitsmaller/contracts/openapi';
+import type {
+  OperationDownload,
+  WorkflowCreateResponse,
+  WorkflowStatusResponse,
+} from '@giveitsmaller/contracts/openapi';
 import { HttpDownloader } from './http-downloader.js';
 import {
   resolveCompressOptions,
@@ -34,6 +38,11 @@ import type {
   WorkflowCreatePayload,
 } from './types.js';
 import { uploadSource } from './types.js';
+// Deferred-usage-only import: `Handle` is constructed inside `submit()` at call
+// time, never at module-eval, so the handle.ts <-> file-first.ts back-edge
+// (handle.ts imports RunResult/projectDownloadsToRunResult from here) resolves
+// cleanly under ESM. Mirrors builder.ts/merge.ts importing Handle the same way.
+import { Handle } from './handle.js';
 
 /**
  * Streams a single output URL to a local path. The seam between the
@@ -452,16 +461,20 @@ export class Recipe {
    * `operations[]`; the job `id` is omitted (a single job referenced by
    * nothing — the server auto-assigns `job_N`).
    *
-   * @internal Consumed by FF2b's `run()` (after a real upload) and by the
-   *   cross-language parity harness (with a fixed id). Not part of the
-   *   caller-facing fluent surface.
+   * When `callbackUrl` is given (the file-first `submit()` path), it is built
+   * INTO the payload at construction (`callback_url`) rather than spread onto an
+   * already-built readonly payload. `run()` passes no `callbackUrl`.
+   *
+   * @internal Consumed by FF2b's `run()` (after a real upload), FF5b's
+   *   `submit()` (with a webhook), and the cross-language parity harness (with a
+   *   fixed id). Not part of the caller-facing fluent surface.
    */
-  toWorkflowPayload(fileId: string): WorkflowCreatePayload {
+  toWorkflowPayload(fileId: string, callbackUrl?: string): WorkflowCreatePayload {
     const operations: OperationDef[] = this.steps.map((step) => this.lowerStep(step));
     // Key order (source, operations) matches the PHP `toWire()` so the
     // JSON-string serialisation is byte-identical across languages.
     const job: JobDefinitionPayload = { source: uploadSource(fileId), operations };
-    return { jobs: [job] };
+    return callbackUrl === undefined ? { jobs: [job] } : { jobs: [job], callback_url: callbackUrl };
   }
 
   /** The result-addressing key passed to `file()`, or undefined. */
@@ -503,36 +516,9 @@ export class Recipe {
     }
     const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 300_000);
 
-    // 1. Resolve the upload id. A pre-uploaded id skips the upload entirely;
-    // a path / blob is uploaded now, emitting {phase:'upload'} progress.
-    let fileId: string;
-    if (this.input.kind === 'uploadId') {
-      fileId = this.input.fileId;
-    } else {
-      const source = this.input.kind === 'path' ? this.input.path : this.input.blob;
-      const up = await this.client.uploadFile(source, {
-        signal,
-        ...(onProgress !== undefined
-          ? {
-              onProgress: (uploadedBytes: number, totalBytes: number): void => {
-                onProgress({ phase: 'upload', uploadedBytes, totalBytes });
-              },
-            }
-          : {}),
-      });
-      fileId = up.fileId;
-    }
-    _checkAborted(signal);
-    if (Date.now() >= deadline) {
-      throw new GislTimeoutError(
-        'Upload completed but maxWait elapsed before workflow could be created',
-      );
-    }
-
-    // 2. Create the workflow from the lowered payload.
-    const payload = this.toWorkflowPayload(fileId);
-    const created = await this.client.createWorkflow(payload);
-    _checkAborted(signal);
+    // 1+2. Upload (when required) + create the workflow. Shared with submit()
+    // (which passes a webhook → callback_url). run() passes no webhook.
+    const created = await this._uploadAndCreate(undefined, deadline, onProgress, signal);
 
     // 3. Wait to terminal status — SSE first, poll on a genuine SSE error.
     // Caller-aborted + deadline-elapsed errors MUST propagate (not transient).
@@ -581,6 +567,93 @@ export class Recipe {
       this.recipeKey ?? null,
       downloader,
     );
+  }
+
+  /**
+   * Fire-and-forget the recipe: upload the input (when required), create the
+   * workflow (wiring `webhook` into `callback_url` when given), and return a
+   * client-bound {@link Handle} carrying the workflow id + webhook secret + the
+   * recipe key. Does NOT wait for terminal status — call `handle.wait()` /
+   * `handle.result()` later to collect the {@link RunResult}.
+   *
+   * Requires a client bound at construction time (same `no_client` guard as
+   * {@link run}). `webhook` is OPTIONAL: when omitted, no `callback_url` is
+   * sent. Mirrors the PHP `Recipe.submit()`.
+   *
+   * @param webhook Absolute callback URL the server POSTs lifecycle events to.
+   */
+  async submit(webhook?: string): Promise<Handle> {
+    if (this.client === undefined) {
+      throw new GislConfigError(
+        'Recipe.submit() requires a client; build the recipe via gisl().file(...) rather than constructing Recipe directly.',
+        { reason: 'no_client' },
+      );
+    }
+    // submit() is fire-and-forget — NO whole-run deadline. The upload may be
+    // large (a multi-GB master, example 12) and is bounded by the HTTP client's
+    // own request timeout, not an arbitrary submit-side cap. Pass `undefined`
+    // so the post-upload deadline check is skipped: a 300s cap here would throw
+    // on a slow-but-successful big upload before createWorkflow (codex).
+    const created = await this._uploadAndCreate(webhook, undefined);
+    return new Handle(
+      created.workflowId,
+      created.webhookSecret != null ? created.webhookSecret : undefined,
+      this.client,
+      this.recipeKey ?? null,
+    );
+  }
+
+  /**
+   * Resolve the upload id (verbatim for a pre-uploaded id; uploading a path /
+   * blob otherwise, emitting `{phase:'upload'}` progress), check the post-upload
+   * deadline, lower to the workflow-create payload (wiring `webhook` into
+   * `callback_url`), and create the workflow. Shared first half of
+   * {@link run} + {@link submit}.
+   *
+   * The post-upload deadline check carries a prior codex fix (9a117f04eb59): a
+   * slow upload must not proceed to createWorkflow past the deadline.
+   */
+  private async _uploadAndCreate(
+    webhook: string | undefined,
+    deadline: number | undefined,
+    onProgress?: (event: ProgressEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<WorkflowCreateResponse> {
+    // 1. Resolve the upload id. A pre-uploaded id skips the upload entirely;
+    // a path / blob is uploaded now, emitting {phase:'upload'} progress.
+    let fileId: string;
+    if (this.input.kind === 'uploadId') {
+      fileId = this.input.fileId;
+    } else {
+      const source = this.input.kind === 'path' ? this.input.path : this.input.blob;
+      const up = await this.client!.uploadFile(source, {
+        signal,
+        ...(onProgress !== undefined
+          ? {
+              onProgress: (uploadedBytes: number, totalBytes: number): void => {
+                onProgress({ phase: 'upload', uploadedBytes, totalBytes });
+              },
+            }
+          : {}),
+      });
+      fileId = up.fileId;
+    }
+    _checkAborted(signal);
+    // run() passes a whole-run deadline (the codex 9a117f04eb59 fix: a slow
+    // upload must not proceed to createWorkflow past maxWait); submit() passes
+    // `undefined` (fire-and-forget, no upload cap), so the check is skipped.
+    if (deadline !== undefined && Date.now() >= deadline) {
+      throw new GislTimeoutError(
+        'Upload completed but maxWait elapsed before workflow could be created',
+      );
+    }
+
+    // 2. Create the workflow from the lowered payload (callback_url built into
+    // the payload at construction when a webhook is given).
+    const payload = this.toWorkflowPayload(fileId, webhook);
+    const created = await this.client!.createWorkflow(payload);
+    _checkAborted(signal);
+    return created;
   }
 
   private withStep(step: RecipeStep): Recipe {

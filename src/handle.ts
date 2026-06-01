@@ -122,12 +122,25 @@ export class Handle {
   // `#client` is non-enumerable and inaccessible outside the class (codex high).
   readonly #client?: GislClient;
 
+  // The recipe's result-addressing key, threaded from a file-first `submit()`
+  // (`Recipe.submit()`) so the `RunResult` from `wait()`/`result()` is keyed
+  // (`succeeded[].key === recipeKey`). A reattached handle
+  // (`client.workflow(id)`) passes no key → null → keyless RunResult. It is
+  // ES-private (`#`) — like `#client` — NOT just kept out of `toJSON()`: the
+  // parity ReturnSerialiser enumerates a Handle's OWN ENUMERABLE properties
+  // (it does not call `toJSON()`), so a plain `readonly key` leaked into the
+  // operation-first/merge `submit()` back-compat shape ({workflowId,
+  // webhookSecret}). `#key` is non-enumerable, so that shape stays byte-identical.
+  readonly #key: string | null;
+
   constructor(
     readonly workflowId: string,
     readonly webhookSecret?: string,
     client?: GislClient,
+    key: string | null = null,
   ) {
     this.#client = client;
+    this.#key = key;
   }
 
   /**
@@ -192,7 +205,7 @@ export class Handle {
       this.workflowId,
       finalStatus,
       downloads.downloads,
-      null,
+      this.#key,
       this.makeDownloader(),
     );
   }
@@ -218,7 +231,7 @@ export class Handle {
       this.workflowId,
       status,
       downloads.downloads,
-      null,
+      this.#key,
       this.makeDownloader(),
     );
   }

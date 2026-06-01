@@ -121,6 +121,21 @@ export interface FixtureRun {
   readonly pollIntervalMs?: number;
 }
 
+/**
+ * FF5b (`u8M49LU2`) — file-first SUBMIT block. Drives
+ * `client.file(...).op()...submit(webhook?)` against the fixture's mocked
+ * responses through the STANDARD request_response flow (so `compareRequests`
+ * runs and can assert the create request's `callback_url`), then asserts the
+ * returned Handle via `expected_return`. Reuses {@link FixtureLoweringFile} +
+ * {@link FixtureLoweringOp} for the file + operation grammar; `webhook` is the
+ * optional `submit()` argument wired into `callback_url`.
+ */
+export interface FixtureSubmit {
+  readonly file: FixtureLoweringFile;
+  readonly operations: readonly FixtureLoweringOp[];
+  readonly webhook?: string;
+}
+
 export type FixtureValue =
   | null
   | boolean
@@ -224,6 +239,12 @@ export interface Fixture {
   // the hydrated RunResult DATA shape (expected_run_result).
   run?: FixtureRun;
   expected_run_result?: FixtureValue;
+
+  // FF5b (u8M49LU2) — file-first submit (request_response mode, method='file').
+  // The runner drives the recipe through .submit(webhook?) against the mocked
+  // responses; compareRequests asserts the create callback_url and the returned
+  // Handle is compared via expected_return.
+  submit?: FixtureSubmit;
 
   // Meta — not part of the schema; used by the runner.
   __file: string;
@@ -351,6 +372,8 @@ const FIXTURE_KEYS_V2 = new Set([
   // FF2b (tywwynmN) — file-first run-mode blocks.
   'run',
   'expected_run_result',
+  // FF5b (u8M49LU2) — file-first submit block (request_response mode).
+  'submit',
 ]);
 const SDK_KEYS = new Set(['method', 'args', 'client_config']);
 const REQUEST_KEYS = new Set(['method', 'path', 'query', 'headers', 'body']);
@@ -510,6 +533,31 @@ export function validateFixture(raw: unknown, file: string): Fixture {
       );
     }
   }
+  // FF5b (u8M49LU2) — a `submit` block routes a file-first chain through the
+  // STANDARD request_response flow (so compareRequests can assert the create
+  // callback_url). It is therefore gated to request_response mode + method:file,
+  // and (like every request_response fixture) declares matching requests +
+  // responses; the length-pair check above already enforces that.
+  if (r.submit !== undefined) {
+    if (mode !== 'request_response') {
+      throw new Error(
+        `${ctx} a submit block requires the default request_response mode (got mode="${mode}"); ` +
+          `mode=run forbids a requests block and cannot assert the create callback_url`,
+      );
+    }
+    if (method !== 'file') {
+      throw new Error(`${ctx} a submit block requires sdk.method="file" (got "${method}")`);
+    }
+    if (schemaVersion !== '2.0.0') {
+      throw new Error(`${ctx} a submit block requires fixtureSchemaVersion: '2.0.0'`);
+    }
+  } else if (method === 'file' && mode === 'request_response') {
+    // method:file in request_response mode with NO submit block has no dispatch.
+    throw new Error(
+      `${ctx} sdk.method="file" in request_response mode requires a submit block (FF5b). ` +
+        `Use mode=lowering / mode=run for the other file-first dispatches.`,
+    );
+  }
 
   requests.forEach((req, i) => validateRequest(req, `${ctx} requests[${i}]`));
   responses.forEach((res, i) => validateResponse(res, `${ctx} responses[${i}]`));
@@ -604,6 +652,11 @@ export function validateFixture(raw: unknown, file: string): Fixture {
   if (r.run !== undefined) {
     run = validateRun(r.run, `${ctx} run`);
   }
+  // FF5b (u8M49LU2) — submit block.
+  let submit: FixtureSubmit | undefined;
+  if (r.submit !== undefined) {
+    submit = validateSubmit(r.submit, `${ctx} submit`);
+  }
 
   return {
     name,
@@ -630,6 +683,8 @@ export function validateFixture(raw: unknown, file: string): Fixture {
     ...(r.expected_run_result !== undefined
       ? { expected_run_result: r.expected_run_result as FixtureValue }
       : {}),
+    // FF5b (u8M49LU2) — submit block.
+    ...(submit !== undefined ? { submit } : {}),
     __file: file,
   };
 }
@@ -641,6 +696,9 @@ const LOWERING_OP_KEYS = new Set(['op', 'optimize', 'format', 'width', 'height',
 // FF2b (tywwynmN) — run-mode block keys: lowering's file + operations plus the
 // run-only maxWait / pollIntervalMs.
 const RUN_KEYS = new Set(['file', 'operations', 'maxWait', 'pollIntervalMs']);
+// FF5b (u8M49LU2) — submit block keys: lowering's file + operations plus the
+// submit-only optional webhook.
+const SUBMIT_KEYS = new Set(['file', 'operations', 'webhook']);
 
 /**
  * FF2b — validate the `run` block. Reuses the lowering `file` + op-param
@@ -692,6 +750,56 @@ function validateRun(value: unknown, ctx: string): FixtureRun {
     operations,
     ...(v.maxWait !== undefined ? { maxWait: v.maxWait as string | number } : {}),
     ...(v.pollIntervalMs !== undefined ? { pollIntervalMs: v.pollIntervalMs as number } : {}),
+  };
+  return result;
+}
+
+/**
+ * FF5b — validate the `submit` block. Reuses the lowering `file` + op-param
+ * validators (the chain grammar is identical) and adds the submit-only optional
+ * `webhook` string. Mirrors the PHP `FixtureLoader::validateSubmit`.
+ */
+function validateSubmit(value: unknown, ctx: string): FixtureSubmit {
+  requireObject(value, ctx, '(root)');
+  const v = value as Record<string, unknown>;
+  rejectUnknownKeys(v, SUBMIT_KEYS, ctx);
+
+  requireObject(v.file, ctx, 'file');
+  const file = v.file as Record<string, unknown>;
+  rejectUnknownKeys(file, LOWERING_FILE_KEYS, `${ctx} file`);
+  const kind = file.kind;
+  if (kind !== 'path' && kind !== 'upload_id') {
+    throw new Error(`${ctx} file.kind must be 'path' or 'upload_id'`);
+  }
+  if (kind === 'path' && (typeof file.path !== 'string' || file.path === '')) {
+    throw new Error(`${ctx} file.path must be a non-empty string when kind=path`);
+  }
+  if (kind === 'upload_id' && (typeof file.uploadId !== 'string' || file.uploadId === '')) {
+    throw new Error(`${ctx} file.uploadId must be a non-empty string when kind=upload_id`);
+  }
+
+  if (!Array.isArray(v.operations) || v.operations.length === 0) {
+    throw new Error(`${ctx} operations must be a non-empty array`);
+  }
+  const operations = v.operations.map((op, i): FixtureLoweringOp => {
+    requireObject(op, ctx, `operations[${i}]`);
+    const o = op as Record<string, unknown>;
+    rejectUnknownKeys(o, LOWERING_OP_KEYS, `${ctx} operations[${i}]`);
+    if (typeof o.op !== 'string' || !LOWERING_OPS.has(o.op)) {
+      throw new Error(`${ctx} operations[${i}].op must be one of ${[...LOWERING_OPS].join('|')}`);
+    }
+    validateLoweringOpParams(o.op, o, `${ctx} operations[${i}]`);
+    return o as unknown as FixtureLoweringOp;
+  });
+
+  if (v.webhook !== undefined && (typeof v.webhook !== 'string' || v.webhook === '')) {
+    throw new Error(`${ctx} webhook must be a non-empty string when present`);
+  }
+
+  const result: FixtureSubmit = {
+    file: file as unknown as FixtureLoweringFile,
+    operations,
+    ...(v.webhook !== undefined ? { webhook: v.webhook as string } : {}),
   };
   return result;
 }

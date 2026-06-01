@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Recipe, RunResult, fileInput } from '../src/file-first.js';
+import { Handle } from '../src/handle.js';
 import type { ProgressEvent } from '../src/builder.js';
-import { GislConfigError, GislTimeoutError } from '../src/errors.js';
+import { GislConfigError, GislNoSuchKeyError, GislTimeoutError } from '../src/errors.js';
 import type { GislClient } from '../src/client.js';
 
 /**
@@ -366,5 +367,116 @@ describe('Recipe.run — key threading', () => {
     const item = result.byKey('hero');
     expect(item.key).toBe('hero');
     expect(item.outputs).toEqual(result.artifacts);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FF5b — Recipe.submit(): fire-and-forget upload + create, returning a
+// client-bound Handle that carries the recipe key, WITHOUT waiting.
+// ---------------------------------------------------------------------------
+
+describe('Recipe.submit — fire-and-forget', () => {
+  it('uploads + creates exactly once, does NOT wait, and returns a Handle with the workflowId + webhookSecret', async () => {
+    const mock = makeMockClient();
+    mock.createWorkflow.mockResolvedValueOnce({
+      workflowId: 'wf_1',
+      status: 'pending',
+      webhookSecret: 'whsec_abc',
+    });
+
+    const handle = await recipe(mock).compress().submit();
+
+    // upload + create fire exactly once each.
+    expect(mock.uploadFile).toHaveBeenCalledOnce();
+    expect(mock.createWorkflow).toHaveBeenCalledOnce();
+    // submit() MUST NOT wait — none of the terminal-await / download paths run.
+    expect(mock.streamEvents).not.toHaveBeenCalled();
+    expect(mock.getWorkflowStatus).not.toHaveBeenCalled();
+    expect(mock.getWorkflowDownloads).not.toHaveBeenCalled();
+
+    expect(handle).toBeInstanceOf(Handle);
+    expect(handle.workflowId).toBe('wf_1');
+    expect(handle.webhookSecret).toBe('whsec_abc');
+  });
+
+  it('wires webhook → createWorkflow payload callback_url when a webhook is given', async () => {
+    const mock = makeMockClient();
+    await recipe(mock).compress().submit('https://example.com/cb');
+
+    const payload = mock.createWorkflow.mock.calls[0][0];
+    expect(payload.callback_url).toBe('https://example.com/cb');
+  });
+
+  it('omits callback_url from the createWorkflow payload when no webhook is given', async () => {
+    const mock = makeMockClient();
+    await recipe(mock).compress().submit();
+
+    const payload = mock.createWorkflow.mock.calls[0][0];
+    // No webhook → the lowered payload carries no callback_url at all.
+    expect(payload.callback_url).toBeUndefined();
+    expect('callback_url' in payload).toBe(false);
+  });
+
+  it('uploadId arm makes NO upload call and references the id verbatim in the create payload source', async () => {
+    const mock = makeMockClient();
+    const handle = await recipe(mock, fileInput.uploadId('file_x'))
+      .convert('webp')
+      .submit();
+
+    expect(mock.uploadFile).not.toHaveBeenCalled();
+    expect(mock.createWorkflow).toHaveBeenCalledOnce();
+    const payload = mock.createWorkflow.mock.calls[0][0];
+    expect(payload.jobs[0].source).toEqual({ type: 'upload', file_id: 'file_x' });
+    expect(handle.workflowId).toBe('wf_1');
+  });
+
+  it('throws GislConfigError(no_client) for a directly-constructed Recipe', async () => {
+    const bare = new Recipe(fileInput.path('photo.jpg'));
+    await expect(bare.compress().submit()).rejects.toBeInstanceOf(GislConfigError);
+    await expect(bare.compress().submit()).rejects.toMatchObject({ reason: 'no_client' });
+  });
+});
+
+describe('Recipe.submit — keyed Handle', () => {
+  it("threads file(input, 'hero') so the submitted handle's result() is KEYED", async () => {
+    const mock = makeMockClient();
+    const handle = await recipe(mock, fileInput.path('photo.jpg'), 'hero')
+      .compress()
+      .submit();
+
+    // Driving the handle's non-blocking result() (status terminal + downloads).
+    const result = await handle.result();
+
+    expect(result.succeeded[0].key).toBe('hero');
+    const item = result.byKey('hero');
+    expect(item.key).toBe('hero');
+    expect(item.outputs).toEqual(result.artifacts);
+  });
+
+  it('contrast: a reattached handle (no key) yields a keyless result and byKey throws', async () => {
+    const mock = makeMockClient();
+    // Reattach surface: a Handle built with no recipe key (client.workflow(id)).
+    const reattached = new Handle('wf_1', undefined, mock.client);
+    const result = await reattached.result();
+
+    expect(result.succeeded[0].key).toBeNull();
+    expect(() => result.byKey('hero')).toThrow(GislNoSuchKeyError);
+  });
+});
+
+describe('Recipe.submit — Handle.toJSON back-compat', () => {
+  it('a keyed handle still serialises to exactly {workflowId, webhookSecret} — key NOT present', () => {
+    // 4th arg (key) set — toJSON/toArray must NOT leak it, so the
+    // operation-first/merge submit() back-compat shape can never drift.
+    const keyed = new Handle('wf_1', 'whsec_abc', undefined, 'hero');
+    expect(keyed.toJSON()).toEqual({ workflowId: 'wf_1', webhookSecret: 'whsec_abc' });
+    expect(keyed.toArray()).toEqual({ workflowId: 'wf_1', webhookSecret: 'whsec_abc' });
+    expect('key' in keyed.toJSON()).toBe(false);
+  });
+
+  it('a keyed handle with no webhookSecret serialises to exactly {workflowId}', () => {
+    const keyed = new Handle('wf_1', undefined, undefined, 'hero');
+    expect(keyed.toJSON()).toEqual({ workflowId: 'wf_1' });
+    expect('key' in keyed.toJSON()).toBe(false);
   });
 });

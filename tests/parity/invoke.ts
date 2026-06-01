@@ -229,6 +229,41 @@ export async function runRecipeFixture(fixture: Fixture): Promise<unknown> {
   return result.toJSON();
 }
 
+/**
+ * FF5b (`u8M49LU2`) — submit dispatch. Builds a file-first `Recipe` from the
+ * fixture's `submit` block bound to a `GislClient`, applies each op in order,
+ * and drives `.submit(webhook?)` against the installed fetch stub. Returns the
+ * resulting `Handle` projected via `toJSON()` so the caller can deep-compare to
+ * `expected_return`; request parity (the create `callback_url`) is asserted by
+ * the standard request_response comparator. Mirrors PHP `Invoke::submitRecipe`.
+ */
+export async function submitRecipeFixture(fixture: Fixture): Promise<unknown> {
+  const spec = fixture.submit;
+  if (spec === undefined) {
+    throw new Error(`[${fixture.name}] a submit fixture requires a submit block`);
+  }
+  const client = new GislClient(
+    DEFAULT_CLIENT_CONFIG as ConstructorParameters<typeof GislClient>[0],
+  );
+  const input: FileInput =
+    spec.file.kind === 'upload_id'
+      ? fileInput.uploadId(spec.file.uploadId as string)
+      : fileInput.path(spec.file.path as string);
+
+  // Bind the client as the Recipe's execution-only last ctor arg so submit()
+  // has a client (the lowering path constructs without one). The recipe key (if
+  // any) rides on the Handle but is NOT serialised by toJSON().
+  let recipe = new Recipe(input, spec.file.key ?? undefined, [], undefined, undefined, client);
+  for (const op of spec.operations) {
+    recipe = applyLoweringOp(recipe, op);
+  }
+
+  const handle = await recipe.submit(spec.webhook);
+  // Handle.toJSON() is the canonical DATA projection (mirrors PHP toArray()) —
+  // `{ workflowId, webhookSecret? }`; the recipe key is deliberately omitted.
+  return handle.toJSON();
+}
+
 function applyLoweringOp(recipe: Recipe, op: FixtureLoweringOp): Recipe {
   switch (op.op) {
     case 'compress':
