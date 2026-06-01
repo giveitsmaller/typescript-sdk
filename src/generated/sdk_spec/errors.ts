@@ -14,6 +14,10 @@ export type ErrorCode =
   | "timeout"
   | "aborted"
   | "validation_failed"
+  | "cyclic_workflow_edges"
+  | "workflow_edge_references_unknown_job"
+  | "reserved_job_id_pattern"
+  | "cyclic_job_output_source_graph"
   | "auth_failed"
   | "feature_tier_restricted"
   | "tier_restriction"
@@ -205,6 +209,52 @@ export const ERROR_CODES: Readonly<Record<ErrorCode, ErrorEntry>> = Object.freez
     metadataSchema: Object.freeze({
       "details": "array",
     }),
+  }),
+  "cyclic_workflow_edges": Object.freeze({
+    code: "cyclic_workflow_edges",
+    category: "validation" as ErrorCategory,
+    source: "ErrorEnvelope.error",
+    status: "wired" as ErrorStatus,
+    httpStatus: 422,
+    retryable: false,
+    sdkClass: "GislValidationError",
+    description: "422 — cycle/self-edge in the explicit `workflow_edges` DAG. Wire `CYCLIC_WORKFLOW_EDGES` (g8PPkbNu); ValidationErrorEnvelope shape, `details[0].field`=`workflow_edges`.",
+    metadataSchema: Object.freeze({
+      "details": "array",
+    }),
+  }),
+  "workflow_edge_references_unknown_job": Object.freeze({
+    code: "workflow_edge_references_unknown_job",
+    category: "validation" as ErrorCategory,
+    source: "ErrorEnvelope.error",
+    status: "wired" as ErrorStatus,
+    httpStatus: 400,
+    retryable: false,
+    sdkClass: "GislValidationError",
+    description: "400 — a `workflow_edges` entry, job-level `source`, or `inputs[].source` references a job not in the request. Wire `WORKFLOW_EDGE_REFERENCES_UNKNOWN_JOB` (g8PPkbNu).",
+    metadataSchema: Object.freeze({}),
+  }),
+  "reserved_job_id_pattern": Object.freeze({
+    code: "reserved_job_id_pattern",
+    category: "validation" as ErrorCategory,
+    source: "ErrorEnvelope.error",
+    status: "wired" as ErrorStatus,
+    httpStatus: 400,
+    retryable: false,
+    sdkClass: "GislValidationError",
+    description: "400 — user job `id` matches the reserved `^job_\\d+$` pattern as the SOLE failure. Wire `RESERVED_JOB_ID_PATTERN` (g8PPkbNu); mixed violations keep generic `BAD_REQUEST`.",
+    metadataSchema: Object.freeze({}),
+  }),
+  "cyclic_job_output_source_graph": Object.freeze({
+    code: "cyclic_job_output_source_graph",
+    category: "validation" as ErrorCategory,
+    source: "ErrorEnvelope.error",
+    status: "wired" as ErrorStatus,
+    httpStatus: 400,
+    retryable: false,
+    sdkClass: "GislValidationError",
+    description: "400 — an implicit cycle in the `job_output` source graph, caught during effective-input-MIME resolution on POST /api/workflows. Wire `CYCLIC_JOB_OUTPUT_SOURCE_GRAPH` (g8PPkbNu).",
+    metadataSchema: Object.freeze({}),
   }),
   "auth_failed": Object.freeze({
     code: "auth_failed",
@@ -515,6 +565,10 @@ export const ERROR_CATEGORIES: Readonly<Record<ErrorCategory, readonly ErrorCode
     "multipart_part_invalid",
     "multipart_part_count_exceeded",
     "validation_failed",
+    "cyclic_workflow_edges",
+    "workflow_edge_references_unknown_job",
+    "reserved_job_id_pattern",
+    "cyclic_job_output_source_graph",
     "invalid_options",
     "invalid_combination",
     "missing_dependency",
