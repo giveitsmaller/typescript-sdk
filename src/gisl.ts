@@ -33,7 +33,7 @@ import type { GislClientConfig } from './types.js';
 import { OperationBuilder } from './builder.js';
 import { MergeBuilder, asset, type Asset, type MergeOptions } from './merge.js';
 import { PresetDefaults } from './ergonomic/presets/index.js';
-import { Recipe, fileInput, type FileInput } from './file-first.js';
+import { Recipe, FilesRecipe, fileInput, type FileInput } from './file-first.js';
 import { Handle } from './handle.js';
 
 // ---------------------------------------------------------------------------
@@ -139,6 +139,31 @@ function wrapErgonomic(
           return new Recipe(resolved, key, [], presetDefaults, scopedPresetDefaults, target);
         };
       }
+      if (prop === 'files') {
+        // Homogeneous fan-out entry point (FF3a) — apply ONE recipe (op chain)
+        // to MANY input files in ONE workflow. Each element is coerced the same
+        // way `file()` coerces its single input: a bare string is a filesystem
+        // path, a Blob/File an in-memory input, a `FileInput` passed through.
+        // The fan-out's RunResult partitions per input by 0-based index.
+        return (inputs: ReadonlyArray<string | Blob | FileInput>): FilesRecipe => {
+          if (inputs.length === 0) {
+            // A zero-input fan-out is a caller error — "one failing input
+            // doesn't sink the rest" is meaningless with no inputs, and it
+            // would otherwise create an empty-jobs workflow the API 422s.
+            throw new GislConfigError('files() requires at least one input file.', {
+              reason: 'no_inputs',
+            });
+          }
+          const resolved: FileInput[] = inputs.map((input) =>
+            typeof input === 'string'
+              ? fileInput.path(input)
+              : input instanceof Blob
+                ? fileInput.blob(input)
+                : input,
+          );
+          return new FilesRecipe(resolved, [], presetDefaults, scopedPresetDefaults, target);
+        };
+      }
       if (prop === 'workflow') {
         // Reattach to a previously-created workflow (FF5a). Returns a
         // client-bound Handle with no webhookSecret and no recipe key —
@@ -237,6 +262,17 @@ export type ErgonomicClient = GislClient & {
    * Execution (`run()`) lands in FF2b.
    */
   file(input: string | Blob | FileInput, key?: string): Recipe;
+  /**
+   * Homogeneous fan-out entry point (FF3a). Apply ONE recipe (op chain) to
+   * MANY input files in ONE workflow. Each element is a filesystem path
+   * (string), an in-memory {@link FileInput} via `fileInput.*`, or a Blob/File.
+   * Returns an immutable {@link FilesRecipe} you call the same ops on
+   * (`.compress()` / `.convert()` / `.thumbnail()` / `.textWatermark()`); the
+   * chain applies to every input. `run()` returns a partitioned
+   * {@link RunResult} keyed by each input's 0-based index — one bad input does
+   * not sink the rest. `submit()` is out of scope (a separate card).
+   */
+  files(inputs: ReadonlyArray<string | Blob | FileInput>): FilesRecipe;
   /**
    * Reattach to a previously-created workflow (FF5a). Returns a client-bound
    * {@link Handle} you can `.status()` / `.wait()` / `.result()`. The handle

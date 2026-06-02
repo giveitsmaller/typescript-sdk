@@ -90,6 +90,8 @@ import type {
   Downloader,
   // FF2b (tywwynmN) — Node streaming downloader bound by Recipe.run().
   HttpDownloader,
+  // FF3a (u0hBt6fl) — homogeneous fan-out builder (`client.files([...])`).
+  FilesRecipe,
 } from './index.js';
 import type { GislNoSuchKeyError, GislSinkError, GislNetworkError } from './index.js';
 // FF5a (Ao8RPVxD) — file-first StatusSnapshot value object + the
@@ -311,6 +313,8 @@ export function _runAudit(): void {
   accept<Manifest>();
   accept<Downloader>();
   accept<HttpDownloader>();
+  // FF3a / u0hBt6fl — homogeneous fan-out builder surface.
+  accept<FilesRecipe>();
   accept<GislNoSuchKeyError>();
   accept<GislSinkError>();
   accept<GislNetworkError>();

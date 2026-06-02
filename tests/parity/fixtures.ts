@@ -19,7 +19,9 @@ export type FixtureMode =
   | 'local_validation_error'
   | 'lowering'
   // FF2b (tywwynmN) — file-first run-mode execution fixtures.
-  | 'run';
+  | 'run'
+  // FF3a (u0hBt6fl) — file-first homogeneous fan-out fixtures.
+  | 'files';
 
 /**
  * Fixture schema version. Absent or `'1.0.0'` → v1 (legacy shape); v2
@@ -136,6 +138,24 @@ export interface FixtureSubmit {
   readonly webhook?: string;
 }
 
+/**
+ * FF3a (`u0hBt6fl`) — file-first HOMOGENEOUS FAN-OUT block. Builds a
+ * `FilesRecipe` from the ORDERED `files[]` input list, applies each shared
+ * {@link FixtureLoweringOp} to the chain, then EITHER lowers against
+ * `resolvedFileIds` (lowering variant — asserted via `expected_payload`) or
+ * drives `.run()` against the canned responses (run variant — asserted via
+ * `expected_run_result`). The per-file partition key is the 0-based index.
+ * Reuses {@link FixtureLoweringFile} + {@link FixtureLoweringOp} for the
+ * per-input + operation grammar.
+ */
+export interface FixtureFiles {
+  readonly files: readonly FixtureLoweringFile[];
+  readonly resolvedFileIds?: readonly string[];
+  readonly operations: readonly FixtureLoweringOp[];
+  readonly maxWait?: string | number;
+  readonly pollIntervalMs?: number;
+}
+
 export type FixtureValue =
   | null
   | boolean
@@ -246,6 +266,12 @@ export interface Fixture {
   // Handle is compared via expected_return.
   submit?: FixtureSubmit;
 
+  // FF3a (u0hBt6fl) — file-first homogeneous fan-out (mode='files'). The runner
+  // builds a FilesRecipe from the files block then EITHER lowers it (asserting
+  // expected_payload) or drives .run() (asserting the partitioned
+  // expected_run_result), keyed by which assertion key is present.
+  files?: FixtureFiles;
+
   // Meta — not part of the schema; used by the runner.
   __file: string;
 }
@@ -317,6 +343,9 @@ export const KNOWN_SDK_METHODS: ReadonlySet<string> = new Set([
   // File-first builder-chain LOWERING marker (FF2a / MfV0PDok). Not a
   // GislClient method — mode=lowering dispatches off the `lowering` block.
   'file',
+  // File-first homogeneous fan-out marker (FF3a / u0hBt6fl). Not a GislClient
+  // method — mode=files dispatches off the `files` block.
+  'files',
 ]);
 
 // ---------------------------------------------------------------------------
@@ -374,6 +403,8 @@ const FIXTURE_KEYS_V2 = new Set([
   'expected_run_result',
   // FF5b (u8M49LU2) — file-first submit block (request_response mode).
   'submit',
+  // FF3a (u0hBt6fl) — file-first homogeneous fan-out block.
+  'files',
 ]);
 const SDK_KEYS = new Set(['method', 'args', 'client_config']);
 const REQUEST_KEYS = new Set(['method', 'path', 'query', 'headers', 'body']);
@@ -435,9 +466,15 @@ export function validateFixture(raw: unknown, file: string): Fixture {
 
   const mode: FixtureMode = (r.mode as FixtureMode | undefined) ?? 'request_response';
   if (
-    !['request_response', 'sse', 'webhook', 'local_validation_error', 'lowering', 'run'].includes(
-      mode,
-    )
+    ![
+      'request_response',
+      'sse',
+      'webhook',
+      'local_validation_error',
+      'lowering',
+      'run',
+      'files',
+    ].includes(mode)
   ) {
     throw new Error(`${ctx} invalid mode "${r.mode}"`);
   }
@@ -451,6 +488,9 @@ export function validateFixture(raw: unknown, file: string): Fixture {
   }
   if (mode === 'run' && schemaVersion !== '2.0.0') {
     throw new Error(`${ctx} mode='run' requires fixtureSchemaVersion: '2.0.0'`);
+  }
+  if (mode === 'files' && schemaVersion !== '2.0.0') {
+    throw new Error(`${ctx} mode='files' requires fixtureSchemaVersion: '2.0.0'`);
   }
 
   requireObject(r.sdk, ctx, 'sdk');
@@ -530,6 +570,35 @@ export function validateFixture(raw: unknown, file: string): Fixture {
     if (r.run === undefined || r.expected_run_result === undefined) {
       throw new Error(
         `${ctx} mode=run requires both a run block and an expected_run_result block`,
+      );
+    }
+  }
+  if (mode === 'files') {
+    // FF3a (u0hBt6fl) — homogeneous fan-out. Like run-mode it declares the
+    // mocked `responses` (run variant) but NO `requests` assertions. It asserts
+    // EXACTLY ONE of expected_payload (lowering variant — zero responses) or
+    // expected_run_result (run variant), discriminated by which key is present.
+    if (requests.length !== 0) {
+      throw new Error(
+        `${ctx} mode=files must declare zero requests (it asserts the lowered payload or the partitioned RunResult, not wire requests)`,
+      );
+    }
+    if (method !== 'files') {
+      throw new Error(`${ctx} mode=files requires sdk.method="files" (got "${method}")`);
+    }
+    if (r.files === undefined) {
+      throw new Error(`${ctx} mode=files requires a files block`);
+    }
+    const hasPayload = r.expected_payload !== undefined;
+    const hasRunResult = r.expected_run_result !== undefined;
+    if (hasPayload === hasRunResult) {
+      throw new Error(
+        `${ctx} mode=files requires EXACTLY ONE of expected_payload (lowering variant) or expected_run_result (run variant)`,
+      );
+    }
+    if (hasPayload && responses.length !== 0) {
+      throw new Error(
+        `${ctx} mode=files lowering variant (expected_payload) must declare zero responses (lowering is network-free)`,
       );
     }
   }
@@ -657,6 +726,11 @@ export function validateFixture(raw: unknown, file: string): Fixture {
   if (r.submit !== undefined) {
     submit = validateSubmit(r.submit, `${ctx} submit`);
   }
+  // FF3a (u0hBt6fl) — files block.
+  let files: FixtureFiles | undefined;
+  if (r.files !== undefined) {
+    files = validateFiles(r.files, `${ctx} files`);
+  }
 
   return {
     name,
@@ -685,6 +759,8 @@ export function validateFixture(raw: unknown, file: string): Fixture {
       : {}),
     // FF5b (u8M49LU2) — submit block.
     ...(submit !== undefined ? { submit } : {}),
+    // FF3a (u0hBt6fl) — files block.
+    ...(files !== undefined ? { files } : {}),
     __file: file,
   };
 }
@@ -699,6 +775,16 @@ const RUN_KEYS = new Set(['file', 'operations', 'maxWait', 'pollIntervalMs']);
 // FF5b (u8M49LU2) — submit block keys: lowering's file + operations plus the
 // submit-only optional webhook.
 const SUBMIT_KEYS = new Set(['file', 'operations', 'webhook']);
+// FF3a (u0hBt6fl) — files block keys: an ordered files[] input list +
+// operations + (lowering variant) resolvedFileIds + (run variant) maxWait /
+// pollIntervalMs.
+const FILES_KEYS = new Set([
+  'files',
+  'resolvedFileIds',
+  'operations',
+  'maxWait',
+  'pollIntervalMs',
+]);
 
 /**
  * FF2b — validate the `run` block. Reuses the lowering `file` + op-param
@@ -802,6 +888,83 @@ function validateSubmit(value: unknown, ctx: string): FixtureSubmit {
     ...(v.webhook !== undefined ? { webhook: v.webhook as string } : {}),
   };
   return result;
+}
+
+/**
+ * FF3a — validate the `files` block. Reuses the lowering `file` + op-param
+ * validators PER ENTRY (the per-input + chain grammar is identical) and adds
+ * the fan-out-only `resolvedFileIds` (lowering variant) + run-only `maxWait` /
+ * `pollIntervalMs`. Mirrors the PHP `FixtureLoader::validateFiles`.
+ */
+function validateFiles(value: unknown, ctx: string): FixtureFiles {
+  requireObject(value, ctx, '(root)');
+  const v = value as Record<string, unknown>;
+  rejectUnknownKeys(v, FILES_KEYS, ctx);
+
+  if (!Array.isArray(v.files) || v.files.length === 0) {
+    throw new Error(`${ctx} files must be a non-empty array of file inputs`);
+  }
+  const inputs = v.files.map((entry, i): FixtureLoweringFile => {
+    requireObject(entry, ctx, `files[${i}]`);
+    const f = entry as Record<string, unknown>;
+    rejectUnknownKeys(f, LOWERING_FILE_KEYS, `${ctx} files[${i}]`);
+    const kind = f.kind;
+    if (kind !== 'path' && kind !== 'upload_id') {
+      throw new Error(`${ctx} files[${i}].kind must be 'path' or 'upload_id'`);
+    }
+    if (kind === 'path' && (typeof f.path !== 'string' || f.path === '')) {
+      throw new Error(`${ctx} files[${i}].path must be a non-empty string when kind=path`);
+    }
+    if (kind === 'upload_id' && (typeof f.uploadId !== 'string' || f.uploadId === '')) {
+      throw new Error(`${ctx} files[${i}].uploadId must be a non-empty string when kind=upload_id`);
+    }
+    return f as unknown as FixtureLoweringFile;
+  });
+
+  let resolvedFileIds: readonly string[] | undefined;
+  if (v.resolvedFileIds !== undefined) {
+    if (
+      !Array.isArray(v.resolvedFileIds) ||
+      !v.resolvedFileIds.every((s) => typeof s === 'string' && s !== '')
+    ) {
+      throw new Error(`${ctx} resolvedFileIds must be an array of non-empty strings`);
+    }
+    if (v.resolvedFileIds.length !== inputs.length) {
+      throw new Error(
+        `${ctx} resolvedFileIds length (${v.resolvedFileIds.length}) must equal files length (${inputs.length}) — one resolved id per input`,
+      );
+    }
+    resolvedFileIds = [...(v.resolvedFileIds as string[])];
+  }
+
+  if (!Array.isArray(v.operations) || v.operations.length === 0) {
+    throw new Error(`${ctx} operations must be a non-empty array`);
+  }
+  const operations = v.operations.map((op, i): FixtureLoweringOp => {
+    requireObject(op, ctx, `operations[${i}]`);
+    const o = op as Record<string, unknown>;
+    rejectUnknownKeys(o, LOWERING_OP_KEYS, `${ctx} operations[${i}]`);
+    if (typeof o.op !== 'string' || !LOWERING_OPS.has(o.op)) {
+      throw new Error(`${ctx} operations[${i}].op must be one of ${[...LOWERING_OPS].join('|')}`);
+    }
+    validateLoweringOpParams(o.op, o, `${ctx} operations[${i}]`);
+    return o as unknown as FixtureLoweringOp;
+  });
+
+  if (v.maxWait !== undefined && typeof v.maxWait !== 'string' && typeof v.maxWait !== 'number') {
+    throw new Error(`${ctx} maxWait must be a string or number when present`);
+  }
+  if (v.pollIntervalMs !== undefined && !Number.isInteger(v.pollIntervalMs)) {
+    throw new Error(`${ctx} pollIntervalMs must be an integer when present`);
+  }
+
+  return {
+    files: inputs,
+    ...(resolvedFileIds !== undefined ? { resolvedFileIds } : {}),
+    operations,
+    ...(v.maxWait !== undefined ? { maxWait: v.maxWait as string | number } : {}),
+    ...(v.pollIntervalMs !== undefined ? { pollIntervalMs: v.pollIntervalMs as number } : {}),
+  };
 }
 
 /**

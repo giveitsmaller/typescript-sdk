@@ -117,6 +117,11 @@ export type {
 // File-first builder (FF2a / MfV0PDok) — `client.file(path).op()...` lowering.
 export { Recipe, fileInput } from './file-first.js';
 export type { FileInput } from './file-first.js';
+// File-first homogeneous fan-out (FF3a / u0hBt6fl) — `client.files([...]).op()...`
+// applies one recipe to many inputs in one workflow; run() partitions per input.
+// `projectMultiJobToRunResult` is intentionally NOT re-exported — it is the
+// @internal per-job producer consumed only by FilesRecipe.run (codex).
+export { FilesRecipe } from './file-first.js';
 // File-first execution (FF2b / MfV0PDok) — Node streaming downloader bound by
 // `Recipe.run()` to write pre-signed output URLs to disk.
 export { HttpDownloader } from './http-downloader.js';

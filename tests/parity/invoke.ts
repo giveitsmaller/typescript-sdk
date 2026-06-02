@@ -20,7 +20,7 @@ import {
   type SequenceEntry,
 } from '../../src/merge.js';
 import { verifyWebhook } from '../../src/webhook.js';
-import { Recipe, fileInput, type FileInput } from '../../src/file-first.js';
+import { Recipe, FilesRecipe, fileInput, type FileInput } from '../../src/file-first.js';
 import type { OptimizeFor } from '../../src/generated/sdk_spec/enums.js';
 import type { WorkflowCreatePayload } from '../../src/types.js';
 
@@ -262,6 +262,83 @@ export async function submitRecipeFixture(fixture: Fixture): Promise<unknown> {
   // Handle.toJSON() is the canonical DATA projection (mirrors PHP toArray()) —
   // `{ workflowId, webhookSecret? }`; the recipe key is deliberately omitted.
   return handle.toJSON();
+}
+
+/**
+ * FF3a (`u0hBt6fl`) — mode=files dispatch (lowering variant). Builds a
+ * `FilesRecipe` from the fixture's `files` block (ORDERED inputs), applies each
+ * shared op in order, and lowers against `resolvedFileIds` to the multi-job wire
+ * payload. Pure + network-free — no client, no fetch stub. The caller
+ * deep-compares the result to `expected_payload`. Mirrors PHP `Invoke::lowerFiles`.
+ */
+export function lowerFilesFixture(fixture: Fixture): WorkflowCreatePayload {
+  const spec = fixture.files;
+  if (spec === undefined) {
+    throw new Error(`[${fixture.name}] mode=files requires a files block`);
+  }
+  if (spec.resolvedFileIds === undefined) {
+    throw new Error(
+      `[${fixture.name}] mode=files lowering variant requires files.resolvedFileIds`,
+    );
+  }
+  const inputs: FileInput[] = spec.files.map((f) =>
+    f.kind === 'upload_id' ? fileInput.uploadId(f.uploadId as string) : fileInput.path(f.path as string),
+  );
+  let recipe = new FilesRecipe(inputs);
+  for (const op of spec.operations) {
+    recipe = applyFilesOp(recipe, op);
+  }
+  return recipe.toWorkflowPayload(spec.resolvedFileIds);
+}
+
+/**
+ * FF3a (`u0hBt6fl`) — mode=files dispatch (run variant). Builds a `FilesRecipe`
+ * bound to a `GislClient` from the fixture's `files` block, applies each shared
+ * op in order, and drives `.run()` against the installed fetch stub. Returns the
+ * hydrated partitioned `RunResult` projected via `toJSON()` so the caller can
+ * deep-compare to `expected_run_result`. Mirrors PHP `Invoke::runFiles`.
+ */
+export async function runFilesFixture(fixture: Fixture): Promise<unknown> {
+  const spec = fixture.files;
+  if (spec === undefined) {
+    throw new Error(`[${fixture.name}] mode=files requires a files block`);
+  }
+  const client = new GislClient(
+    DEFAULT_CLIENT_CONFIG as ConstructorParameters<typeof GislClient>[0],
+  );
+  const inputs: FileInput[] = spec.files.map((f) =>
+    f.kind === 'upload_id' ? fileInput.uploadId(f.uploadId as string) : fileInput.path(f.path as string),
+  );
+  // Bind the client as the FilesRecipe's execution-only last ctor arg so run()
+  // has a client (the lowering path constructs without one).
+  let recipe = new FilesRecipe(inputs, [], undefined, undefined, client);
+  for (const op of spec.operations) {
+    recipe = applyFilesOp(recipe, op);
+  }
+  const result = await recipe.run({
+    ...(spec.maxWait !== undefined ? { maxWait: spec.maxWait } : {}),
+    ...(spec.pollIntervalMs !== undefined ? { pollIntervalMs: spec.pollIntervalMs } : {}),
+  });
+  return result.toJSON();
+}
+
+function applyFilesOp(recipe: FilesRecipe, op: FixtureLoweringOp): FilesRecipe {
+  switch (op.op) {
+    case 'compress':
+      return recipe.compress(op.optimize as OptimizeFor | undefined);
+    case 'convert':
+      return recipe.convert(op.format as string);
+    case 'thumbnail': {
+      const dims: { width?: number; height?: number } = {};
+      if (op.width !== undefined) dims.width = op.width;
+      if (op.height !== undefined) dims.height = op.height;
+      return recipe.thumbnail(dims);
+    }
+    case 'text_watermark':
+      return recipe.textWatermark(op.text as string);
+    default:
+      throw new Error(`[files] unknown op '${String((op as { op: string }).op)}'`);
+  }
 }
 
 function applyLoweringOp(recipe: Recipe, op: FixtureLoweringOp): Recipe {

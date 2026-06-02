@@ -348,6 +348,82 @@ export function projectDownloadsToRunResult(
 }
 
 /**
+ * Flatten a terminal multi-job workflow (the `client.files([...])` fan-out)
+ * into a partitioned {@link RunResult}. One job per input file, keyed by the
+ * `file-{i}` job ref the {@link FilesRecipe} lowering assigns; the result's
+ * `succeeded` / `failed` partition is PER JOB, so one bad input does not sink
+ * the rest.
+ *
+ * Join model: `finalStatus.jobs[]` carries the per-job {@link JobStatus} +
+ * `operations[]` (for the error message); `jobDownloads[]` carries the per-job
+ * output files. Both are joined on the job `ref` ("file-{i}"); the partition
+ * key is the index `"{i}"` parsed out of that ref. The flat `artifacts[]` is
+ * every job's outputs in job order (the order `finalStatus.jobs[]` lists them).
+ *
+ * **Partition invariant (mirrors {@link projectDownloadsToRunResult} PER JOB —
+ * do NOT let it drift):** a job is a SUCCESS only when its
+ * {@link JobResponse.status} `=== 'completed'`. Any other per-job status —
+ * `failed`, `pending`, `waiting`, `blocked_insufficient_credits`,
+ * `in_progress` — partitions that job into `failed[]` (with that job's first
+ * operation error message, scoped to THAT job only).
+ *
+ * @internal Exported for the file-first `client.files([...]).run()` producer;
+ *   not part of the caller-facing fluent surface.
+ */
+export function projectMultiJobToRunResult(
+  workflowId: string,
+  finalStatus: WorkflowStatusResponse,
+  jobDownloads: readonly { ref: string; files: readonly OperationDownload[] }[],
+  keyByRef: ReadonlyMap<string, string | null>,
+  downloader?: Downloader,
+): RunResult {
+  // Group downloads by job ref so a job's outputs can be flattened AFTER the
+  // per-job partition is decided (grouping is unrecoverable post-flatten).
+  const filesByRef = new Map<string, readonly OperationDownload[]>();
+  for (const job of jobDownloads) {
+    filesByRef.set(job.ref, job.files);
+  }
+
+  const artifacts: OutputFile[] = [];
+  const succeeded: ItemResult[] = [];
+  const failed: ItemFailure[] = [];
+
+  const jobs = finalStatus.jobs ?? [];
+  for (const job of jobs) {
+    const key = keyByRef.get(job.ref) ?? jobIndexFromRef(job.ref);
+    const outputs: OutputFile[] = (filesByRef.get(job.ref) ?? []).map((f) => ({
+      url: f.downloadUrl,
+      filename: f.filename,
+      sizeBytes: f.sizeBytes,
+      operation: f.operation,
+    }));
+    // The flat artifacts[] keeps every job's outputs in job order.
+    artifacts.push(...outputs);
+
+    if (job.status === 'completed') {
+      succeeded.push({ key, outputs });
+    } else {
+      const firstError = (job.operations ?? [])
+        .map((op) => op.errorMessage)
+        .find((m): m is string => m !== undefined);
+      failed.push({
+        key,
+        error: new Error(
+          firstError !== undefined ? `${job.status}: ${firstError}` : String(job.status),
+        ),
+      });
+    }
+  }
+
+  return new RunResult(workflowId, finalStatus.status, artifacts, succeeded, failed, downloader);
+}
+
+/** Derive the partition key `"{i}"` from a `file-{i}` job ref; the ref verbatim otherwise. */
+function jobIndexFromRef(ref: string): string {
+  return ref.startsWith('file-') ? ref.slice('file-'.length) : ref;
+}
+
+/**
  * The primary file a {@link Recipe} operates on — the "subject" of the
  * file-first surface. A discriminated union over the ways a caller names an
  * input:
@@ -485,6 +561,15 @@ export class Recipe {
   /** The number of operations chained so far (introspection / tests). */
   get stepCount(): number {
     return this.steps.length;
+  }
+
+  /**
+   * The captured op chain. Read by {@link FilesRecipe} to compose a shared
+   * chain across many inputs without duplicating the chain-method validation.
+   * @internal
+   */
+  get recipeSteps(): readonly RecipeStep[] {
+    return this.steps;
   }
 
   /**
@@ -716,5 +801,243 @@ export class Recipe {
       return _detectCompressMedia(this.input.blob);
     }
     return undefined;
+  }
+}
+
+/**
+ * The homogeneous fan-out builder value (FF3a). `client.files([a, b, c])`
+ * returns a `FilesRecipe`; the op-chain methods (`compress`, `convert`,
+ * `thumbnail`, `textWatermark`) build ONE shared recipe (chain) that is applied
+ * to EVERY input file in ONE workflow. `run()` returns a partitioned
+ * {@link RunResult} — one `succeeded`/`failed` entry per input, keyed by its
+ * 0-based index ("0", "1", …) so one bad input does not sink the rest.
+ *
+ * **Immutable / clone-on-write**, exactly like {@link Recipe}: every op returns
+ * a NEW `FilesRecipe` carrying the appended step. The inputs are held as an
+ * ORDERED list (NOT a map) so the per-file index is the partition key.
+ *
+ * **Lowering composes {@link Recipe} per file** rather than duplicating
+ * `lowerStep`/`lowerCompressOptions`: for each input `i` it builds an internal
+ * single-file `Recipe(input_i, …, steps)`, calls its `toWorkflowPayload` to get
+ * that file's one-job payload, then merges all jobs into ONE
+ * {@link WorkflowCreatePayload} with `jobs[i].id = "file-{i}"`. This preserves
+ * each file's media-hint (different extensions per input resolve compress
+ * presets independently).
+ *
+ * Single-file `submit()` is OUT of scope here — `client.files([...])` exposes
+ * `run()` only. Mirrors the PHP `FilesRecipe`.
+ */
+export class FilesRecipe {
+  constructor(
+    private readonly inputs: readonly FileInput[],
+    private readonly steps: readonly RecipeStep[] = [],
+    private readonly presetDefaults?: PresetDefaults,
+    private readonly scopedPresetDefaults?: PresetDefaults,
+    private readonly client?: GislClient,
+  ) {}
+
+  /**
+   * Reduce file size on every input. `optimize` selects a per-media preset
+   * (resolved per file at lower-time, so each input's extension picks its own
+   * preset). Reuses {@link Recipe}'s validation — a directly-constructed
+   * lowering builds an internal Recipe that throws the same `GislConfigError`.
+   */
+  compress(optimize?: OptimizeFor): FilesRecipe {
+    return this.withStep(this.baseRecipe().compress(optimize));
+  }
+
+  /** Change every input's format. `format` lowers verbatim to the `format` option. */
+  convert(format: string): FilesRecipe {
+    return this.withStep(this.baseRecipe().convert(format));
+  }
+
+  /** Generate a preview of every input. Omitted dimensions are dropped from the wire options. */
+  thumbnail(options: { width?: number; height?: number } = {}): FilesRecipe {
+    return this.withStep(this.baseRecipe().thumbnail(options));
+  }
+
+  /** Apply the same text watermark to every input. */
+  textWatermark(text: string): FilesRecipe {
+    return this.withStep(this.baseRecipe().textWatermark(text));
+  }
+
+  /** The number of inputs in this fan-out (introspection / tests). */
+  get inputCount(): number {
+    return this.inputs.length;
+  }
+
+  /** The number of operations chained so far (introspection / tests). */
+  get stepCount(): number {
+    return this.steps.length;
+  }
+
+  /**
+   * Lower this fan-out to a single multi-job workflow-create payload against a
+   * list of resolved upload ids (one per input, in input order). Each input `i`
+   * becomes ONE job with `id = "file-{i}"`, its `source: upload(fileIds[i])`,
+   * and the SHARED lowered `operations[]`. Composes the single-file
+   * {@link Recipe.toWorkflowPayload} per file so per-file media-hints resolve
+   * independently and lowering logic is not duplicated.
+   *
+   * @internal Consumed by {@link run} (after uploading all inputs) and the
+   *   cross-language parity harness (with fixed ids). Not caller-facing.
+   */
+  toWorkflowPayload(fileIds: readonly string[]): WorkflowCreatePayload {
+    const jobs: JobDefinitionPayload[] = this.inputs.map((input, i) => {
+      const single = new Recipe(input, undefined, this.steps, this.presetDefaults, this.scopedPresetDefaults);
+      const oneJob = single.toWorkflowPayload(fileIds[i]).jobs[0];
+      // Key order (id, source, operations) matches the PHP `toWire()` so the
+      // JSON-string serialisation is byte-identical across languages.
+      return { id: `file-${i}`, source: oneJob.source, operations: oneJob.operations };
+    });
+    return { jobs };
+  }
+
+  /**
+   * Execute the fan-out end-to-end: upload EVERY input, create ONE workflow
+   * with one job per input, await a terminal state (SSE with poll fallback),
+   * then resolve the per-job downloads into a partitioned {@link RunResult}.
+   * `partially_failed` is a NORMAL terminal state here — its successful jobs
+   * land in `succeeded`, its failed jobs in `failed`.
+   *
+   * Requires a client bound at construction time — `gisl().files(...)` wires
+   * it; a directly-constructed `FilesRecipe` throws {@link GislConfigError}.
+   * Mirrors the single-file {@link Recipe.run}; submit() is out of scope.
+   */
+  async run(
+    options: {
+      maxWait?: string | number;
+      onProgress?: (event: ProgressEvent) => void;
+      signal?: AbortSignal;
+      pollIntervalMs?: number;
+    } = {},
+  ): Promise<RunResult> {
+    const signal = options.signal;
+    const onProgress = options.onProgress;
+    if (this.client === undefined) {
+      throw new GislConfigError(
+        'FilesRecipe.run() requires a client; build the fan-out via gisl().files(...) rather than constructing FilesRecipe directly.',
+        { reason: 'no_client' },
+      );
+    }
+    const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 300_000);
+
+    // 1. Upload EVERY input (verbatim for a pre-uploaded id; uploading a path /
+    // blob otherwise). Sequential so progress events stay ordered + the abort
+    // signal is honoured promptly; a resource arm is impossible in TS (Blob).
+    const fileIds: string[] = [];
+    for (const input of this.inputs) {
+      // Fail fast between uploads — a deadline that elapses mid-batch should
+      // not force every remaining input to upload before throwing.
+      _checkAborted(signal);
+      if (Date.now() >= deadline) {
+        throw new GislTimeoutError(
+          'maxWait elapsed during fan-out uploads before all inputs were uploaded',
+        );
+      }
+      if (input.kind === 'uploadId') {
+        fileIds.push(input.fileId);
+      } else {
+        const source = input.kind === 'path' ? input.path : input.blob;
+        const up = await this.client.uploadFile(source, {
+          signal,
+          ...(onProgress !== undefined
+            ? {
+                onProgress: (uploadedBytes: number, totalBytes: number): void => {
+                  onProgress({ phase: 'upload', uploadedBytes, totalBytes });
+                },
+              }
+            : {}),
+        });
+        fileIds.push(up.fileId);
+      }
+    }
+    _checkAborted(signal);
+    if (Date.now() >= deadline) {
+      throw new GislTimeoutError(
+        'Uploads completed but maxWait elapsed before workflow could be created',
+      );
+    }
+
+    // 2. Create ONE multi-job workflow (one job per input).
+    const created = await this.client.createWorkflow(this.toWorkflowPayload(fileIds));
+    _checkAborted(signal);
+
+    // 3. Wait to terminal status — SSE first, poll on a genuine SSE error.
+    // `partially_failed` is a normal terminal state here (the helper treats it
+    // as terminal); only caller-aborted / deadline / API errors propagate.
+    let finalStatus;
+    try {
+      finalStatus = await _consumeSseToTerminal(this.client, {
+        workflowId: created.workflowId,
+        deadline,
+        signal,
+        onProgress,
+      });
+    } catch (err) {
+      if (err instanceof GislTimeoutError) throw err;
+      if (err instanceof DOMException && err.name === 'AbortError') throw err;
+      if (err instanceof GislApiError) throw err;
+      finalStatus = await _pollToTerminal(this.client, {
+        workflowId: created.workflowId,
+        deadline,
+        signal,
+        pollIntervalMs: options.pollIntervalMs,
+      });
+    }
+
+    // 4. Fetch downloads + project per-job into the partitioned RunResult.
+    if (Date.now() >= deadline) {
+      throw new GislTimeoutError(
+        `Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`,
+      );
+    }
+    const downloads = await this.client.getWorkflowDownloads(created.workflowId);
+
+    // keyByRef maps each job ref ("file-{i}") to the partition key. Today the
+    // key is just the index string; the Map seam leaves room for the FF3b
+    // keyed-fan-out card to map refs to caller-supplied keys without changing
+    // the producer's signature.
+    const keyByRef = new Map<string, string | null>(
+      this.inputs.map((_, i) => [`file-${i}`, String(i)]),
+    );
+    const downloader = new HttpDownloader();
+    return projectMultiJobToRunResult(
+      created.workflowId,
+      finalStatus,
+      downloads.downloads,
+      keyByRef,
+      downloader,
+    );
+  }
+
+  /**
+   * The shared single-file {@link Recipe} that captures the op chain (input is
+   * a placeholder — only the steps are read). Reuses Recipe's op-chain
+   * validation + coercion so a `FilesRecipe.compress(bad)` throws the identical
+   * `GislConfigError` as `Recipe.compress(bad)`.
+   */
+  private baseRecipe(): Recipe {
+    // The placeholder input never reaches the wire (only `steps` are read off
+    // the returned Recipe). A path placeholder gives compress() a media hint so
+    // optimize validation matches the single-file path; per-file lowering in
+    // toWorkflowPayload() rebuilds a Recipe with the REAL input.
+    return new Recipe(
+      this.inputs[0] ?? fileInput.path('placeholder'),
+      undefined,
+      this.steps,
+      this.presetDefaults,
+      this.scopedPresetDefaults,
+    );
+  }
+
+  private withStep(recipeWithStep: Recipe): FilesRecipe {
+    return new FilesRecipe(
+      this.inputs,
+      recipeWithStep.recipeSteps,
+      this.presetDefaults,
+      this.scopedPresetDefaults,
+      this.client,
+    );
   }
 }

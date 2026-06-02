@@ -13,7 +13,14 @@ import {
   type CapturedResolvedOptions,
   type CapturedLocalValidationError,
 } from './comparators.js';
-import { invokeFixture, lowerFixture, runRecipeFixture, submitRecipeFixture } from './invoke.js';
+import {
+  invokeFixture,
+  lowerFixture,
+  runRecipeFixture,
+  submitRecipeFixture,
+  lowerFilesFixture,
+  runFilesFixture,
+} from './invoke.js';
 import { GislConfigError } from '../../src/errors.js';
 
 // ---------------------------------------------------------------------------
@@ -123,6 +130,44 @@ describe('cross-SDK parity', () => {
         if (!diff.ok) {
           throw new Error(
             `[${fixture.name}] run parity failure:\n  - ${diff.issues.join('\n  - ')}`,
+          );
+        }
+        return;
+      }
+
+      // FF3a (u0hBt6fl) — mode=files homogeneous fan-out. Two variants share
+      // the one files block: the lowering variant (expected_payload, no
+      // network) deep-compares the lowered multi-job payload; the run variant
+      // (expected_run_result) installs the stub, drives .run(), and
+      // deep-compares the partitioned RunResult. HARNESS NOTE: the run variant
+      // depends on the fetch stub serving the canned responses in call order
+      // (F4-B / cEUWPgKW), same as mode=run.
+      if (fixture.mode === 'files') {
+        if (fixture.expected_payload !== undefined) {
+          const lowered = lowerFilesFixture(fixture);
+          const diff = compareValue(
+            fixture.expected_payload,
+            lowered as unknown as never,
+            'expected_payload',
+          );
+          if (!diff.ok) {
+            throw new Error(
+              `[${fixture.name}] files lowering parity failure:\n  - ${diff.issues.join('\n  - ')}`,
+            );
+          }
+          return;
+        }
+        stub = createFetchStub();
+        stub.install(fixture.responses, fixture.__file);
+        const actualRun = await runFilesFixture(fixture);
+        const diff = compareValue(
+          fixture.expected_run_result,
+          actualRun as unknown as never,
+          'expected_run_result',
+        );
+        if (!diff.ok) {
+          throw new Error(
+            `[${fixture.name}] files run parity failure:\n  - ${diff.issues.join('\n  - ')}`,
           );
         }
         return;
