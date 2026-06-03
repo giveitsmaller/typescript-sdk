@@ -33,7 +33,7 @@ import type {
   UploadOptions,
   WorkflowCreatePayload,
 } from './types.js';
-import { uploadSource } from './types.js';
+import { uploadSource, jobOutputSource } from './types.js';
 import {
   GislConfigError,
   GislPerInputOptionsNotSupportedError,
@@ -228,7 +228,14 @@ export class MergeBuilder {
       );
     }
     const downloads = await this.client.getWorkflowDownloads(created.workflowId);
-    return _projectResult(finalStatus, downloads.downloads, this.opOptionsForResolved());
+    // p0SuJEeK — project ONLY the merge job's output. getWorkflowDownloads
+    // returns a download group per terminal job, which now INCLUDES the
+    // `passthrough` source jobs (their output is the unchanged upload). Those
+    // are plumbing, not the merge deliverable — surfacing them as artifacts
+    // would pollute the Result with the raw inputs. The merge job's ref is
+    // 'merge' (see buildPayload); the source jobs are 'src_N'.
+    const mergeDownloads = downloads.downloads.filter((d) => d.ref === 'merge');
+    return _projectResult(finalStatus, mergeDownloads, this.opOptionsForResolved());
   }
 
   async submit(options: SubmitOptions): Promise<Handle> {
@@ -378,11 +385,37 @@ export class MergeBuilder {
     plan: SequencePlan,
     uploadedByAssetId: ReadonlyMap<string, string>,
   ): WorkflowCreatePayload {
-    const inputs: JobInputV2Payload[] = plan.positions.map((pos) => {
+    // p0SuJEeK — the API rejects upload-direct multi-input
+    // (`MultiInputSource` excludes the `upload` leaf: "use type=job_output").
+    // So each uploaded asset is wrapped in its OWN single-input `passthrough`
+    // source job, and the merge job references those via `job_output` — the
+    // shape the v2.35.0 `v2_merge_two_uploads` example prescribes. One source
+    // job per UNIQUE asset (in first-seen position order); a repeated asset
+    // re-uses its src job. `passthrough` is a lossless inert op (it does NOT
+    // get the implicit compress an empty `operations: []` job would).
+    const srcIdByAsset = new Map<string, string>();
+    const sourceJobs: JobDefinitionPayload[] = [];
+    for (const pos of plan.positions) {
+      if (srcIdByAsset.has(pos.assetId)) continue;
       const fileId = uploadedByAssetId.get(pos.assetId);
       if (fileId === undefined) {
         // Defensive — planSequence should have rejected this.
         throw new Error(`Asset '${pos.assetId}' was never uploaded — internal builder bug`);
+      }
+      const srcId = `src_${sourceJobs.length}`;
+      srcIdByAsset.set(pos.assetId, srcId);
+      sourceJobs.push({
+        id: srcId,
+        source: uploadSource(fileId),
+        operations: [{ type: 'passthrough' }],
+      });
+    }
+
+    const inputs: JobInputV2Payload[] = plan.positions.map((pos) => {
+      // Defensive — srcIdByAsset was populated for every position's asset above.
+      const srcId = srcIdByAsset.get(pos.assetId);
+      if (srcId === undefined) {
+        throw new Error(`Asset '${pos.assetId}' has no source job — internal builder bug`);
       }
       // Codex r1 HIGH 502c6bf232c2 — per_input_options goes on EACH
       // JobInputV2Payload (per-input entry), NOT on operations[0].options.
@@ -392,7 +425,7 @@ export class MergeBuilder {
       const wireOpts = plan.mediaKind === 'image'
         ? {}
         : wirePerInputOptions(pos.options, plan.mediaKind);
-      const input: JobInputV2Payload = { source: uploadSource(fileId) };
+      const input: JobInputV2Payload = { source: jobOutputSource(srcId) };
       if (Object.keys(wireOpts).length > 0) {
         input.per_input_options = wireOpts;
       }
@@ -402,12 +435,12 @@ export class MergeBuilder {
     // Merge-level options (excluding the SDK-side mediaKind/allowUnusedAssets).
     const mergeOpts = wireMergeOptions(this.opOptions, plan.mediaKind);
 
-    const job: JobDefinitionPayload = {
+    const mergeJob: JobDefinitionPayload = {
       id: 'merge',
       inputs,
       operations: [{ type: 'merge', options: mergeOpts as Record<string, unknown> }],
     };
-    return { jobs: [job] };
+    return { jobs: [...sourceJobs, mergeJob] };
   }
 
   private opOptionsForResolved(): Record<string, unknown> {

@@ -12,6 +12,72 @@ import type { GislClient } from '../../src/client.js';
 
 let fetchSpy: ReturnType<typeof vi.fn>;
 
+// p0SuJEeK — the merge payload now emits one single-input `passthrough`
+// source job per UNIQUE asset (first-seen position order) FOLLOWED BY the
+// merge job LAST. So `jobs[0]` is no longer the merge job. These helpers
+// locate the merge job + assert the source-job invariants.
+
+interface MergeInput {
+  source: { type: string; from?: string; file_id?: string };
+  per_input_options?: Record<string, unknown>;
+}
+
+interface WireJob {
+  id: string;
+  source?: { type: string; file_id?: string; from?: string };
+  inputs?: MergeInput[];
+  operations: Array<{ type: string; options?: Record<string, unknown> }>;
+}
+
+interface MergeWirePayload {
+  jobs: WireJob[];
+}
+
+/** The merge job always carries an `inputs[]` array (multi-input). */
+type MergeJob = WireJob & { inputs: MergeInput[] };
+
+/** Locate the merge job — it is the LAST element + the only one with id 'merge'. */
+function mergeJob(payload: MergeWirePayload): MergeJob {
+  const job = payload.jobs[payload.jobs.length - 1];
+  expect(job.id).toBe('merge');
+  expect(job.operations[0].type).toBe('merge');
+  expect(Array.isArray(job.inputs)).toBe(true);
+  return job as MergeJob;
+}
+
+/** The merge operation's `options` bag (always present on the merge job). */
+function mergeOptions(payload: MergeWirePayload): Record<string, unknown> {
+  const opts = mergeJob(payload).operations[0].options;
+  expect(opts).toBeDefined();
+  return opts as Record<string, unknown>;
+}
+
+/**
+ * Assert the leading source jobs: each is an `upload`-sourced single-input
+ * job carrying exactly `operations: [{type: 'passthrough'}]`, with ids
+ * `src_0`, `src_1`, … in order. `expectedCount` source jobs precede the
+ * merge job. Returns the set of source-job ids for `job_output` checks.
+ */
+function assertSourceJobs(payload: MergeWirePayload, expectedCount: number): Set<string> {
+  expect(payload.jobs).toHaveLength(expectedCount + 1);
+  const srcIds = new Set<string>();
+  for (let i = 0; i < expectedCount; i += 1) {
+    const job = payload.jobs[i];
+    expect(job.id).toBe(`src_${i}`);
+    expect(job.source?.type).toBe('upload');
+    expect(typeof job.source?.file_id).toBe('string');
+    expect(job.inputs).toBeUndefined();
+    expect(job.operations).toEqual([{ type: 'passthrough' }]);
+    srcIds.add(job.id);
+  }
+  // Every merge input references a source job via job_output.
+  for (const input of mergeJob(payload).inputs) {
+    expect(input.source.type).toBe('job_output');
+    expect(srcIds.has(input.source.from ?? '')).toBe(true);
+  }
+  return srcIds;
+}
+
 function makeMockClient(): {
   uploadFile: ReturnType<typeof vi.fn>;
   createWorkflow: ReturnType<typeof vi.fn>;
@@ -83,18 +149,21 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('MergeBuilder — simple concat (no .sequence)', () => {
-  it('uploads each declared asset once + builds a single merge job with inputs[]', async () => {
+  it('uploads each declared asset once + builds one passthrough src job per asset + a merge job last', async () => {
     const mock = makeMockClient();
     const m = new MergeBuilder(mock.client, [asset('a.mp4'), asset('b.mp4'), asset('c.mp4')], {});
     await m.run({ maxWait: '30s' });
     expect(mock.uploadFile).toHaveBeenCalledTimes(3);
     const payload = mock.createWorkflow.mock.calls[0][0];
-    expect(payload.jobs).toHaveLength(1);
-    expect(payload.jobs[0].id).toBe('merge');
-    expect(payload.jobs[0].operations[0].type).toBe('merge');
-    expect(payload.jobs[0].inputs).toHaveLength(3);
-    // Inputs go in declared order when no .sequence is set.
-    expect(payload.jobs[0].inputs[0].source.type).toBe('upload');
+    // p0SuJEeK — 3 unique assets → 3 src_* passthrough jobs + 1 merge job last.
+    assertSourceJobs(payload, 3);
+    const merge = mergeJob(payload);
+    expect(merge.inputs).toHaveLength(3);
+    // Inputs go in declared order; each references its src job via job_output.
+    expect(merge.inputs[0].source.type).toBe('job_output');
+    expect(merge.inputs[0].source.from).toBe('src_0');
+    expect(merge.inputs[1].source.from).toBe('src_1');
+    expect(merge.inputs[2].source.from).toBe('src_2');
   });
 
   it('honours merge-level transition + crossfadeDuration on a video merge', async () => {
@@ -105,7 +174,7 @@ describe('MergeBuilder — simple concat (no .sequence)', () => {
       normalizeAudio: true,
     }).run({ maxWait: '30s' });
     const payload = mock.createWorkflow.mock.calls[0][0];
-    expect(payload.jobs[0].operations[0].options).toMatchObject({
+    expect(mergeJob(payload).operations[0].options).toMatchObject({
       transition: 'crossfade',
       crossfade_duration: 1.0,
       normalize_audio: true,
@@ -118,7 +187,7 @@ describe('MergeBuilder — simple concat (no .sequence)', () => {
       targetSize: '100MB',
       codec: 'h264',
     }).run({ maxWait: '30s' });
-    const opts = mock.createWorkflow.mock.calls[0][0].jobs[0].operations[0].options;
+    const opts = mergeOptions(mock.createWorkflow.mock.calls[0][0]);
     expect(opts.target_size_bytes).toBe(100_000_000);
     expect(opts.encoding_mode).toBe('target_size');
     expect(opts.codec).toBe('h264');
@@ -138,7 +207,16 @@ describe('MergeBuilder — .sequence with reuse', () => {
     // 4 unique declared assets → 4 uploads (NOT 6 even though X appears 3× in sequence).
     expect(mock.uploadFile).toHaveBeenCalledTimes(4);
     const payload = mock.createWorkflow.mock.calls[0][0];
-    expect(payload.jobs[0].inputs).toHaveLength(6);
+    // p0SuJEeK — 4 unique assets (first-seen order a, x, b, c) → 4 src jobs.
+    // A repeated asset (x) re-uses its SAME src job, not a second one.
+    const srcIds = assertSourceJobs(payload, 4);
+    const merge = mergeJob(payload);
+    expect(merge.inputs).toHaveLength(6);
+    // sequence is a, x, b, x, c, x — positions 1, 3, 5 all reference x's src job.
+    expect(merge.inputs[1].source.from).toBe(merge.inputs[3].source.from);
+    expect(merge.inputs[3].source.from).toBe(merge.inputs[5].source.from);
+    // The four distinct src jobs cover exactly the four positions a, x, b, c.
+    expect(srcIds.size).toBe(4);
   });
 
   it('uploads each handle ZERO times — handle assets bypass upload entirely', async () => {
@@ -149,7 +227,10 @@ describe('MergeBuilder — .sequence with reuse', () => {
     // Only `b` gets uploaded; `a` was already uploaded out of band.
     expect(mock.uploadFile).toHaveBeenCalledTimes(1);
     const payload = mock.createWorkflow.mock.calls[0][0];
-    expect(payload.jobs[0].inputs).toHaveLength(2);
+    // p0SuJEeK — a handle asset still gets its own passthrough src job
+    // (the upload-direct exclusion applies to every multi-input source).
+    assertSourceJobs(payload, 2);
+    expect(mergeJob(payload).inputs).toHaveLength(2);
   });
 
   it('emits per_input_options on EACH JobInputV2Payload with per-position transitions (wire-truth)', async () => {
@@ -166,13 +247,19 @@ describe('MergeBuilder — .sequence with reuse', () => {
       )
       .run({ maxWait: '30s' });
     const payload = mock.createWorkflow.mock.calls[0][0];
+    // p0SuJEeK — 3 unique assets (a, x, b) → 3 src jobs; per_input_options
+    // stays on the merge inputs[] entries exactly as before.
+    assertSourceJobs(payload, 3);
+    const merge = mergeJob(payload);
     // Codex r1 HIGH 502c6bf232c2 — per_input_options goes on each input
     // entry, NOT job-level operations.options.
-    expect(payload.jobs[0].operations[0].options.per_input_options).toBeUndefined();
-    expect(payload.jobs[0].inputs[0].per_input_options).toBeUndefined();
-    expect(payload.jobs[0].inputs[1].per_input_options).toEqual({ transition: 'fade' });
-    expect(payload.jobs[0].inputs[2].per_input_options).toBeUndefined();
-    expect(payload.jobs[0].inputs[3].per_input_options).toBeUndefined();
+    expect(merge.operations[0].options?.per_input_options).toBeUndefined();
+    expect(merge.inputs[0].per_input_options).toBeUndefined();
+    expect(merge.inputs[1].per_input_options).toEqual({ transition: 'fade' });
+    expect(merge.inputs[2].per_input_options).toBeUndefined();
+    expect(merge.inputs[3].per_input_options).toBeUndefined();
+    // The reused asset x (positions 1 + 3) shares ONE src job.
+    expect(merge.inputs[1].source.from).toBe(merge.inputs[3].source.from);
   });
 
   it('emits gap_duration on audio merge per-input options ONLY (video merges DO NOT carry it)', async () => {
@@ -185,7 +272,8 @@ describe('MergeBuilder — .sequence with reuse', () => {
       .sequence(t1, clip(sting, { transition: 'crossfade', gapDuration: 0.5 }), t2, clip(sting))
       .run({ maxWait: '30s' });
     const audioPayload = mock.createWorkflow.mock.calls[0][0];
-    expect(audioPayload.jobs[0].inputs[1].per_input_options).toEqual({
+    assertSourceJobs(audioPayload, 3);
+    expect(mergeJob(audioPayload).inputs[1].per_input_options).toEqual({
       transition: 'crossfade',
       gap_duration: 0.5,
     });
@@ -199,10 +287,12 @@ describe('MergeBuilder — .sequence with reuse', () => {
       .sequence(v1, clip(v2, { transition: 'crossfade', gapDuration: 0.5 }))
       .run({ maxWait: '30s' });
     const videoPayload = mock2.createWorkflow.mock.calls[0][0];
-    expect(videoPayload.jobs[0].inputs[1].per_input_options).toEqual({
+    assertSourceJobs(videoPayload, 2);
+    const videoMerge = mergeJob(videoPayload);
+    expect(videoMerge.inputs[1].per_input_options).toEqual({
       transition: 'crossfade',
     });
-    expect(videoPayload.jobs[0].inputs[1].per_input_options?.gap_duration).toBeUndefined();
+    expect(videoMerge.inputs[1].per_input_options?.gap_duration).toBeUndefined();
   });
 
   it('image merge with bare-clip reuse (no per-input opts) does NOT emit per_input_options', async () => {
@@ -218,10 +308,21 @@ describe('MergeBuilder — .sequence with reuse', () => {
     })
       .sequence(p1, div, p2, div)
       .run({ maxWait: '30s' });
-    const opts = mock.createWorkflow.mock.calls[0][0].jobs[0].operations[0].options;
+    const payload = mock.createWorkflow.mock.calls[0][0];
+    // p0SuJEeK — 3 unique assets (p1, div, p2) → 3 src jobs; the reused
+    // divider shares its src job across positions 1 + 3.
+    assertSourceJobs(payload, 3);
+    const merge = mergeJob(payload);
+    expect(merge.inputs).toHaveLength(4);
+    expect(merge.inputs[1].source.from).toBe(merge.inputs[3].source.from);
+    const opts = mergeOptions(payload);
     // Merge-level transition propagates; per_input_options is NOT set on image merges.
     expect(opts.transition).toBe('fade');
     expect(opts.per_input_options).toBeUndefined();
+    // Image merges never carry per_input_options on any input.
+    for (const input of merge.inputs) {
+      expect(input.per_input_options).toBeUndefined();
+    }
   });
 });
 
@@ -387,5 +488,65 @@ describe('MergeBuilder — dedupe identity', () => {
       .sequence(h1, h3)
       .run({ maxWait: '30s' });
     expect(mock.uploadFile).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// p0SuJEeK — Result projection must surface ONLY the merge job's output.
+// getWorkflowDownloads returns a group per terminal job, which now includes
+// the passthrough source jobs (output = the unchanged upload). Those must NOT
+// leak into Result.artifacts as if they were merge deliverables.
+// ---------------------------------------------------------------------------
+
+describe('MergeBuilder.run — projects only the merge job output (excludes passthrough src jobs)', () => {
+  it('drops src_* passthrough download groups, keeping only the merge artifact', async () => {
+    const mock = makeMockClient();
+    // Server returns downloads for the two passthrough src jobs (the raw
+    // inputs, unchanged) AND the merge job. Only the merge output is a result.
+    mock.getWorkflowDownloads.mockResolvedValueOnce({
+      downloads: [
+        {
+          jobId: 'job_src0',
+          ref: 'src_0',
+          files: [{
+            operation: 'passthrough',
+            operationId: 'opid_s0',
+            filename: 'a.mp4',
+            sizeBytes: 111,
+            downloadUrl: 'https://signed.example.com/a.mp4',
+          }],
+        },
+        {
+          jobId: 'job_src1',
+          ref: 'src_1',
+          files: [{
+            operation: 'passthrough',
+            operationId: 'opid_s1',
+            filename: 'b.mp4',
+            sizeBytes: 222,
+            downloadUrl: 'https://signed.example.com/b.mp4',
+          }],
+        },
+        {
+          jobId: 'job_merge',
+          ref: 'merge',
+          files: [{
+            operation: 'merge',
+            operationId: 'opid_m',
+            filename: 'merged.mp4',
+            sizeBytes: 5000,
+            downloadUrl: 'https://signed.example.com/merged.mp4',
+          }],
+        },
+      ],
+    });
+    const result = await new MergeBuilder(mock.client, [asset('a.mp4'), asset('b.mp4')], {}).run({
+      maxWait: '30s',
+    });
+    // ONLY the merge output — the two passthrough inputs are plumbing.
+    expect(result.artifacts).toHaveLength(1);
+    expect(result.artifacts[0].ref).toBe('merge');
+    expect(result.artifacts[0].url).toBe('https://signed.example.com/merged.mp4');
+    expect(result.artifacts.map((a) => a.operation)).not.toContain('passthrough');
   });
 });
