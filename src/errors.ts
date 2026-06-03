@@ -1,5 +1,7 @@
 import type {
   AuthErrorResponse,
+  AuthRejectionEnvelope,
+  AuthRejectionEnvelopeErrorTypeEnum,
   BalanceExhaustedResponse,
   FeatureNotAvailableResponse,
   FeatureTierRestrictedResponse,
@@ -241,6 +243,35 @@ export class GislAuthError extends GislApiError {
   ) {
     super(statusCode, errorMessage, path, undefined, buildOptionsWithPayload(payload, extra));
     this.name = 'GislAuthError';
+  }
+}
+
+/**
+ * 422 Unprocessable Entity — domain rejection on auth side-effect endpoints
+ * (register / verify-email / api-keys duplicate-or-invalid; profile PATCH email
+ * unchanged). Flat `AuthRejectionEnvelope`, no `details[]`. Mirrors the PHP
+ * `Gisl\Sdk\Errors\GislAuthRejectionError`.
+ *
+ * `payload.errorType` is the auth-422 `oneOf` discriminator
+ * (`unprocessable_entity` or `email_same`); `errorType` re-exposes it directly
+ * for caller-side narrowing without unwrapping the typed payload. Distinct from
+ * `GislValidationError` (the `validation_error` branch of the same `oneOf`,
+ * which carries `details[]`).
+ */
+export class GislAuthRejectionError extends GislApiError {
+  declare readonly payload: AuthRejectionEnvelope;
+  readonly errorType: AuthRejectionEnvelopeErrorTypeEnum;
+
+  constructor(
+    statusCode: number,
+    errorMessage: string,
+    payload: AuthRejectionEnvelope,
+    path?: string,
+    extra?: Omit<GislApiErrorOptions, 'payload'>,
+  ) {
+    super(statusCode, errorMessage, path, undefined, buildOptionsWithPayload(payload, extra));
+    this.name = 'GislAuthRejectionError';
+    this.errorType = payload.errorType;
   }
 }
 

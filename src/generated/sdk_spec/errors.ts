@@ -14,6 +14,7 @@ export type ErrorCode =
   | "timeout"
   | "aborted"
   | "validation_failed"
+  | "validation_error"
   | "cyclic_workflow_edges"
   | "workflow_edge_references_unknown_job"
   | "reserved_job_id_pattern"
@@ -206,6 +207,19 @@ export const ERROR_CODES: Readonly<Record<ErrorCode, ErrorEntry>> = Object.freez
     retryable: false,
     sdkClass: "GislValidationError",
     description: "422 — request validation failure; emitted on the wire as `VALIDATION_FAILED` (e.g. invalid limit/offset on GET /api/v2/credits/usage). Carries `details[]`.",
+    metadataSchema: Object.freeze({
+      "details": "array",
+    }),
+  }),
+  "validation_error": Object.freeze({
+    code: "validation_error",
+    category: "validation" as ErrorCategory,
+    source: "error_type",
+    status: "wired" as ErrorStatus,
+    httpStatus: 422,
+    retryable: false,
+    sdkClass: "GislValidationError",
+    description: "422 — `error_type` discriminator on `ValidationErrorEnvelope` (ADR-0018/0019); distinct from `validation_failed` (the `error` code), same `GislValidationError`. Carries `details[]`.",
     metadataSchema: Object.freeze({
       "details": "array",
     }),
@@ -565,6 +579,7 @@ export const ERROR_CATEGORIES: Readonly<Record<ErrorCategory, readonly ErrorCode
     "multipart_part_invalid",
     "multipart_part_count_exceeded",
     "validation_failed",
+    "validation_error",
     "cyclic_workflow_edges",
     "workflow_edge_references_unknown_job",
     "reserved_job_id_pattern",

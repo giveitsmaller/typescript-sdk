@@ -10,6 +10,7 @@ import {
   GislAbortError,
   GislApiError,
   GislAuthError,
+  GislAuthRejectionError,
   GislBalanceExhaustedError,
   GislFeatureNotAvailableError,
   GislFeatureTierRestrictedError,
@@ -3153,6 +3154,132 @@ describe('GislClient', () => {
         const valErr = err as GislValidationError;
         expect(valErr.details).toHaveLength(1);
         expect(valErr.details[0].field).toBe('jobs[0].file_id');
+      }
+    });
+
+    it('422 unprocessable_entity → GislAuthRejectionError (flat envelope, no details[])', async () => {
+      // v2.37.0 / ADR-0019: register / verify-email / api-keys POST emit a
+      // flat AuthRejectionEnvelope discriminated by error_type, no details[].
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'UNPROCESSABLE_ENTITY',
+            error_type: 'unprocessable_entity',
+            message: 'This email address is already registered.',
+            message_key: 'errors.auth.email_taken',
+            locale: 'en-GB',
+            message_params: { email: 'taken@example.com' },
+          },
+          422,
+        ),
+      );
+
+      try {
+        await client.getWorkflowStatus('wf-1');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislAuthRejectionError);
+        expect(err).toBeInstanceOf(GislApiError);
+        // Must NOT be misrouted to the details[]-shaped validation class.
+        expect(err).not.toBeInstanceOf(GislValidationError);
+        const rejErr = err as GislAuthRejectionError;
+        expect(rejErr.statusCode).toBe(422);
+        expect(rejErr.name).toBe('GislAuthRejectionError');
+        expect(rejErr.errorType).toBe('unprocessable_entity');
+        expect(rejErr.payload.errorType).toBe('unprocessable_entity');
+        // i18n triple threads through from wire snake_case keys.
+        expect(rejErr.messageKey).toBe('errors.auth.email_taken');
+        expect(rejErr.locale).toBe('en-GB');
+        expect(rejErr.messageParams).toEqual({ email: 'taken@example.com' });
+      }
+    });
+
+    it('422 email_same → GislAuthRejectionError (profile PATCH email unchanged)', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'EMAIL_SAME',
+            error_type: 'email_same',
+            message: 'The new email is the same as your current email.',
+          },
+          422,
+        ),
+      );
+
+      try {
+        await client.getWorkflowStatus('wf-1');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislAuthRejectionError);
+        const rejErr = err as GislAuthRejectionError;
+        expect(rejErr.statusCode).toBe(422);
+        expect(rejErr.errorType).toBe('email_same');
+        expect(rejErr.payload.errorType).toBe('email_same');
+      }
+    });
+
+    it('422 validation_error with non-empty details[] stays GislValidationError (not auth rejection)', async () => {
+      // Regression: the same auth-422 oneOf has a `validation_error` branch
+      // that carries details[]. The shape-based details[] branch must win
+      // over the auth-rejection error_type branch — auth rejection must NOT
+      // swallow validation envelopes.
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'VALIDATION_FAILED',
+            error_type: 'validation_error',
+            message: 'Validation failed for one or more fields.',
+            details: [{ field: 'email', message: 'must be a valid address' }],
+          },
+          422,
+        ),
+      );
+
+      try {
+        await client.getWorkflowStatus('wf-1');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislValidationError);
+        expect(err).not.toBeInstanceOf(GislAuthRejectionError);
+        const valErr = err as GislValidationError;
+        expect(valErr.statusCode).toBe(422);
+        expect(valErr.details).toHaveLength(1);
+        expect(valErr.details[0].field).toBe('email');
+        expect(valErr.details[0].message).toBe('must be a valid address');
+      }
+    });
+
+    it('422 unknown error_type (not in auth-rejection enum) with no details[] falls through to base GislApiError', async () => {
+      // Gate guard: the auth-422 branch only fires for error_type in
+      // {unprocessable_entity, email_same}. An out-of-enum error_type on a
+      // 422 with no details[] must NOT be claimed by the auth-rejection
+      // branch nor the shape-based validation branch — it falls through to
+      // base GislApiError. Mirrors the 401-unknown-type guard.
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'SOMETHING',
+            error_type: 'unknown_auth_type',
+            message: 'An unrecognised 422 rejection.',
+          },
+          422,
+        ),
+      );
+
+      try {
+        await client.getWorkflowStatus('wf-1');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislApiError);
+        expect(err).not.toBeInstanceOf(GislAuthRejectionError);
+        expect(err).not.toBeInstanceOf(GislValidationError);
+        const apiErr = err as GislApiError;
+        expect(apiErr.statusCode).toBe(422);
+        expect(apiErr.errorMessage).toBe('An unrecognised 422 rejection.');
       }
     });
 

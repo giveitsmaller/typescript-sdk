@@ -26,6 +26,8 @@ import {
   WorkflowStatus,
   AuthErrorResponseFromJSON,
   AuthErrorType,
+  AuthRejectionEnvelopeFromJSON,
+  AuthRejectionEnvelopeErrorTypeEnum,
   BalanceExhaustedResponseFromJSON,
   BalanceExhaustedResponseRequiredActionEnum,
   FeatureNotAvailableResponseFromJSON,
@@ -74,6 +76,7 @@ import {
   GislApiError,
   type GislApiErrorOptions,
   GislAuthError,
+  GislAuthRejectionError,
   GislBalanceExhaustedError,
   GislError,
   GislFeatureNotAvailableError,
@@ -878,6 +881,25 @@ export class GislClient {
           undefined,
           path,
           i18n,
+        );
+      }
+
+      // 422 auth-side-effect domain rejection (per contracts ADR-0019).
+      // Flat AuthRejectionEnvelope — NO `details[]` — on register /
+      // verify-email / api-keys (`error_type: unprocessable_entity`) and
+      // profile PATCH email-unchanged (`error_type: email_same`). The
+      // `validation_error` branch of the same auth-422 `oneOf` carries
+      // `details[]` and is already routed to GislValidationError by the
+      // shape-based branch above. Mirrors
+      // `packages/php/src/GislClient.php` GislAuthRejectionError branch.
+      if (
+        status === 422 &&
+        isInEnum(errorType, AuthRejectionEnvelopeErrorTypeEnum)
+      ) {
+        tryThrowStructured(
+          AuthRejectionEnvelopeFromJSON,
+          GislAuthRejectionError,
+          (p) => isInEnum(p.errorType, AuthRejectionEnvelopeErrorTypeEnum),
         );
       }
 
