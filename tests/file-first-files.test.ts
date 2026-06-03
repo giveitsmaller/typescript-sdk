@@ -169,6 +169,30 @@ describe('FilesRecipe — toWorkflowPayload (multi-job lowering)', () => {
       '{"jobs":[{"id":"file-0","source":{"type":"upload","file_id":"file_0"},"operations":[{"type":"convert","options":{"format":"webp"}}]}]}',
     );
   });
+
+  it('wires callback_url into the multi-job payload when a webhook is given (submit path)', () => {
+    const payload = filesRecipe('a.jpg', 'b.jpg')
+      .compress()
+      .toWorkflowPayload(['file_0', 'file_1'], 'https://webhook.test/x');
+    expect(payload.callback_url).toBe('https://webhook.test/x');
+    expect(payload.jobs.map((j) => j.id)).toEqual(['file-0', 'file-1']);
+    // run path (no callbackUrl) omits the key entirely.
+    expect(filesRecipe('a.jpg').compress().toWorkflowPayload(['file_0']).callback_url).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// submit() (uUnCtVAr) — no-client guard. The happy path (create callback_url
+// request + returned Handle) is covered end-to-end by the
+// ff_files_submit_multi_compress parity fixture.
+// ---------------------------------------------------------------------------
+
+describe('FilesRecipe.submit', () => {
+  it('requires a bound client (directly-constructed FilesRecipe throws no_client)', async () => {
+    await expect(filesRecipe('a.jpg').compress().submit('https://webhook.test/x')).rejects.toMatchObject({
+      reason: 'no_client',
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

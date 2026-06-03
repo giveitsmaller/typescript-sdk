@@ -391,3 +391,139 @@ describe('projectDownloadsToRunResult — partition invariant', () => {
     expect(result.failed).toHaveLength(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// uUnCtVAr (FF3a-submit) — data-driven per-job partitioning for a files()
+// fan-out. The producer choice is made off the wire (`file-{i}` job refs),
+// NOT a construction-time marker, so a REATTACHED fan-out handle
+// (client.workflow(id), no key) still partitions per job.
+// ---------------------------------------------------------------------------
+
+function makeFanoutMockClient(): MockClientHandles {
+  const getWorkflowStatus = vi.fn(async (_id: string) => ({
+    workflowId: 'wf_fan',
+    status: 'completed',
+    jobs: [
+      { jobId: 'job_0', ref: 'file-0', status: 'completed' },
+      { jobId: 'job_1', ref: 'file-1', status: 'completed' },
+    ],
+  }));
+  const getWorkflowDownloads = vi.fn(async (_id: string) => ({
+    downloads: [
+      {
+        jobId: 'job_0',
+        ref: 'file-0',
+        files: [
+          {
+            operation: 'compress',
+            operationId: 'opid_0',
+            filename: 'a_compressed.jpg',
+            sizeBytes: 100,
+            downloadUrl: 'https://signed.example.com/a.jpg',
+          },
+        ],
+      },
+      {
+        jobId: 'job_1',
+        ref: 'file-1',
+        files: [
+          {
+            operation: 'compress',
+            operationId: 'opid_1',
+            filename: 'b_compressed.jpg',
+            sizeBytes: 200,
+            downloadUrl: 'https://signed.example.com/b.jpg',
+          },
+        ],
+      },
+    ],
+  }));
+  const streamEvents = vi.fn(async function* (_id: string, _opts?: unknown) {
+    yield { event: 'workflow.completed', data: { status: 'completed' } };
+  });
+  const client = { getWorkflowStatus, getWorkflowDownloads, streamEvents } as unknown as GislClient;
+  return { getWorkflowStatus, getWorkflowDownloads, streamEvents, client };
+}
+
+describe('Handle data-driven fan-out partitioning', () => {
+  it('wait() on a fan-out (file-N refs) partitions PER JOB with index keys, even reattached/keyless', async () => {
+    const mock = makeFanoutMockClient();
+    // No key (reattach via client.workflow(id)) — keys MUST still come from refs.
+    const result = await new Handle('wf_fan', undefined, mock.client).wait('30s');
+
+    expect(result).toBeInstanceOf(RunResult);
+    expect(result.ok).toBe(true);
+    expect(result.succeeded).toHaveLength(2);
+    expect(result.failed).toEqual([]);
+    // Keys recovered from the file-{i} refs (NOT null, NOT a single collapsed entry).
+    expect(result.succeeded.map((s) => s.key)).toEqual(['0', '1']);
+    expect(result.byKey('0').outputs[0].url).toBe('https://signed.example.com/a.jpg');
+    expect(result.byKey('1').outputs[0].url).toBe('https://signed.example.com/b.jpg');
+    expect(result.artifacts).toHaveLength(2);
+  });
+
+  it('result() on a fan-out partitions PER JOB (non-blocking path)', async () => {
+    const mock = makeFanoutMockClient();
+    const result = await new Handle('wf_fan', undefined, mock.client).result();
+    expect(mock.streamEvents).not.toHaveBeenCalled();
+    expect(result.succeeded.map((s) => s.key)).toEqual(['0', '1']);
+  });
+
+  it('a single-input fan-out (one job, ref file-0) still partitions with key "0"', async () => {
+    // Boundary: ONE job whose ref is `file-0` IS a fan-out (files([x])) — it
+    // must key "0", NOT collapse to the single-output path. Guards against a
+    // `jobs.length === 1 → single-output` regression.
+    const mock = makeFanoutMockClient();
+    mock.getWorkflowStatus.mockResolvedValue({
+      workflowId: 'wf_fan',
+      status: 'completed',
+      jobs: [{ jobId: 'job_0', ref: 'file-0', status: 'completed' }],
+    });
+    mock.getWorkflowDownloads.mockResolvedValue({
+      downloads: [
+        {
+          jobId: 'job_0',
+          ref: 'file-0',
+          files: [
+            {
+              operation: 'compress',
+              operationId: 'opid_0',
+              filename: 'a_compressed.jpg',
+              sizeBytes: 100,
+              downloadUrl: 'https://signed.example.com/a.jpg',
+            },
+          ],
+        },
+      ],
+    });
+    const result = await new Handle('wf_fan', undefined, mock.client).result();
+    expect(result.succeeded).toHaveLength(1);
+    expect(result.succeeded[0].key).toBe('0');
+    expect(result.byKey('0').outputs[0].url).toBe('https://signed.example.com/a.jpg');
+  });
+
+  it('partitions a partially-failed fan-out per job (one completed, one failed)', async () => {
+    const mock = makeFanoutMockClient();
+    mock.getWorkflowStatus.mockResolvedValue({
+      workflowId: 'wf_fan',
+      status: 'partially_failed',
+      jobs: [
+        { jobId: 'job_0', ref: 'file-0', status: 'completed' },
+        { jobId: 'job_1', ref: 'file-1', status: 'failed', operations: [{ errorMessage: 'boom' }] },
+      ],
+    });
+    const result = await new Handle('wf_fan', undefined, mock.client).result();
+    expect(result.ok).toBe(false);
+    expect(result.succeeded.map((s) => s.key)).toEqual(['0']);
+    expect(result.failed.map((f) => f.key)).toEqual(['1']);
+  });
+
+  it('a single-file handle (ref "op") stays on the single-output path and keeps its key', async () => {
+    const mock = makeMockClient(); // default mock: one job, ref 'op'
+    const result = await new Handle('wf_1', undefined, mock.client, 'hero').result();
+    // NOT treated as a fan-out: one keyed entry from the handle's #key.
+    expect(result.succeeded).toHaveLength(1);
+    expect(result.succeeded[0].key).toBe('hero');
+    expect(result.byKey('hero').outputs[0].url).toBe('https://signed.example.com/photo_compressed.jpg');
+  });
+});

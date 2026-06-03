@@ -20,6 +20,7 @@ import {
   submitRecipeFixture,
   lowerFilesFixture,
   runFilesFixture,
+  submitFilesFixture,
 } from './invoke.js';
 import { GislConfigError } from '../../src/errors.js';
 
@@ -143,6 +144,35 @@ describe('cross-SDK parity', () => {
       // depends on the fetch stub serving the canned responses in call order
       // (F4-B / cEUWPgKW), same as mode=run.
       if (fixture.mode === 'files') {
+        // uUnCtVAr (FF3a-submit) — a `files.webhook` routes the fan-out
+        // through FilesRecipe.submit(): install the stub, drive submit(), then
+        // assert BOTH the captured create request (multi-job callback_url) AND
+        // the returned Handle (expected_return). Mirrors the single-file submit
+        // arm below.
+        if (fixture.files?.webhook !== undefined) {
+          stub = createFetchStub();
+          stub.install(fixture.responses, fixture.__file);
+          const handleJson = await submitFilesFixture(fixture);
+          const requestDiff = compareRequests(fixture.requests, stub.captured, fixture.__file);
+          if (!requestDiff.ok) {
+            throw new Error(
+              `[${fixture.name}] files submit request parity failure:\n  - ${requestDiff.issues.join('\n  - ')}`,
+            );
+          }
+          if (fixture.expected_return !== undefined) {
+            const returnDiff = compareValue(
+              fixture.expected_return,
+              handleJson as never,
+              'expected_return',
+            );
+            if (!returnDiff.ok) {
+              throw new Error(
+                `[${fixture.name}] files submit return parity failure:\n  - ${returnDiff.issues.join('\n  - ')}`,
+              );
+            }
+          }
+          return;
+        }
         if (fixture.expected_payload !== undefined) {
           const lowered = lowerFilesFixture(fixture);
           const diff = compareValue(

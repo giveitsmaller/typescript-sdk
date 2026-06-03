@@ -270,7 +270,8 @@ export type ErgonomicClient = GislClient & {
    * (`.compress()` / `.convert()` / `.thumbnail()` / `.textWatermark()`); the
    * chain applies to every input. `run()` returns a partitioned
    * {@link RunResult} keyed by each input's 0-based index — one bad input does
-   * not sink the rest. `submit()` is out of scope (a separate card).
+   * not sink the rest. `submit(webhook?)` is the fire-and-forget arm: it
+   * returns a {@link Handle} whose `wait()`/`result()` partition per input.
    */
   files(inputs: ReadonlyArray<string | Blob | FileInput>): FilesRecipe;
   /**

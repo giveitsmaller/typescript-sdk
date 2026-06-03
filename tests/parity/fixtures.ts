@@ -154,6 +154,14 @@ export interface FixtureFiles {
   readonly operations: readonly FixtureLoweringOp[];
   readonly maxWait?: string | number;
   readonly pollIntervalMs?: number;
+  // uUnCtVAr (FF3a-submit): when present, the files fixture is a fire-and-forget
+  // `FilesRecipe.submit(webhook?)` (NOT run/lowering) — the runner drives submit
+  // against the canned responses, asserts the create `callback_url` request, and
+  // compares the returned Handle via `expected_return`. The submit variant is
+  // selected by the PRESENCE of this key, so it must be a NON-EMPTY string (an
+  // empty string is rejected by the loader — there is no "submit without
+  // webhook" parity fixture, since the whole point is asserting callback_url).
+  readonly webhook?: string;
 }
 
 export type FixtureValue =
@@ -574,32 +582,63 @@ export function validateFixture(raw: unknown, file: string): Fixture {
     }
   }
   if (mode === 'files') {
-    // FF3a (u0hBt6fl) — homogeneous fan-out. Like run-mode it declares the
-    // mocked `responses` (run variant) but NO `requests` assertions. It asserts
-    // EXACTLY ONE of expected_payload (lowering variant — zero responses) or
-    // expected_run_result (run variant), discriminated by which key is present.
-    if (requests.length !== 0) {
-      throw new Error(
-        `${ctx} mode=files must declare zero requests (it asserts the lowered payload or the partitioned RunResult, not wire requests)`,
-      );
-    }
+    // FF3a (u0hBt6fl) — homogeneous fan-out. The lowering/run variants declare
+    // the mocked `responses` but NO `requests`; the uUnCtVAr SUBMIT variant
+    // (files.webhook) DOES declare requests (the create callback_url
+    // assertion). Asserts EXACTLY ONE of expected_payload (lowering — zero
+    // responses) / expected_run_result (run) / expected_return+requests
+    // (submit), discriminated below.
     if (method !== 'files') {
       throw new Error(`${ctx} mode=files requires sdk.method="files" (got "${method}")`);
     }
     if (r.files === undefined) {
       throw new Error(`${ctx} mode=files requires a files block`);
     }
-    const hasPayload = r.expected_payload !== undefined;
-    const hasRunResult = r.expected_run_result !== undefined;
-    if (hasPayload === hasRunResult) {
-      throw new Error(
-        `${ctx} mode=files requires EXACTLY ONE of expected_payload (lowering variant) or expected_run_result (run variant)`,
-      );
-    }
-    if (hasPayload && responses.length !== 0) {
-      throw new Error(
-        `${ctx} mode=files lowering variant (expected_payload) must declare zero responses (lowering is network-free)`,
-      );
+    // uUnCtVAr (FF3a-submit): a `files.webhook` marks the SUBMIT variant —
+    // it drives FilesRecipe.submit() and asserts the create `callback_url`
+    // request + the returned Handle (expected_return), NOT a lowering/run
+    // payload. The lowering/run variants are unchanged.
+    const filesWebhook = (r.files as Record<string, unknown>).webhook;
+    const isFilesSubmit = filesWebhook !== undefined;
+    if (isFilesSubmit) {
+      if (typeof filesWebhook !== 'string' || filesWebhook === '') {
+        throw new Error(
+          `${ctx} mode=files files.webhook must be a non-empty string (the submit-variant callback_url)`,
+        );
+      }
+      if (r.expected_payload !== undefined || r.expected_run_result !== undefined) {
+        throw new Error(
+          `${ctx} mode=files submit variant (files.webhook) must NOT declare expected_payload/expected_run_result — assert the create request + expected_return instead`,
+        );
+      }
+      if (requests.length === 0) {
+        throw new Error(
+          `${ctx} mode=files submit variant requires at least one request (the create callback_url assertion)`,
+        );
+      }
+      if (r.expected_return === undefined) {
+        throw new Error(
+          `${ctx} mode=files submit variant requires expected_return (the returned Handle assertion)`,
+        );
+      }
+    } else {
+      if (requests.length !== 0) {
+        throw new Error(
+          `${ctx} mode=files (lowering/run variant) must declare zero requests (it asserts the lowered payload or the partitioned RunResult, not wire requests)`,
+        );
+      }
+      const hasPayload = r.expected_payload !== undefined;
+      const hasRunResult = r.expected_run_result !== undefined;
+      if (hasPayload === hasRunResult) {
+        throw new Error(
+          `${ctx} mode=files requires EXACTLY ONE of expected_payload (lowering variant) or expected_run_result (run variant)`,
+        );
+      }
+      if (hasPayload && responses.length !== 0) {
+        throw new Error(
+          `${ctx} mode=files lowering variant (expected_payload) must declare zero responses (lowering is network-free)`,
+        );
+      }
     }
   }
   // FF5b (u8M49LU2) — a `submit` block routes a file-first chain through the
@@ -784,6 +823,7 @@ const FILES_KEYS = new Set([
   'operations',
   'maxWait',
   'pollIntervalMs',
+  'webhook',
 ]);
 
 /**
@@ -957,6 +997,9 @@ function validateFiles(value: unknown, ctx: string): FixtureFiles {
   if (v.pollIntervalMs !== undefined && !Number.isInteger(v.pollIntervalMs)) {
     throw new Error(`${ctx} pollIntervalMs must be an integer when present`);
   }
+  if (v.webhook !== undefined && typeof v.webhook !== 'string') {
+    throw new Error(`${ctx} webhook must be a string when present (submit variant)`);
+  }
 
   return {
     files: inputs,
@@ -964,6 +1007,7 @@ function validateFiles(value: unknown, ctx: string): FixtureFiles {
     operations,
     ...(v.maxWait !== undefined ? { maxWait: v.maxWait as string | number } : {}),
     ...(v.pollIntervalMs !== undefined ? { pollIntervalMs: v.pollIntervalMs as number } : {}),
+    ...(v.webhook !== undefined ? { webhook: v.webhook as string } : {}),
   };
 }
 

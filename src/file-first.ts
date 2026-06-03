@@ -423,6 +423,27 @@ function jobIndexFromRef(ref: string): string {
   return ref.startsWith('file-') ? ref.slice('file-'.length) : ref;
 }
 
+const _FANOUT_REF = /^file-\d+$/;
+
+/**
+ * True when a terminal status describes a homogeneous `files([...])` fan-out —
+ * i.e. it has at least one job and EVERY job ref is `file-{i}` (the ids the
+ * {@link FilesRecipe} lowering assigns). A single-file {@link Recipe} omits the
+ * job id, so its job carries a non-`file-N` ref (e.g. `op`) and this is false.
+ *
+ * This is the data-driven seam that lets {@link Handle.wait}/{@link Handle.result}
+ * pick the per-job producer ({@link projectMultiJobToRunResult}) over the
+ * single-output one for a fan-out — WITHOUT a construction-time marker, so a
+ * fan-out **reattached** via `client.workflow(id)` (which carries no marker)
+ * still partitions per job. Keys are recovered from the `file-{i}` refs.
+ *
+ * @internal Exported for the file-first `Handle`; not part of the public API.
+ */
+export function isFanoutStatus(finalStatus: WorkflowStatusResponse): boolean {
+  const jobs = finalStatus.jobs ?? [];
+  return jobs.length > 0 && jobs.every((job) => _FANOUT_REF.test(job.ref));
+}
+
 /**
  * The primary file a {@link Recipe} operates on — the "subject" of the
  * file-first surface. A discriminated union over the ways a caller names an
@@ -824,8 +845,9 @@ export class Recipe {
  * each file's media-hint (different extensions per input resolve compress
  * presets independently).
  *
- * Single-file `submit()` is OUT of scope here — `client.files([...])` exposes
- * `run()` only. Mirrors the PHP `FilesRecipe`.
+ * Exposes both `run()` (blocking, returns a partitioned {@link RunResult}) and
+ * `submit(webhook?)` (fire-and-forget, returns a {@link Handle}). Mirrors the
+ * PHP `FilesRecipe`.
  */
 export class FilesRecipe {
   constructor(
@@ -882,7 +904,7 @@ export class FilesRecipe {
    * @internal Consumed by {@link run} (after uploading all inputs) and the
    *   cross-language parity harness (with fixed ids). Not caller-facing.
    */
-  toWorkflowPayload(fileIds: readonly string[]): WorkflowCreatePayload {
+  toWorkflowPayload(fileIds: readonly string[], callbackUrl?: string): WorkflowCreatePayload {
     const jobs: JobDefinitionPayload[] = this.inputs.map((input, i) => {
       const single = new Recipe(input, undefined, this.steps, this.presetDefaults, this.scopedPresetDefaults);
       const oneJob = single.toWorkflowPayload(fileIds[i]).jobs[0];
@@ -890,7 +912,10 @@ export class FilesRecipe {
       // JSON-string serialisation is byte-identical across languages.
       return { id: `file-${i}`, source: oneJob.source, operations: oneJob.operations };
     });
-    return { jobs };
+    // When `callbackUrl` is given (the file-first `submit()` path) it is built
+    // INTO the payload (`callback_url`) — mirrors Recipe.toWorkflowPayload.
+    // `run()` passes no callbackUrl.
+    return callbackUrl === undefined ? { jobs } : { jobs, callback_url: callbackUrl };
   }
 
   /**
@@ -902,7 +927,8 @@ export class FilesRecipe {
    *
    * Requires a client bound at construction time — `gisl().files(...)` wires
    * it; a directly-constructed `FilesRecipe` throws {@link GislConfigError}.
-   * Mirrors the single-file {@link Recipe.run}; submit() is out of scope.
+   * Mirrors the single-file {@link Recipe.run}; see {@link submit} for the
+   * fire-and-forget arm.
    */
   async run(
     options: {
@@ -922,46 +948,9 @@ export class FilesRecipe {
     }
     const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 300_000);
 
-    // 1. Upload EVERY input (verbatim for a pre-uploaded id; uploading a path /
-    // blob otherwise). Sequential so progress events stay ordered + the abort
-    // signal is honoured promptly; a resource arm is impossible in TS (Blob).
-    const fileIds: string[] = [];
-    for (const input of this.inputs) {
-      // Fail fast between uploads — a deadline that elapses mid-batch should
-      // not force every remaining input to upload before throwing.
-      _checkAborted(signal);
-      if (Date.now() >= deadline) {
-        throw new GislTimeoutError(
-          'maxWait elapsed during fan-out uploads before all inputs were uploaded',
-        );
-      }
-      if (input.kind === 'uploadId') {
-        fileIds.push(input.fileId);
-      } else {
-        const source = input.kind === 'path' ? input.path : input.blob;
-        const up = await this.client.uploadFile(source, {
-          signal,
-          ...(onProgress !== undefined
-            ? {
-                onProgress: (uploadedBytes: number, totalBytes: number): void => {
-                  onProgress({ phase: 'upload', uploadedBytes, totalBytes });
-                },
-              }
-            : {}),
-        });
-        fileIds.push(up.fileId);
-      }
-    }
-    _checkAborted(signal);
-    if (Date.now() >= deadline) {
-      throw new GislTimeoutError(
-        'Uploads completed but maxWait elapsed before workflow could be created',
-      );
-    }
-
-    // 2. Create ONE multi-job workflow (one job per input).
-    const created = await this.client.createWorkflow(this.toWorkflowPayload(fileIds));
-    _checkAborted(signal);
+    // 1+2. Upload EVERY input + create ONE multi-job workflow. Shared with
+    // submit() (which passes a webhook → callback_url and no deadline).
+    const created = await this._uploadAllAndCreate(undefined, deadline, onProgress, signal);
 
     // 3. Wait to terminal status — SSE first, poll on a genuine SSE error.
     // `partially_failed` is a normal terminal state here (the helper treats it
@@ -1009,6 +998,94 @@ export class FilesRecipe {
       keyByRef,
       downloader,
     );
+  }
+
+  /**
+   * Fire-and-forget the fan-out: upload every input, create ONE multi-job
+   * workflow (wiring `webhook` into `callback_url` when given), and return a
+   * client-bound {@link Handle}. Does NOT wait for terminal status — call
+   * `handle.wait()` / `handle.result()` later to collect the partitioned
+   * {@link RunResult}. The Handle detects the fan-out from the wire `file-{i}`
+   * job refs, so per-file `byKey()` works even after a `client.workflow(id)`
+   * reattach (the keys are the input indices `"0"`, `"1"`, …).
+   *
+   * Requires a client bound at construction time (same `no_client` guard as
+   * {@link run}). `webhook` is OPTIONAL. Fire-and-forget, so NO whole-run
+   * deadline (a multi-GB upload is bounded by the HTTP client's own timeout).
+   * Mirrors the single-file {@link Recipe.submit}.
+   *
+   * @param webhook Absolute callback URL the server POSTs lifecycle events to.
+   */
+  async submit(webhook?: string): Promise<Handle> {
+    if (this.client === undefined) {
+      throw new GislConfigError(
+        'FilesRecipe.submit() requires a client; build the fan-out via gisl().files(...) rather than constructing FilesRecipe directly.',
+        { reason: 'no_client' },
+      );
+    }
+    const created = await this._uploadAllAndCreate(webhook, undefined);
+    return new Handle(
+      created.workflowId,
+      created.webhookSecret != null ? created.webhookSecret : undefined,
+      this.client,
+      null,
+    );
+  }
+
+  /**
+   * Upload every input (verbatim for a pre-uploaded id; uploading a path /
+   * blob otherwise, emitting `{phase:'upload'}` progress) then create ONE
+   * multi-job workflow (one job per input, `callback_url` built in when
+   * `webhook` is given). Shared first half of {@link run} + {@link submit}.
+   *
+   * Uploads are sequential so progress events stay ordered and the abort
+   * signal is honoured promptly; a resource arm is impossible in TS (Blob).
+   * `run()` passes a whole-run deadline (a slow upload must not proceed to
+   * createWorkflow past maxWait); `submit()` passes `undefined`, so the
+   * deadline checks are skipped.
+   */
+  private async _uploadAllAndCreate(
+    webhook: string | undefined,
+    deadline: number | undefined,
+    onProgress?: (event: ProgressEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<WorkflowCreateResponse> {
+    const fileIds: string[] = [];
+    for (const input of this.inputs) {
+      // Fail fast between uploads — a deadline that elapses mid-batch should
+      // not force every remaining input to upload before throwing.
+      _checkAborted(signal);
+      if (deadline !== undefined && Date.now() >= deadline) {
+        throw new GislTimeoutError(
+          'maxWait elapsed during fan-out uploads before all inputs were uploaded',
+        );
+      }
+      if (input.kind === 'uploadId') {
+        fileIds.push(input.fileId);
+      } else {
+        const source = input.kind === 'path' ? input.path : input.blob;
+        const up = await this.client!.uploadFile(source, {
+          signal,
+          ...(onProgress !== undefined
+            ? {
+                onProgress: (uploadedBytes: number, totalBytes: number): void => {
+                  onProgress({ phase: 'upload', uploadedBytes, totalBytes });
+                },
+              }
+            : {}),
+        });
+        fileIds.push(up.fileId);
+      }
+    }
+    _checkAborted(signal);
+    if (deadline !== undefined && Date.now() >= deadline) {
+      throw new GislTimeoutError(
+        'Uploads completed but maxWait elapsed before workflow could be created',
+      );
+    }
+    const created = await this.client!.createWorkflow(this.toWorkflowPayload(fileIds, webhook));
+    _checkAborted(signal);
+    return created;
   }
 
   /**

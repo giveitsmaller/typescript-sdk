@@ -322,6 +322,38 @@ export async function runFilesFixture(fixture: Fixture): Promise<unknown> {
   return result.toJSON();
 }
 
+/**
+ * uUnCtVAr (FF3a-submit) — mode=files dispatch (submit variant). Builds a
+ * `FilesRecipe` bound to a `GislClient` from the fixture's `files` block,
+ * applies each shared op, and drives `.submit(webhook?)` against the installed
+ * fetch stub. Returns the resulting `Handle` projected via `toJSON()` so the
+ * caller can deep-compare to `expected_return`; the create-request
+ * `callback_url` (multi-job payload) is asserted by the standard
+ * request_response comparator. Mirrors PHP `Invoke::submitFiles`.
+ */
+export async function submitFilesFixture(fixture: Fixture): Promise<unknown> {
+  const spec = fixture.files;
+  if (spec === undefined) {
+    throw new Error(`[${fixture.name}] mode=files requires a files block`);
+  }
+  const client = new GislClient(
+    DEFAULT_CLIENT_CONFIG as ConstructorParameters<typeof GislClient>[0],
+  );
+  const inputs: FileInput[] = spec.files.map((f) =>
+    f.kind === 'upload_id' ? fileInput.uploadId(f.uploadId as string) : fileInput.path(f.path as string),
+  );
+  // Bind the client as the FilesRecipe's execution-only last ctor arg so
+  // submit() has a client (the lowering path constructs without one).
+  let recipe = new FilesRecipe(inputs, [], undefined, undefined, client);
+  for (const op of spec.operations) {
+    recipe = applyFilesOp(recipe, op);
+  }
+  const handle = await recipe.submit(spec.webhook);
+  // Handle.toJSON() is the canonical DATA projection ({ workflowId,
+  // webhookSecret? }); the fan-out is keyless on the submit/reattach path.
+  return handle.toJSON();
+}
+
 function applyFilesOp(recipe: FilesRecipe, op: FixtureLoweringOp): FilesRecipe {
   switch (op.op) {
     case 'compress':

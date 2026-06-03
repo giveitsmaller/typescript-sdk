@@ -49,6 +49,8 @@ import {
 import {
   RunResult,
   projectDownloadsToRunResult,
+  projectMultiJobToRunResult,
+  isFanoutStatus,
   type Downloader,
 } from './file-first.js';
 import { HttpDownloader } from './http-downloader.js';
@@ -201,13 +203,7 @@ export class Handle {
       );
     }
     const downloads = await client.getWorkflowDownloads(this.workflowId);
-    return projectDownloadsToRunResult(
-      this.workflowId,
-      finalStatus,
-      downloads.downloads,
-      this.#key,
-      this.makeDownloader(),
-    );
+    return this.project(finalStatus, downloads.downloads);
   }
 
   /**
@@ -227,12 +223,44 @@ export class Handle {
       throw new GislResultNotReadyError(this.workflowId, status.status);
     }
     const downloads = await client.getWorkflowDownloads(this.workflowId);
+    return this.project(status, downloads.downloads);
+  }
+
+  /**
+   * Project a terminal status + its per-job downloads into a {@link RunResult},
+   * choosing the producer DATA-DRIVEN off the wire (not a construction-time
+   * marker, so a fan-out reattached via `client.workflow(id)` — which carries
+   * no marker — still partitions per job):
+   *
+   *  - A `files([...])` fan-out (every job ref is `file-{i}`, see
+   *    {@link isFanoutStatus}) → {@link projectMultiJobToRunResult} with an
+   *    empty `keyByRef`, so each input's key is recovered from its `file-{i}`
+   *    ref (`"0"`, `"1"`, …). A submitted/reattached fan-out carries no
+   *    caller-supplied keys — keyed fan-out is a separate concern.
+   *  - Anything else (the single-file {@link Recipe} path) →
+   *    {@link projectDownloadsToRunResult} keyed by this handle's `#key`
+   *    (the recipe key from a file-first `submit()`, or `null` on reattach).
+   */
+  private project(
+    finalStatus: Parameters<typeof projectDownloadsToRunResult>[1],
+    jobDownloads: Parameters<typeof projectMultiJobToRunResult>[2],
+  ): RunResult {
+    const downloader = this.makeDownloader();
+    if (isFanoutStatus(finalStatus)) {
+      return projectMultiJobToRunResult(
+        this.workflowId,
+        finalStatus,
+        jobDownloads,
+        new Map<string, string | null>(),
+        downloader,
+      );
+    }
     return projectDownloadsToRunResult(
       this.workflowId,
-      status,
-      downloads.downloads,
+      finalStatus,
+      jobDownloads,
       this.#key,
-      this.makeDownloader(),
+      downloader,
     );
   }
 
