@@ -24,6 +24,7 @@ export type {
   WorkflowCreatePayload,
   OperationDef,
   WorkflowSourcePayload,
+  MultiInputSourcePayload,
   UploadSourcePayload,
   JobOutputSourcePayload,
   ExternalImportSourcePayload,

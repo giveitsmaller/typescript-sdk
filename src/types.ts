@@ -11,6 +11,8 @@ import type {
   SseWorkflowTerminalData,
   MultipartInitiateRequestMetadataHint,
   UploadProbeResponse,
+  WorkflowSource,
+  MultiInputSource,
 } from '@giveitsmaller/contracts/openapi';
 import type { JobInputV2RoleEnum } from '@giveitsmaller/contracts/openapi';
 
@@ -107,6 +109,25 @@ export type WorkflowSourcePayload =
   | ExternalImportSourcePayload
   | ConnectionSourcePayload;
 
+/**
+ * The source leaves a multi-input `JobInputV2Payload.source` may take —
+ * `WorkflowSourcePayload` minus the `upload` leaf. Per the contract
+ * (`MultiInputSource` in `openapi/api.yaml`), multi-input operations
+ * (merge / archive / image_watermark / custom_luma / audio_overlay) do NOT
+ * accept upload-direct: an uploaded file enters a multi-input job via a
+ * `passthrough` source job referenced downstream by `{ type: 'job_output' }`.
+ * Single-input `JobDefinitionPayload.source` keeps the wider
+ * `WorkflowSourcePayload` (upload-direct is valid there).
+ *
+ * Named with the SDK's `*Payload` suffix to match every sibling source type
+ * and to avoid colliding with the generated `MultiInputSource` model (a
+ * different, deep-import-only type family).
+ */
+export type MultiInputSourcePayload =
+  | JobOutputSourcePayload
+  | ExternalImportSourcePayload
+  | ConnectionSourcePayload;
+
 // ---------------------------------------------------------------------------
 // Source factories — return wire-format objects with the `type` discriminator
 // ---------------------------------------------------------------------------
@@ -142,10 +163,63 @@ export function connectionSource(
 // ---------------------------------------------------------------------------
 
 export interface JobInputV2Payload {
-  source: WorkflowSourcePayload;
+  source: MultiInputSourcePayload;
   role?: JobInputV2RoleEnum;
   per_input_options?: Record<string, unknown>;
 }
+
+// Compile-time invariant: a multi-input `source` must NEVER admit upload-direct.
+// tsc fails at the `_AssertTrue<...>` line below if `JobInputV2Payload.source`
+// is widened back to a type that includes `UploadSourcePayload` (e.g. reverting
+// to `WorkflowSourcePayload`). Uploads enter multi-input ops via a `passthrough`
+// source job referenced by `{ type: 'job_output' }` — see MultiInputSourcePayload.
+type _JobInputV2SourceRejectsUpload =
+  [Extract<JobInputV2Payload['source'], UploadSourcePayload>] extends [never]
+    ? true
+    : ['DRIFT: JobInputV2Payload.source admits upload-direct — multi-input must use MultiInputSourcePayload (job_output / external_import / connection)'];
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+type _JobInputV2SourceRejectsUploadAssertion = _AssertTrue<_JobInputV2SourceRejectsUpload>;
+
+// Compile-time invariant: MultiInputSourcePayload is EXACTLY WorkflowSourcePayload
+// minus the upload leaf. Catches contract drift in either direction — a new
+// source variant that should (not) be multi-input-eligible, or `upload` leaking
+// back into the multi-input union.
+type _MultiInputDrift =
+  [Exclude<WorkflowSourcePayload, MultiInputSourcePayload>] extends [UploadSourcePayload]
+    ? [UploadSourcePayload] extends [Exclude<WorkflowSourcePayload, MultiInputSourcePayload>]
+      ? true
+      : ['DRIFT: upload leaked back into MultiInputSourcePayload (multi-input must exclude upload-direct)']
+    : ['DRIFT: MultiInputSourcePayload drops a non-upload variant that should remain'];
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+type _MultiInputSourcePayloadDriftAssertion = _AssertTrue<_MultiInputDrift>;
+
+// Compile-time cross-check against the GENERATED contract types. The assertions
+// above only relate the hand-written aliases to each other, so both could drift
+// from the contract in lockstep without failing tsc. These anchor the discriminant
+// SETS to `@giveitsmaller/contracts/openapi` — a contract regen that adds/removes a
+// source variant fails here until the hand-written unions are updated. The
+// hand-written `*SourcePayload` leaves are deliberately a separate type family from
+// the generated source models, so we compare only the `type` discriminants, not the
+// full structures.
+type _WorkflowSourceDiscriminantsMatchContract =
+  [WorkflowSourcePayload['type']] extends [WorkflowSource['type']]
+    ? [WorkflowSource['type']] extends [WorkflowSourcePayload['type']]
+      ? true
+      : ['DRIFT: contract WorkflowSource has a source discriminant missing from WorkflowSourcePayload']
+    : ['DRIFT: WorkflowSourcePayload has a source discriminant not in contract WorkflowSource'];
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+type _WorkflowSourceDiscriminantsMatchContractAssertion =
+  _AssertTrue<_WorkflowSourceDiscriminantsMatchContract>;
+
+type _MultiInputSourceDiscriminantsMatchContract =
+  [MultiInputSourcePayload['type']] extends [MultiInputSource['type']]
+    ? [MultiInputSource['type']] extends [MultiInputSourcePayload['type']]
+      ? true
+      : ['DRIFT: contract MultiInputSource has a discriminant missing from MultiInputSourcePayload']
+    : ['DRIFT: MultiInputSourcePayload has a discriminant not in contract MultiInputSource'];
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+type _MultiInputSourceDiscriminantsMatchContractAssertion =
+  _AssertTrue<_MultiInputSourceDiscriminantsMatchContract>;
 
 // ---------------------------------------------------------------------------
 // JobDefinition (single shape; `source` XOR `inputs[]` — runtime-enforced)

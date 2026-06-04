@@ -108,19 +108,23 @@ describe('connectionSource', () => {
 // ---------------------------------------------------------------------------
 
 describe('JobInputV2Payload composition', () => {
+  // Multi-input `JobInputV2Payload.source` is a `MultiInputSourcePayload`
+  // (job_output / external_import / connection) — it excludes upload-direct.
+  // An uploaded base/overlay/mask enters via a `passthrough` source job
+  // referenced here by `{ type: 'job_output' }` (the p0SuJEeK pattern).
   it('supports the base + overlay role pattern (image_watermark)', () => {
     const inputs: JobInputV2Payload[] = [
-      { source: uploadSource('upl_base'), role: 'base' },
-      { source: uploadSource('upl_overlay'), role: 'overlay' },
+      { source: jobOutputSource('src_base'), role: 'base' },
+      { source: jobOutputSource('src_overlay'), role: 'overlay' },
     ];
 
     expect(inputs).toEqual([
       {
-        source: { type: 'upload', file_id: 'upl_base' },
+        source: { type: 'job_output', from: 'src_base' },
         role: 'base',
       },
       {
-        source: { type: 'upload', file_id: 'upl_overlay' },
+        source: { type: 'job_output', from: 'src_overlay' },
         role: 'overlay',
       },
     ]);
@@ -128,17 +132,17 @@ describe('JobInputV2Payload composition', () => {
 
   it('supports the base + transition_mask role pattern (custom_luma)', () => {
     const inputs: JobInputV2Payload[] = [
-      { source: uploadSource('upl_clip'), role: 'base' },
+      { source: jobOutputSource('src_clip'), role: 'base' },
       {
-        source: uploadSource('upl_mask'),
+        source: jobOutputSource('src_mask'),
         role: 'transition_mask',
       },
     ];
 
     expect(inputs[1].role).toBe('transition_mask');
     expect(inputs[1].source).toEqual({
-      type: 'upload',
-      file_id: 'upl_mask',
+      type: 'job_output',
+      from: 'src_mask',
     });
   });
 
@@ -178,18 +182,20 @@ describe('JobDefinitionPayload composition', () => {
   });
 
   it('builds a multi-input job via `inputs` (no `source` key)', () => {
+    // Multi-input entries use `MultiInputSourcePayload` (job_output here);
+    // upload-direct is excluded — uploads enter via passthrough source jobs.
     const job: JobDefinitionPayload = {
       inputs: [
-        { source: uploadSource('upl_a') },
-        { source: uploadSource('upl_b') },
+        { source: jobOutputSource('src_a') },
+        { source: jobOutputSource('src_b') },
       ],
       operations: [{ type: 'merge', options: { format: 'pdf' } }],
     };
 
     expect(job).toEqual({
       inputs: [
-        { source: { type: 'upload', file_id: 'upl_a' } },
-        { source: { type: 'upload', file_id: 'upl_b' } },
+        { source: { type: 'job_output', from: 'src_a' } },
+        { source: { type: 'job_output', from: 'src_b' } },
       ],
       operations: [{ type: 'merge', options: { format: 'pdf' } }],
     });
@@ -530,7 +536,7 @@ describe('JobDefinitionPayload XOR permissiveness', () => {
     // failure rather than a silent breaking change for existing callers.
     const job: JobDefinitionPayload = {
       source: uploadSource('upl'),
-      inputs: [{ source: uploadSource('upl_2') }],
+      inputs: [{ source: jobOutputSource('src_2') }],
       operations: [],
     };
     expect(job.source).toBeDefined();
