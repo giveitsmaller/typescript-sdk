@@ -1,5 +1,9 @@
-import { open, stat } from 'node:fs/promises';
-import { basename } from 'node:path';
+// node:fs/promises + node:path are reached only through `./node-fs.js`, which
+// the package.json `browser` field swaps for a stub in browser bundles — so the
+// SDK entry graph stays browser-safe (a browser caller uploads a Blob via
+// blobByteSource, which never touches these). Kept as a STATIC import (not a
+// dynamic one) so `vi.mock('node:fs/promises')` still intercepts it in tests.
+import { open, stat, basename } from './node-fs.js';
 
 import {
   AudioWatermarkDecodeRequestToJSON,

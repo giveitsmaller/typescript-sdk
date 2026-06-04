@@ -480,3 +480,33 @@ describe('Recipe.submit — Handle.toJSON back-compat', () => {
     expect('key' in keyed.toJSON()).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Browser-primary path: `gisl...file(blob).compress().run()` (NJNEoKLr).
+// Proves the Blob input arm runs end-to-end WITHOUT the path-upload fs seam —
+// uploadFile receives a Blob (not a path string), so node:fs is never reached.
+// ---------------------------------------------------------------------------
+
+describe('Recipe.run — Blob input arm (browser primary path)', () => {
+  it('uploads a Blob (not a path string) and returns a RunResult', async () => {
+    const mock = makeMockClient();
+    const blob = new Blob(['fake-image-bytes'], { type: 'image/jpeg' });
+
+    const result: RunResult = await recipe(mock, fileInput.blob(blob))
+      .compress()
+      .run({ maxWait: '30s' });
+
+    // The upload went through the Blob source — uploadFile's first arg is the
+    // Blob itself, NOT a path string (the path arm is the only fs consumer).
+    expect(mock.uploadFile).toHaveBeenCalledOnce();
+    const firstArg = mock.uploadFile.mock.calls[0][0];
+    expect(firstArg).toBeInstanceOf(Blob);
+    expect(typeof firstArg).not.toBe('string');
+
+    expect(result.workflowId).toBe('wf_1');
+    expect(result.state).toBe('completed');
+    expect(result.ok).toBe(true);
+    expect(result.artifacts).toHaveLength(1);
+    expect(result.url).toBe('https://signed.example.com/photo_compressed.jpg');
+  });
+});

@@ -196,8 +196,10 @@ async function readProfile(
 ): Promise<Record<string, string> | null> {
   let raw: string;
   try {
-    // Lazy import keeps `node:fs` out of browser bundles.
-    const fs = await import('node:fs/promises');
+    // Lazy import keeps `node:fs` out of browser bundles. webpackIgnore stops
+    // webpack bundling it for browser targets; Vite externalises node: builtins
+    // itself (no @vite-ignore — that would also bypass test mocks of node:fs).
+    const fs = await import(/* webpackIgnore: true */ 'node:fs/promises');
     raw = await fs.readFile(path, 'utf8');
   } catch (err) {
     // ENOENT → no file = no credentials from this source (not an error).

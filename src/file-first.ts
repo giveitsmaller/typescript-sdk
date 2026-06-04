@@ -25,7 +25,7 @@ import type {
   WorkflowCreateResponse,
   WorkflowStatusResponse,
 } from '@giveitsmaller/contracts/openapi';
-import { HttpDownloader } from './http-downloader.js';
+import { LazyHttpDownloader } from './lazy-downloader.js';
 import {
   resolveCompressOptions,
   type ResolveCompressOptionsInput,
@@ -665,7 +665,7 @@ export class Recipe {
 
     // Download URLs from getWorkflowDownloads are pre-signed and require no SDK
     // auth, so the downloader issues a plain unauthenticated fetch.
-    const downloader = new HttpDownloader();
+    const downloader = new LazyHttpDownloader();
     return projectDownloadsToRunResult(
       created.workflowId,
       finalStatus,
@@ -990,7 +990,7 @@ export class FilesRecipe {
     const keyByRef = new Map<string, string | null>(
       this.inputs.map((_, i) => [`file-${i}`, String(i)]),
     );
-    const downloader = new HttpDownloader();
+    const downloader = new LazyHttpDownloader();
     return projectMultiJobToRunResult(
       created.workflowId,
       finalStatus,

@@ -53,7 +53,7 @@ import {
   isFanoutStatus,
   type Downloader,
 } from './file-first.js';
-import { HttpDownloader } from './http-downloader.js';
+import { LazyHttpDownloader } from './lazy-downloader.js';
 
 /**
  * The terminal workflow states. A status response in any of these states
@@ -286,8 +286,9 @@ export class Handle {
 
   private makeDownloader(): Downloader {
     // Download URLs from getWorkflowDownloads are pre-signed and require no SDK
-    // auth, so the downloader issues a plain unauthenticated fetch.
-    return new HttpDownloader();
+    // auth, so the downloader issues a plain unauthenticated fetch. Lazy so the
+    // node:fs-importing HttpDownloader stays out of the browser static graph.
+    return new LazyHttpDownloader();
   }
 
   private requireClient(): GislClient {

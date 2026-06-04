@@ -35,7 +35,7 @@
 // On a parse, the resolver also writes `encoding_mode='target_size'`
 // to the wire; conversely if `crf` is explicit, `encoding_mode='crf'`.
 
-import { createHash } from 'node:crypto';
+import { sha256Hex } from '../sha256.js';
 
 import { GislConfigError } from '../errors.js';
 import type { ResolvedOptions, ResolvedOptionsSources } from '../builder.js';
@@ -565,7 +565,7 @@ function computePresetConfigHash(
     scopedDefault: scopedDefault ?? null,
     callPresetOverride: callPresetOverride ?? null,
   });
-  return `sha256:${createHash('sha256').update(canonical).digest('hex')}`;
+  return `sha256:${sha256Hex(canonical)}`;
 }
 
 // ---------------------------------------------------------------------------
