@@ -31,6 +31,21 @@ export interface GislApiErrorOptions {
   readonly locale?: string;
   readonly messageParams?: Record<string, unknown>;
   readonly payload?: unknown;
+  /**
+   * The response headers from the HTTP response that produced this error.
+   * Keys are LOWERCASED (HTTP header names are case-insensitive per RFC 9110,
+   * and `Headers.forEach` yields lowercased keys). Multi-value headers (e.g.
+   * `set-cookie`) are collapsed to a single comma-joined string — do NOT rely
+   * on this map for cookies.
+   */
+  readonly responseHeaders?: Record<string, string>;
+  /**
+   * The resolved language the server reported via the `Content-Language`
+   * response header. DISTINCT from `locale`, which is the body-envelope
+   * localisation tag (the I26 `ErrorEnvelope.locale` field); `contentLanguage`
+   * is the transport-level header the server echoes for content negotiation.
+   */
+  readonly contentLanguage?: string;
 }
 
 export class GislApiError extends GislError {
@@ -42,6 +57,19 @@ export class GislApiError extends GislError {
   readonly locale?: string;
   readonly messageParams?: Record<string, unknown>;
   readonly payload?: unknown;
+  /**
+   * Response headers from the HTTP response that produced this error, with
+   * LOWERCASED keys (RFC 9110 case-insensitive). Multi-value headers such as
+   * `set-cookie` are collapsed into a single comma-joined string — don't rely
+   * on this map for cookies.
+   */
+  readonly responseHeaders?: Record<string, string>;
+  /**
+   * The `Content-Language` response header value (the language the server
+   * actually resolved). DISTINCT from `locale`, which is the body-envelope
+   * localisation tag.
+   */
+  readonly contentLanguage?: string;
 
   constructor(
     statusCode: number,
@@ -64,6 +92,8 @@ export class GislApiError extends GislError {
       this.locale = options.locale;
       this.messageParams = options.messageParams;
       this.payload = options.payload;
+      this.responseHeaders = options.responseHeaders;
+      this.contentLanguage = options.contentLanguage;
     }
   }
 }

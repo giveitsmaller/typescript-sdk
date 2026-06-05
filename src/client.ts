@@ -230,6 +230,20 @@ export interface ValidationDetail {
   messageParams?: Record<string, unknown>;
 }
 
+// Flatten a `Headers` object into a plain `Record<string,string>` for
+// attaching to a thrown `GislApiError`. `Headers.forEach` yields LOWERCASED
+// keys (HTTP header names are case-insensitive per RFC 9110) and collapses
+// any multi-value header (e.g. `set-cookie`) into a single comma-joined
+// value — the record is for content-language / vary / x-request-id reads,
+// not cookies.
+function headersToRecord(headers: Headers): Record<string, string> {
+  const r: Record<string, string> = {};
+  headers.forEach((v, k) => {
+    r[k] = v;
+  });
+  return r;
+}
+
 function isValidationDetails(value: unknown): value is ValidationDetail[] {
   return (
     Array.isArray(value) &&
@@ -506,6 +520,18 @@ export class GislClient {
     if (config.apiKey) {
       this.headers['Authorization'] = `Bearer ${config.apiKey}`;
     }
+    // The dedicated `locale` option wins over any `Accept-Language` the caller
+    // passed via `headers` (mirrors apiKey -> Authorization). Drop any caller
+    // variant case-insensitively first so the request never carries two keys
+    // (e.g. `accept-language` + `Accept-Language`) with undefined precedence.
+    if (config.locale) {
+      for (const key of Object.keys(this.headers)) {
+        if (key.toLowerCase() === 'accept-language') {
+          delete this.headers[key];
+        }
+      }
+      this.headers['Accept-Language'] = config.locale;
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -601,11 +627,19 @@ export class GislClient {
     path: string,
     deserialize?: (raw: unknown) => T,
   ): Promise<T> {
+    // Surface the response headers (lowercased Record) and the resolved
+    // `Content-Language` on every GislApiError thrown from this handler.
+    const responseHeaders = headersToRecord(response.headers);
+    const contentLanguage = response.headers.get('content-language') ?? undefined;
+
     const contentType = (response.headers.get('content-type') ?? '').toLowerCase();
     const isJsonContent = contentType.includes('application/json') || contentType.includes('+json');
     if (!isJsonContent) {
       if (!response.ok) {
-        throw new GislApiError(response.status, 'Non-JSON response', path);
+        throw new GislApiError(response.status, 'Non-JSON response', path, undefined, {
+          responseHeaders,
+          contentLanguage,
+        });
       }
       return undefined as unknown as T;
     }
@@ -628,7 +662,10 @@ export class GislClient {
     try {
       json = await response.json();
     } catch {
-      throw new GislApiError(response.status, 'Invalid JSON response', path);
+      throw new GislApiError(response.status, 'Invalid JSON response', path, undefined, {
+        responseHeaders,
+        contentLanguage,
+      });
     }
 
     // Standard envelope: { success, data } or { success, error, details }
@@ -641,6 +678,8 @@ export class GislClient {
         messageKey: json.message_key,
         locale: json.locale,
         messageParams: json.message_params,
+        responseHeaders,
+        contentLanguage,
       };
 
       // Human-readable text comes from `message` (the I26 localised field).
@@ -2461,7 +2500,12 @@ export class GislClient {
       } catch {
         // Non-JSON body — keep generic message.
       }
-      throw new GislApiError(response.status, errorMessage, path);
+      // This throw is OUTSIDE handleResponse (rawResponse:true / 304 path), so
+      // build the response-header surface from the in-scope `response` here.
+      throw new GislApiError(response.status, errorMessage, path, undefined, {
+        responseHeaders: headersToRecord(response.headers),
+        contentLanguage: response.headers.get('content-language') ?? undefined,
+      });
     }
 
     const raw: unknown = await response.json();

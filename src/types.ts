@@ -38,6 +38,20 @@ export interface GislClientConfig {
    * environment's responsibility.
    */
   useSessionCookie?: boolean;
+  /**
+   * Preferred response language. When set, the SDK sends
+   * `Accept-Language: <locale>` on every GISL-API request (e.g. `'fr-FR'`,
+   * `'de'`). The server echoes the language it actually resolved via the
+   * `Content-Language` response header, surfaced on
+   * `GislApiError.contentLanguage`. When no supported language matches, the
+   * server falls back to its default (typically `en-GB`).
+   *
+   * A dedicated `locale` wins over any `Accept-Language` passed through
+   * `headers` (mirrors how `apiKey` wins over a caller-supplied
+   * `Authorization` header); the conflicting `headers` entry is dropped
+   * case-insensitively so the request never carries two variants.
+   */
+  locale?: string;
   /** Threshold in bytes above which multipart upload is used (default: 10MB) */
   multipartThreshold?: number;
   /**
