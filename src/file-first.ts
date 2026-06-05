@@ -470,6 +470,19 @@ export const fileInput = {
   blob(blob: Blob): FileInput {
     return { kind: 'blob', blob };
   },
+  /**
+   * Reference an already-uploaded file by its upload id, instead of
+   * re-uploading bytes.
+   *
+   * Auth-ownership: an upload created by an **authenticated** caller is owned
+   * by that caller. If you reuse the id from a client configured with a
+   * *different* auth context (a different `apiKey` / session), workflow-create
+   * returns `404 upload_not_found` — the server enforces ownership (api
+   * PqpD9ySv). Reference an upload id only under the SAME auth that created it.
+   * The normal upload-then-create-in-one-client flow is consistent by
+   * construction (the same `Authorization` rides every request). Ownerless
+   * (anonymous-intake) uploads are unaffected.
+   */
   uploadId(fileId: string): FileInput {
     return { kind: 'uploadId', fileId };
   },

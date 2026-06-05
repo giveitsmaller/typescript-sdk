@@ -40,6 +40,14 @@ const dls = await client.getWorkflowDownloads(workflow.workflowId);
 console.log('Compressed:', dls.downloads[0].files[0].downloadUrl);
 ```
 
+> **Reusing an upload id across clients?** An upload created by an
+> authenticated caller is owned by that caller. If you persist a `fileId` and
+> later reference it (via `fileInput.uploadId(id)`) from a client configured
+> with a *different* `apiKey`/session, workflow-create returns
+> `404 upload_not_found` — the server enforces ownership. Reference an upload id
+> only under the same auth that created it; the upload-then-create flow above is
+> consistent by construction. Anonymous-intake uploads are unaffected.
+
 ## Full documentation
 
 Docs are published in the [giveitsmaller-sdks](https://github.com/AntonioCS/giveitsmaller-sdks) repository — they are **not** shipped in the npm tarball (only `dist/` is published).

@@ -2633,6 +2633,12 @@ export class GislClient {
    * until the external-import infrastructure ships. The method
    * exists today so consumers can write the integration ahead of
    * time.
+   *
+   * Auth-ownership: the import id this returns is owned by the
+   * authenticated caller that created it. Referencing it from a client
+   * with a different auth context 404s `upload_not_found` at
+   * workflow-create — same ownership rule as `fileInput.uploadId` (api
+   * PqpD9ySv).
    */
   async createExternalImport(
     payload: ExternalImportRequest,
