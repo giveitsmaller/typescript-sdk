@@ -25,6 +25,7 @@ export type ErrorCode =
   | "multipart_session_ownership"
   | "multipart_session_auth_required"
   | "multipart_session_not_found"
+  | "upload_not_found"
   | "workflow_expired"
   | "balance_exhausted"
   | "feature_not_available"
@@ -351,6 +352,17 @@ export const ERROR_CODES: Readonly<Record<ErrorCode, ErrorEntry>> = Object.freez
       "uploadId": "string",
     }),
   }),
+  "upload_not_found": Object.freeze({
+    code: "upload_not_found",
+    category: "api" as ErrorCategory,
+    source: "ErrorEnvelope.error",
+    status: "wired" as ErrorStatus,
+    httpStatus: 404,
+    retryable: false,
+    sdkClass: "GislApiError",
+    description: "404 on POST /api/workflows — a referenced upload was not found, OR exists but is owned by a different identity (deliberate BOLA/IDOR existence-mask: reported as not-found, never 403, so the response does not reveal another user's upload exists). message_key upload.not_found. Wire token UPLOAD_NOT_FOUND keyed on the `error` field. Per ADR-0016 amendment.",
+    metadataSchema: Object.freeze({}),
+  }),
   "workflow_expired": Object.freeze({
     code: "workflow_expired",
     category: "api" as ErrorCategory,
@@ -552,6 +564,7 @@ export const ERROR_CATEGORIES: Readonly<Record<ErrorCategory, readonly ErrorCode
     "feature_tier_restricted",
     "tier_restriction",
     "multipart_session_not_found",
+    "upload_not_found",
     "workflow_expired",
     "balance_exhausted",
     "feature_not_available",
