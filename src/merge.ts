@@ -235,7 +235,7 @@ export class MergeBuilder {
     // would pollute the Result with the raw inputs. The merge job's ref is
     // 'merge' (see buildPayload); the source jobs are 'src_N'.
     const mergeDownloads = downloads.downloads.filter((d) => d.ref === 'merge');
-    return _projectResult(finalStatus, mergeDownloads, this.opOptionsForResolved());
+    return _projectResult(finalStatus, mergeDownloads, this.opOptionsForResolved(plan.mediaKind));
   }
 
   async submit(options: SubmitOptions): Promise<Handle> {
@@ -327,6 +327,34 @@ export class MergeBuilder {
     if (positions.length > 10) {
       throw new GislConfigError(
         `merge accepts at most 10 inputs (got ${positions.length}). Reduce the sequence or split the merge.`,
+      );
+    }
+
+    // Validate merge-level options BEFORE upload (parity with PHP MergeBuilder).
+    // A `targetSize: 'garbage'` typo must fail locally rather than burning N
+    // uploads before parseSizeString fires from wireMergeOptions().
+    if (typeof this.opOptions.targetSize === 'string') {
+      try {
+        parseSizeString(this.opOptions.targetSize);
+      } catch {
+        throw new GislConfigError(
+          `Invalid targetSize string '${this.opOptions.targetSize}' — expected '<num>[B|KB|MB|GB]'.`,
+        );
+      }
+    }
+
+    // Image merges require an `output_type` (the generated merge schema marks
+    // `output_type` required for image kind). Without this check the SDK would
+    // upload all assets then receive a server-side validation failure instead
+    // of a free local one. Parity with PHP MergeBuilder.
+    if (
+      mediaKind === 'image' &&
+      this.opOptions.output == null &&
+      this.opOptions.outputType == null
+    ) {
+      throw new GislConfigError(
+        'image merges require an explicit output_type — set MergeOptions(output: "video"|"gif") or ' +
+          'MergeOptions(outputType: ...). The server rejects image merge requests with no output_type.',
       );
     }
 
@@ -443,12 +471,40 @@ export class MergeBuilder {
     return { jobs: [...sourceJobs, mergeJob] };
   }
 
-  private opOptionsForResolved(): Record<string, unknown> {
-    // Strip the SDK-only fields before exposing on resolvedOptions.applied.
-    const { mediaKind: _m, allowUnusedAssets: _a, ...rest } = this.opOptions;
-    void _m;
-    void _a;
-    return { ...rest };
+  private opOptionsForResolved(mediaKind: MergeMediaKind): Record<string, unknown> {
+    // Mirror wireMergeOptions's per-media allowlist (and PHP
+    // opOptionsForResolved) so resolvedOptions.applied reports ONLY the
+    // options that actually crossed the wire for this media kind — not the
+    // raw option bag (which would falsely claim dropped fields were applied).
+    const o = this.opOptions;
+    const out: Record<string, unknown> = {};
+    // All media kinds.
+    if (o.output !== undefined) out.output = o.output;
+    if (o.outputType !== undefined) out.outputType = o.outputType;
+    if (o.transition !== undefined) out.transition = o.transition;
+    // Video + audio.
+    if (mediaKind === 'video' || mediaKind === 'audio') {
+      if (o.crossfadeDuration !== undefined) out.crossfadeDuration = o.crossfadeDuration;
+      if (o.normalizeAudio !== undefined) out.normalizeAudio = o.normalizeAudio;
+    }
+    // Audio only.
+    if (mediaKind === 'audio' && o.gapDuration !== undefined) out.gapDuration = o.gapDuration;
+    // Video only.
+    if (mediaKind === 'video') {
+      if (o.codec !== undefined) out.codec = o.codec;
+      if (o.crf !== undefined) out.crf = o.crf;
+      if (o.preset !== undefined) out.preset = o.preset;
+      if (o.targetSize !== undefined) out.targetSize = o.targetSize;
+    }
+    // Image only.
+    if (mediaKind === 'image') {
+      if (o.transitionDuration !== undefined) out.transitionDuration = o.transitionDuration;
+      if (o.fps !== undefined) out.fps = o.fps;
+      if (o.durationPerImage !== undefined) out.durationPerImage = o.durationPerImage;
+      if (o.loopCount !== undefined) out.loopCount = o.loopCount;
+      if (o.videoFormat !== undefined) out.videoFormat = o.videoFormat;
+    }
+    return out;
   }
 
   private async awaitTerminal(args: {
@@ -526,29 +582,47 @@ function assetIdentity(a: Asset): string {
 
 function wireMergeOptions(opts: MergeOptions, mediaKind: MergeMediaKind): Record<string, unknown> {
   const out: Record<string, unknown> = {};
-  if (opts.transition !== undefined) out.transition = opts.transition;
-  if (opts.crossfadeDuration !== undefined) out.crossfade_duration = opts.crossfadeDuration;
-  // Codex r2 medium ab2422e56ea0 — merge-level `gap_duration` is on
-  // MergeAudioOptions only (not MergeVideoOptions or MergeImageOptions).
-  // Drop it for non-audio merges instead of shipping an invalid payload.
-  if (opts.gapDuration !== undefined && mediaKind === 'audio') out.gap_duration = opts.gapDuration;
-  if (opts.normalizeAudio !== undefined) out.normalize_audio = opts.normalizeAudio;
-  if (opts.codec !== undefined) out.codec = opts.codec;
-  if (opts.crf !== undefined) out.crf = opts.crf;
-  if (opts.preset !== undefined) out.preset = opts.preset;
-  if (opts.targetSize !== undefined) {
-    out.target_size_bytes = typeof opts.targetSize === 'number'
-      ? opts.targetSize
-      : parseSizeString(opts.targetSize);
-    out.encoding_mode = 'target_size';
-  }
-  if (opts.transitionDuration !== undefined) out.transition_duration = opts.transitionDuration;
-  if (opts.fps !== undefined) out.fps = opts.fps;
-  if (opts.durationPerImage !== undefined) out.duration_per_image = opts.durationPerImage;
-  if (opts.loopCount !== undefined) out.loop_count = opts.loopCount;
+  // Per-media wire allowlist — mirror of PHP MergeBuilder::wireMergeOptions
+  // (codex 30d…/parity): a field set on the wrong media kind is DROPPED
+  // locally rather than shipped as an invalid payload the server 422s.
+
+  // All media kinds.
   if (opts.output !== undefined) out.output_type = opts.output;
   if (opts.outputType !== undefined) out.output_type = opts.outputType;
-  if (opts.videoFormat !== undefined) out.video_format = opts.videoFormat;
+  if (opts.transition !== undefined) out.transition = opts.transition;
+
+  // Video + audio.
+  if (mediaKind === 'video' || mediaKind === 'audio') {
+    if (opts.crossfadeDuration !== undefined) out.crossfade_duration = opts.crossfadeDuration;
+    if (opts.normalizeAudio !== undefined) out.normalize_audio = opts.normalizeAudio;
+  }
+
+  // Audio only — merge-level `gap_duration` is on MergeAudioOptions only
+  // (codex r2 medium ab2422e56ea0).
+  if (mediaKind === 'audio' && opts.gapDuration !== undefined) out.gap_duration = opts.gapDuration;
+
+  // Video only.
+  if (mediaKind === 'video') {
+    if (opts.codec !== undefined) out.codec = opts.codec;
+    if (opts.crf !== undefined) out.crf = opts.crf;
+    if (opts.preset !== undefined) out.preset = opts.preset;
+    if (opts.targetSize !== undefined) {
+      out.target_size_bytes = typeof opts.targetSize === 'number'
+        ? opts.targetSize
+        : parseSizeString(opts.targetSize);
+      out.encoding_mode = 'target_size';
+    }
+  }
+
+  // Image only.
+  if (mediaKind === 'image') {
+    if (opts.transitionDuration !== undefined) out.transition_duration = opts.transitionDuration;
+    if (opts.fps !== undefined) out.fps = opts.fps;
+    if (opts.durationPerImage !== undefined) out.duration_per_image = opts.durationPerImage;
+    if (opts.loopCount !== undefined) out.loop_count = opts.loopCount;
+    if (opts.videoFormat !== undefined) out.video_format = opts.videoFormat;
+  }
+
   return out;
 }
 

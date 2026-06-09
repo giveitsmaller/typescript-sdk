@@ -192,6 +192,72 @@ describe('MergeBuilder — simple concat (no .sequence)', () => {
     expect(opts.encoding_mode).toBe('target_size');
     expect(opts.codec).toBe('h264');
   });
+
+  it('drops video-only merge fields on an image merge (parity with PHP)', async () => {
+    const mock = makeMockClient();
+    await new MergeBuilder(mock.client, [asset('a.png'), asset('b.png')], {
+      mediaKind: 'image',
+      output: 'video',
+      // video-only — must be dropped on an image merge
+      codec: 'h264',
+      crf: 23,
+      preset: 'fast',
+      targetSize: '5MB',
+      crossfadeDuration: 1.0,
+      normalizeAudio: true,
+      // image-allowed
+      transitionDuration: 0.5,
+      fps: 24,
+    }).run({ maxWait: '30s' });
+    const opts = mergeOptions(mock.createWorkflow.mock.calls[0][0]);
+    expect(opts.output_type).toBe('video');
+    expect(opts.transition_duration).toBe(0.5);
+    expect(opts.fps).toBe(24);
+    expect(opts.codec).toBeUndefined();
+    expect(opts.crf).toBeUndefined();
+    expect(opts.preset).toBeUndefined();
+    expect(opts.target_size_bytes).toBeUndefined();
+    expect(opts.encoding_mode).toBeUndefined();
+    expect(opts.crossfade_duration).toBeUndefined();
+    expect(opts.normalize_audio).toBeUndefined();
+  });
+
+  it('drops image-only merge fields on a video merge (parity with PHP)', async () => {
+    const mock = makeMockClient();
+    await new MergeBuilder(mock.client, [asset('a.mp4'), asset('b.mp4')], {
+      mediaKind: 'video',
+      codec: 'h264',
+      // image-only — must be dropped on a video merge
+      transitionDuration: 0.5,
+      fps: 24,
+      durationPerImage: 2.0,
+      loopCount: 1,
+      videoFormat: 'webm',
+    }).run({ maxWait: '30s' });
+    const opts = mergeOptions(mock.createWorkflow.mock.calls[0][0]);
+    expect(opts.codec).toBe('h264');
+    expect(opts.transition_duration).toBeUndefined();
+    expect(opts.fps).toBeUndefined();
+    expect(opts.duration_per_image).toBeUndefined();
+    expect(opts.loop_count).toBeUndefined();
+    expect(opts.video_format).toBeUndefined();
+  });
+
+  it('resolvedOptions.applied reports only wire-allowed fields per media (parity with PHP)', async () => {
+    const mock = makeMockClient();
+    const result = await new MergeBuilder(mock.client, [asset('a.png'), asset('b.png')], {
+      mediaKind: 'image',
+      output: 'video',
+      codec: 'h264', // video-only — dropped from the wire, must not show as applied
+      targetSize: '5MB', // video-only — dropped
+      fps: 24, // image-allowed — applied
+    }).run({ maxWait: '30s' });
+    const applied = result.resolvedOptions.applied;
+    expect(applied.output).toBe('video');
+    expect(applied.fps).toBe(24);
+    expect(applied.codec).toBeUndefined();
+    expect(applied.targetSize).toBeUndefined();
+  });
 });
 
 describe('MergeBuilder — .sequence with reuse', () => {
@@ -344,6 +410,13 @@ describe('MergeBuilder — local validation (BEFORE any upload)', () => {
     }
     expect(thrown).toBeInstanceOf(GislConfigError);
     expect(thrown).toBeInstanceOf(GislError);
+    // Structured fields mirror the PHP $assetId / $declaredAssets props.
+    const undeclared = thrown as GislUndeclaredAssetError;
+    expect(undeclared.assetId).toBe('path:c.mp4');
+    expect(undeclared.declaredAssets).toEqual(['path:a.mp4', 'path:b.mp4']);
+    expect(undeclared.message).toMatch(
+      /Sequence references asset 'path:c.mp4' but it wasn't declared/,
+    );
     // Fail-early: NO uploads happened.
     expect(mock.uploadFile).not.toHaveBeenCalled();
   });
@@ -356,6 +429,16 @@ describe('MergeBuilder — local validation (BEFORE any upload)', () => {
       .sequence(a)
       .run({ maxWait: '30s' });
     await expect(pending).rejects.toBeInstanceOf(GislUnusedAssetError);
+    let thrown: unknown;
+    try {
+      await new MergeBuilder(mock.client, [a, b], {}).sequence(a).run({ maxWait: '30s' });
+    } catch (err) {
+      thrown = err;
+    }
+    // Structured field mirrors the PHP $unusedAssets prop.
+    const unused = thrown as GislUnusedAssetError;
+    expect(unused.unusedAssets).toEqual(['path:b.mp4']);
+    expect(unused.message).toMatch(/were declared in merge\(\.\.\.\) but never sequenced/);
     expect(mock.uploadFile).not.toHaveBeenCalled();
   });
 
@@ -405,6 +488,56 @@ describe('MergeBuilder — local validation (BEFORE any upload)', () => {
       .sequence(p1, clip(p2, { transition: 'fade' }))
       .run({ maxWait: '30s' });
     await expect(pending).rejects.toBeInstanceOf(GislPerInputOptionsNotSupportedError);
+    let thrown: unknown;
+    try {
+      await new MergeBuilder(mock.client, [p1, p2], { output: 'video', videoFormat: 'mp4' })
+        .sequence(p1, clip(p2, { transition: 'fade' }))
+        .run({ maxWait: '30s' });
+    } catch (err) {
+      thrown = err;
+    }
+    // Structured field mirrors the PHP $mediaKind prop.
+    const perInput = thrown as GislPerInputOptionsNotSupportedError;
+    expect(perInput.mediaKind).toBe('image');
+    expect(perInput.message).toMatch(/image merge has no per-input options today/);
+    expect(mock.uploadFile).not.toHaveBeenCalled();
+  });
+
+  it('throws GislConfigError when targetSize is an unparseable string (before any upload)', async () => {
+    // Parity with PHP test_invalid_target_size_string_raises_config_error — a
+    // garbage size string must fail locally in planSequence, not after burning
+    // N uploads then hitting parseSizeString from wireMergeOptions().
+    const mock = makeMockClient();
+    const pending = new MergeBuilder(mock.client, [asset('a.mp4'), asset('b.mp4')], {
+      targetSize: 'garbage',
+    }).run({ maxWait: '30s' });
+    await expect(pending).rejects.toBeInstanceOf(GislConfigError);
+    await expect(
+      new MergeBuilder(mock.client, [asset('a.mp4'), asset('b.mp4')], {
+        targetSize: 'garbage',
+      }).run({ maxWait: '30s' }),
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/Invalid targetSize string 'garbage'/),
+    });
+    expect(mock.uploadFile).not.toHaveBeenCalled();
+  });
+
+  it('throws GislConfigError on an image merge with neither output nor outputType (before any upload)', async () => {
+    // Parity with PHP test_image_merge_without_output_type_raises_config_error_pre_upload —
+    // the server requires output_type for image merges; detect locally so the
+    // caller doesn't pay for uploads chasing a server-side 422.
+    const mock = makeMockClient();
+    const p1 = asset('1.jpg');
+    const p2 = asset('2.jpg');
+    const pending = new MergeBuilder(mock.client, [p1, p2], { mediaKind: 'image' }).run({
+      maxWait: '30s',
+    });
+    await expect(pending).rejects.toBeInstanceOf(GislConfigError);
+    await expect(
+      new MergeBuilder(mock.client, [p1, p2], { mediaKind: 'image' }).run({ maxWait: '30s' }),
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/image merges require an explicit output_type/),
+    });
     expect(mock.uploadFile).not.toHaveBeenCalled();
   });
 });
