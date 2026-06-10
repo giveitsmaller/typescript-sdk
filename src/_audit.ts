@@ -149,7 +149,6 @@ import type {
   DocumentEpubCompressPresetOptionsInput,
   OptimizeFor,
   ImageMode,
-  ImageFit,
   ImageMetadataPolicy,
   IccProfilePolicy,
   ImageFormat,
@@ -288,7 +287,6 @@ export function _runAudit(): void {
   accept<DocumentEpubCompressPresetOptionsInput>();
   accept<OptimizeFor>();
   accept<ImageMode>();
-  accept<ImageFit>();
   accept<ImageMetadataPolicy>();
   accept<IccProfilePolicy>();
   accept<ImageFormat>();

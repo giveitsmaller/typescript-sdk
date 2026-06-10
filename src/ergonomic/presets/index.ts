@@ -90,7 +90,6 @@ export {
 export {
   OptimizeFor,
   ImageMode,
-  ImageFit,
   ImageMetadataPolicy,
   IccProfilePolicy,
   ImageFormat,

@@ -7,15 +7,15 @@
 // values ARE the wire backing values — so the leaf DTO is wire-compatible
 // once the resolver (T4b) snake_cases the property names.
 //
-// Field set per ticket VhIj4S7T (codex r3 lock): image = 10 fields
-//   (mode, quality, width, height, fit, metadata, iccProfile, autoOrient,
-//    progressive, outputFormat).
-// Trim / per-call knobs are deliberately excluded — they belong on the
-// per-call argument shape, not the preset cell.
+// Field set (6) per EsD1hs5u / contracts v2.60.0: image =
+//   (mode, quality, metadata, iccProfile, progressive, outputFormat).
+// `width`/`height`/`fit`/`autoOrient` were REMOVED — the image-compress
+// worker never resized (resize-fit lives on thumbnail/convert; video keeps
+// its own fit). Trim / per-call knobs are deliberately excluded — they
+// belong on the per-call argument shape, not the preset cell.
 
 import {
   ImageMode,
-  ImageFit,
   ImageMetadataPolicy,
   IccProfilePolicy,
   ImageFormat,
@@ -27,12 +27,8 @@ import { translateEnum } from './_translate.js';
 export interface ImageCompressPresetOptionsInput {
   readonly mode?: ImageMode;
   readonly quality?: number;
-  readonly width?: number;
-  readonly height?: number;
-  readonly fit?: ImageFit;
   readonly metadata?: ImageMetadataPolicy;
   readonly iccProfile?: IccProfilePolicy;
-  readonly autoOrient?: boolean;
   readonly progressive?: boolean;
   readonly outputFormat?: ImageFormat;
 }
@@ -40,24 +36,16 @@ export interface ImageCompressPresetOptionsInput {
 export class ImageCompressPresetOptions {
   readonly mode?: ImageMode;
   readonly quality?: number;
-  readonly width?: number;
-  readonly height?: number;
-  readonly fit?: ImageFit;
   readonly metadata?: ImageMetadataPolicy;
   readonly iccProfile?: IccProfilePolicy;
-  readonly autoOrient?: boolean;
   readonly progressive?: boolean;
   readonly outputFormat?: ImageFormat;
 
   private constructor(input: ImageCompressPresetOptionsInput) {
     if (input.mode !== undefined) this.mode = input.mode;
     if (input.quality !== undefined) this.quality = input.quality;
-    if (input.width !== undefined) this.width = input.width;
-    if (input.height !== undefined) this.height = input.height;
-    if (input.fit !== undefined) this.fit = input.fit;
     if (input.metadata !== undefined) this.metadata = input.metadata;
     if (input.iccProfile !== undefined) this.iccProfile = input.iccProfile;
-    if (input.autoOrient !== undefined) this.autoOrient = input.autoOrient;
     if (input.progressive !== undefined) this.progressive = input.progressive;
     if (input.outputFormat !== undefined) this.outputFormat = input.outputFormat;
     Object.freeze(this);
@@ -88,12 +76,8 @@ export class ImageCompressPresetOptions {
     const mut = input as Record<string, unknown>;
     if ('mode' in cell) mut.mode = translateEnum('ImageMode', cell.mode as string);
     if ('quality' in cell) mut.quality = cell.quality as number;
-    if ('width' in cell) mut.width = cell.width as number;
-    if ('height' in cell) mut.height = cell.height as number;
-    if ('fit' in cell) mut.fit = translateEnum('ImageFit', cell.fit as string);
     if ('metadata' in cell) mut.metadata = translateEnum('ImageMetadataPolicy', cell.metadata as string);
     if ('iccProfile' in cell) mut.iccProfile = translateEnum('IccProfilePolicy', cell.iccProfile as string);
-    if ('autoOrient' in cell) mut.autoOrient = cell.autoOrient as boolean;
     if ('progressive' in cell) mut.progressive = cell.progressive as boolean;
     if ('outputFormat' in cell) mut.outputFormat = translateEnum('ImageFormat', cell.outputFormat as string);
     return new ImageCompressPresetOptions(input);

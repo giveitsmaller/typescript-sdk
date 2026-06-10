@@ -2,6 +2,6 @@
 // Source: compression_contracts/sdk-spec/ (see sdk-spec/README.md).
 // Regenerate with: scripts/generate.py.
 
-export const SDK_SPEC_VERSION = "1.4.0" as const;
+export const SDK_SPEC_VERSION = "1.5.0" as const;
 export const PRESET_VERSION = "1.0" as const;
-export const PRESET_CONFIG_HASH = "sha256:35aeb0b6b86edd9814ace5b75cfeef8a7b1432ecb8e4d5ee8b38d9187a0b45eb" as const;
+export const PRESET_CONFIG_HASH = "sha256:dc48f4d31f4037cc07fb0686519122c03a55b03a41f05fbfc2af54e54950a0d2" as const;

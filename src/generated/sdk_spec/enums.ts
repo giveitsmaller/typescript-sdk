@@ -30,14 +30,6 @@ export const ImageFormat = {
 } as const;
 export type ImageFormat = typeof ImageFormat[keyof typeof ImageFormat];
 
-// Image resize mode. Only applies when width or height is set (depends_on width/height in compress.yaml).
-export const ImageFit = {
-  Max: "max",
-  Crop: "crop",
-  Scale: "scale",
-} as const;
-export type ImageFit = typeof ImageFit[keyof typeof ImageFit];
-
 // Image metadata handling. Counter-intuitive wire naming:
 //   All       = strip everything (smallest file)
 //   None      = keep all EXIF/IPTC/XMP
@@ -142,7 +134,6 @@ export const ERGONOMIC_ENUMS = {
   OptimizeFor,
   ImageMode,
   ImageFormat,
-  ImageFit,
   ImageMetadataPolicy,
   IccProfilePolicy,
   VideoCodec,

@@ -35,7 +35,6 @@ describe('resolveCompressOptions — layer 1 (sdkDefault)', () => {
     expect(wireOptions.quality).toBe(65);
     expect(wireOptions.metadata).toBe('all');
     expect(wireOptions.icc_profile).toBe('strip');
-    expect(wireOptions.auto_orient).toBe(true);
     expect(wireOptions.progressive).toBe(true);
     expect(wireOptions.output_format).toBe('smallest');
     expect(resolvedOptions.preset).toBe(OptimizeFor.Size);
@@ -168,7 +167,7 @@ describe('resolveCompressOptions — layer 3 (scopedDefault, reserved for T4c)',
       op: 'compress',
       optimize: OptimizeFor.Size,
       presetDefaults: presetDefaults().imageCompress(OptimizeFor.Size, { quality: 70 }),
-      presetOverrides: { autoOrient: false },
+      presetOverrides: { progressive: false },
       explicitOptions: { progressive: false },
     });
     expect(resolvedOptions.sources.scopedDefault).toEqual([]);
@@ -257,11 +256,11 @@ describe('resolveCompressOptions — layer 5 (explicit) wins over every lower la
       media: 'image',
       op: 'compress',
       optimize: OptimizeFor.Size,
-      explicitOptions: { autoOrient: false, iccProfile: IccProfilePolicy.Preserve },
+      explicitOptions: { progressive: false, iccProfile: IccProfilePolicy.Preserve },
     });
-    expect(wireOptions.auto_orient).toBe(false);
+    expect(wireOptions.progressive).toBe(false);
     expect(wireOptions.icc_profile).toBe('preserve');
-    expect([...resolvedOptions.sources.explicit].sort()).toEqual(['auto_orient', 'icc_profile']);
+    expect([...resolvedOptions.sources.explicit].sort()).toEqual(['icc_profile', 'progressive']);
   });
 });
 
@@ -613,15 +612,15 @@ describe('resolveCompressOptions — presetConfigHash', () => {
     );
   });
 
-  it('exact hash — override {quality:70, autoOrient:true} sorts keys', () => {
+  it('exact hash — override {quality:70, progressive:true} sorts keys', () => {
     const { resolvedOptions } = resolveCompressOptions({
       media: 'image',
       op: 'compress',
-      presetOverrides: { quality: 70, autoOrient: true },
+      presetOverrides: { quality: 70, progressive: true },
       explicitOptions: {},
     });
     expect(resolvedOptions.presetConfigHash).toBe(
-      'sha256:1c312c5c010b9da62ccc1050776179b736dab241d839fe827f85e5f745abe9e4',
+      'sha256:26aa8ab195e269b4dde191a94f5018e50fc84493251074c2974f90e88b93e40b',
     );
   });
 
@@ -667,7 +666,7 @@ describe('resolveCompressOptions — invariants', () => {
     const { resolvedOptions } = resolveCompressOptions({
       media: 'image',
       op: 'compress',
-      explicitOptions: { quality: 80, autoOrient: false },
+      explicitOptions: { quality: 80, progressive: false },
     });
     // Mirror exact contents.
     expect([...resolvedOptions.overrides].sort()).toEqual([...resolvedOptions.sources.explicit].sort());
@@ -730,13 +729,13 @@ describe('GislConfigError back-compat', () => {
 describe('PresetDefaults builder integration (T4a x T4b)', () => {
   it('builder produces a PresetDefaults whose cellFor returns the registered delta', () => {
     const d = presetDefaults()
-      .imageCompress(OptimizeFor.Size, { quality: 75, autoOrient: true })
+      .imageCompress(OptimizeFor.Size, { quality: 75, progressive: true })
       .audioCompress(OptimizeFor.Balanced, { bitrate: AudioBitrate._192 });
     expect(d).toBeInstanceOf(PresetDefaults);
     const cell = d.cellFor('image', 'compress', OptimizeFor.Size);
     expect(cell).toBeInstanceOf(ImageCompressPresetOptions);
     expect(cell?.quality).toBe(75);
-    expect(cell?.autoOrient).toBe(true);
+    expect(cell?.progressive).toBe(true);
   });
 
   it('shippedDefaultsFor wires up the same wire values the resolver consumes', () => {
@@ -798,14 +797,14 @@ describe('code-review R1 regression: presetConfigHash is canonical across nested
       media: 'image',
       op: 'compress',
       optimize: OptimizeFor.Size,
-      presetOverrides: { quality: 75, autoOrient: true } as Readonly<Record<string, unknown>>,
+      presetOverrides: { quality: 75, progressive: true } as Readonly<Record<string, unknown>>,
       explicitOptions: {},
     }).resolvedOptions.presetConfigHash;
     const b = resolveCompressOptions({
       media: 'image',
       op: 'compress',
       optimize: OptimizeFor.Size,
-      presetOverrides: { autoOrient: true, quality: 75 } as Readonly<Record<string, unknown>>,
+      presetOverrides: { progressive: true, quality: 75 } as Readonly<Record<string, unknown>>,
       explicitOptions: {},
     }).resolvedOptions.presetConfigHash;
     expect(a).toBe(b);

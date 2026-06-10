@@ -171,7 +171,6 @@ export {
   type DocumentEpubCompressPresetOptionsInput,
   OptimizeFor,
   ImageMode,
-  ImageFit,
   ImageMetadataPolicy,
   IccProfilePolicy,
   ImageFormat,

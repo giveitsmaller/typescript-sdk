@@ -70,7 +70,6 @@ export const PRESET_VERSION = '1.0';
 
 const WIRE_ALIASES: Readonly<Record<string, string>> = Object.freeze({
   iccProfile: 'icc_profile',
-  autoOrient: 'auto_orient',
   outputFormat: 'output_format',
   sampleRate: 'sample_rate',
   audioCodec: 'audio_codec',
@@ -336,7 +335,7 @@ function presetDefaultsCellRecord(
 // non-matching media.
 
 const MEDIA_FIELDS: Readonly<Record<PresetMedia, ReadonlySet<string>>> = Object.freeze({
-  image: new Set(['mode', 'quality', 'width', 'height', 'fit', 'metadata', 'iccProfile', 'autoOrient', 'progressive', 'outputFormat']),
+  image: new Set(['mode', 'quality', 'metadata', 'iccProfile', 'progressive', 'outputFormat']),
   audio: new Set(['bitrate', 'channels', 'sampleRate', 'normalize']),
   video: new Set(['codec', 'targetSize', 'crf', 'preset', 'width', 'height', 'fit', 'fps', 'faststart', 'audioCodec', 'audioBitrate']),
   document_pdf: new Set(['profile', 'colorspace', 'flattenForms']),
@@ -421,7 +420,7 @@ function mergeLayer(
 // ---------------------------------------------------------------------------
 
 const KNOWN_WIRE_FIELDS: Readonly<Record<PresetMedia, ReadonlySet<string>>> = Object.freeze({
-  image: new Set(['mode', 'quality', 'width', 'height', 'fit', 'metadata', 'icc_profile', 'auto_orient', 'progressive', 'output_format']),
+  image: new Set(['mode', 'quality', 'metadata', 'icc_profile', 'progressive', 'output_format']),
   audio: new Set(['bitrate', 'channels', 'sample_rate', 'normalize', 'trim_start', 'trim_end']),
   video: new Set(['codec', 'encoding_mode', 'crf', 'target_size_bytes', 'preset', 'width', 'height', 'fit', 'fps', 'faststart', 'audio_codec', 'audio_bitrate', 'trim_start', 'trim_end']),
   document_pdf: new Set(['profile', 'colorspace', 'pages', 'flatten_forms']),

@@ -14,7 +14,6 @@ import {
   DocumentEpubCompressPresetOptions,
   OptimizeFor,
   ImageMode,
-  ImageFit,
   ImageMetadataPolicy,
   IccProfilePolicy,
   ImageFormat,
@@ -42,14 +41,9 @@ describe('ImageCompressPresetOptions.shippedDefaultsFor', () => {
     expect(opts.metadata).toBe('all');
     expect(opts.iccProfile).toBe(IccProfilePolicy.Strip);
     expect(opts.iccProfile).toBe('strip');
-    expect(opts.autoOrient).toBe(true);
     expect(opts.progressive).toBe(true);
     expect(opts.outputFormat).toBe(ImageFormat.Smallest);
     expect(opts.outputFormat).toBe('smallest');
-    // Width / height / fit are content-driven — undefined in shipped cell.
-    expect(opts.width).toBeUndefined();
-    expect(opts.height).toBeUndefined();
-    expect(opts.fit).toBeUndefined();
   });
 
   it('Balanced (default) — different cell values', () => {
@@ -231,11 +225,7 @@ describe('*PresetOptions.from() — sparse-delta semantics', () => {
     expect(opts.metadata).toBeUndefined();
     expect(opts.iccProfile).toBeUndefined();
     expect(opts.outputFormat).toBeUndefined();
-    expect(opts.autoOrient).toBeUndefined();
     expect(opts.progressive).toBeUndefined();
-    expect(opts.width).toBeUndefined();
-    expect(opts.height).toBeUndefined();
-    expect(opts.fit).toBeUndefined();
   });
 
   it('video: from({ codec: H264, crf: 22 }) — exactly two fields populated', () => {
@@ -296,11 +286,7 @@ describe('presetDefaults() / PresetDefaults', () => {
     expect(cell?.metadata).toBeUndefined();
     expect(cell?.iccProfile).toBeUndefined();
     expect(cell?.outputFormat).toBeUndefined();
-    expect(cell?.autoOrient).toBeUndefined();
     expect(cell?.progressive).toBeUndefined();
-    expect(cell?.width).toBeUndefined();
-    expect(cell?.height).toBeUndefined();
-    expect(cell?.fit).toBeUndefined();
   });
 
   it('imageCompress(level) with no options registers empty delta', () => {
@@ -406,11 +392,10 @@ describe('GislCreateOptions.presetDefaults', () => {
 // ---------------------------------------------------------------------------
 
 describe('ergonomic enums serialise to wire backing values', () => {
-  it('ImageMode / ImageFit / ImageMetadataPolicy / IccProfilePolicy / ImageFormat', () => {
+  it('ImageMode / ImageMetadataPolicy / IccProfilePolicy / ImageFormat', () => {
     expect(ImageMode.Lossy).toBe('lossy');
     expect(ImageMode.Lossless).toBe('lossless');
     expect(ImageMode.Auto).toBe('auto');
-    expect(ImageFit.Max).toBe('max');
     expect(ImageMetadataPolicy.All).toBe('all');
     expect(ImageMetadataPolicy.Sensitive).toBe('sensitive');
     expect(IccProfilePolicy.Strip).toBe('strip');
