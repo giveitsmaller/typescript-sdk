@@ -19,6 +19,7 @@ export { parseSseStream } from './sse.js';
 // SDK types and factories
 export type {
   CreditsUsageOptions,
+  ListWorkflowsOptions,
   GetSchemaOptions,
   GetSchemaResult,
   PreflightClipError,
@@ -245,6 +246,8 @@ export type {
   MultipartInitiateRequestMetadataHint,
   WorkflowCreateResponse,
   WorkflowStatusResponse,
+  WorkflowListResponse,
+  WorkflowSummary,
   WorkflowDownloadResponse,
   MetadataResponse,
   // Nested metadata shapes reachable from getMetadata() return value —

@@ -445,6 +445,23 @@ export interface CreditsUsageOptions {
 }
 
 // ---------------------------------------------------------------------------
+// Workflow history
+// ---------------------------------------------------------------------------
+
+export interface ListWorkflowsOptions {
+  /**
+   * Opaque pagination cursor from a previous page's `nextCursor`. Omit for
+   * the first page; treat the value as opaque (do not parse).
+   */
+  cursor?: string;
+  /**
+   * Rows per page. Server defaults to 20 and rejects values outside `[1, 100]`
+   * with a 400 validation envelope.
+   */
+  limit?: number;
+}
+
+// ---------------------------------------------------------------------------
 // Upload probe / preflight
 // ---------------------------------------------------------------------------
 

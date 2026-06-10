@@ -23,6 +23,7 @@ import {
   WorkflowCreateResponseFromJSON,
   WorkflowResumeResponseFromJSON,
   WorkflowStatusResponseFromJSON,
+  WorkflowListResponseFromJSON,
   WorkflowDownloadResponseFromJSON,
   MetadataResponseFromJSON,
   OperationsSchemaResponseFromJSON,
@@ -70,6 +71,8 @@ import type {
   WorkflowCreateResponse,
   WorkflowResumeResponse,
   WorkflowStatusResponse,
+  WorkflowListResponse,
+  WorkflowSummary,
   WorkflowDownloadResponse,
   MetadataResponse,
   RetryResponse,
@@ -101,6 +104,7 @@ import {
 import { parseSseStream } from './sse.js';
 import type {
   CreditsUsageOptions,
+  ListWorkflowsOptions,
   GetSchemaOptions,
   GetSchemaResult,
   GislClientConfig,
@@ -2751,5 +2755,66 @@ export class GislClient {
     return this.request('GET', path, {
       deserialize: CreditsUsageResponseFromJSON,
     });
+  }
+
+  /**
+   * List the caller's workflows — a cursor-paginated, user-scoped summary
+   * list, most-recent-first. Each row is a lightweight {@link WorkflowSummary}
+   * (id / status / created_at + per-job type+status + a deliverable-output
+   * count); it does NOT inline per-op `result_metadata` or output details —
+   * drill in via {@link getWorkflowStatus} / {@link getWorkflowDownloads}.
+   *
+   * Auth is REQUIRED (the list is user-scoped; an anonymous caller gets a 401
+   * → `GislAuthError`). Walk pages by passing each response's `nextCursor` as
+   * the next call's `cursor` until `isTruncated` is false, or use
+   * {@link workflows} to auto-paginate. Mirrors the PHP
+   * `GislClient::listWorkflows`.
+   */
+  async listWorkflows(options: ListWorkflowsOptions = {}): Promise<WorkflowListResponse> {
+    const params = new URLSearchParams();
+    // Guard `null` too — runtime (untyped) callers may pass `cursor: null`,
+    // which must be omitted, not serialised as the literal string "null".
+    if (options.cursor !== undefined && options.cursor !== null && options.cursor !== '') {
+      params.set('cursor', options.cursor);
+    }
+    if (options.limit !== undefined) params.set('limit', String(options.limit));
+    const query = params.toString();
+    // String concatenation (not template) so the contract-drift path scanner
+    // picks up the literal path. See getCreditsUsage for the same pattern.
+    const path = query.length > 0 ? '/api/workflows' + '?' + query : '/api/workflows';
+    return this.request('GET', path, {
+      deserialize: WorkflowListResponseFromJSON,
+    });
+  }
+
+  /**
+   * Auto-paginating async iterator over ALL of the caller's workflows,
+   * yielding each {@link WorkflowSummary} most-recent-first across page
+   * boundaries — the ergonomic companion to {@link listWorkflows}. Walks
+   * `nextCursor` until the server reports `isTruncated: false`. Mirrors the
+   * PHP `workflows()` generator.
+   *
+   * ```ts
+   * for await (const wf of client.workflows()) {
+   *   console.log(wf.workflowId, wf.status);
+   * }
+   * ```
+   */
+  async *workflows(options: { limit?: number } = {}): AsyncGenerator<WorkflowSummary, void, undefined> {
+    let cursor: string | undefined;
+    for (;;) {
+      const page = await this.listWorkflows({ cursor, limit: options.limit });
+      for (const summary of page.workflows) {
+        yield summary;
+      }
+      const next = page.nextCursor;
+      // Stop on a final page, an empty cursor, OR a non-advancing cursor — a
+      // server that repeats the same cursor on a truncated page would
+      // otherwise loop forever, refetching + re-yielding the same rows.
+      if (!page.isTruncated || next === undefined || next === null || next === '' || next === cursor) {
+        return;
+      }
+      cursor = next;
+    }
   }
 }

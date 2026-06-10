@@ -558,6 +558,82 @@ describe('GislClient', () => {
     });
   });
 
+  describe('listWorkflows / workflows', () => {
+    function summary(workflowId: string) {
+      return {
+        workflow_id: workflowId,
+        status: 'completed',
+        created_at: '2026-06-10T11:00:00Z',
+        jobs: [{ job_id: 'j1', ref: 'op', job_type: 'image', status: 'completed' }],
+      };
+    }
+    function page(workflows: unknown[], nextCursor: string | null, isTruncated: boolean): Response {
+      return jsonResponse({
+        success: true,
+        data: { workflows, next_cursor: nextCursor, is_truncated: isTruncated },
+      });
+    }
+
+    it('GETs /api/workflows with cursor + limit and decodes the page', async () => {
+      fetchSpy.mockResolvedValueOnce(page([summary('wf-1')], 'cursor_next', true));
+
+      const result = await client.listWorkflows({ cursor: 'cursor_abc', limit: 50 });
+      expect(result.workflows).toHaveLength(1);
+      expect(result.workflows[0].workflowId).toBe('wf-1');
+      expect(result.nextCursor).toBe('cursor_next');
+      expect(result.isTruncated).toBe(true);
+
+      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      expect(init.method).toBe('GET');
+      expect(url).toContain('/api/workflows?');
+      expect(url).toContain('cursor=cursor_abc');
+      expect(url).toContain('limit=50');
+    });
+
+    it('omits the query on the first page when no options are given', async () => {
+      fetchSpy.mockResolvedValueOnce(page([], null, false));
+      await client.listWorkflows();
+      const [url] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('https://api.example.com/api/workflows');
+    });
+
+    it('workflows() auto-paginates across pages, yielding every summary in order', async () => {
+      fetchSpy
+        .mockResolvedValueOnce(page([summary('wf-a1'), summary('wf-a2')], 'cursor_2', true))
+        .mockResolvedValueOnce(page([summary('wf-a3')], null, false));
+
+      const ids: string[] = [];
+      for await (const wf of client.workflows({ limit: 2 })) {
+        ids.push(wf.workflowId);
+      }
+
+      expect(ids).toEqual(['wf-a1', 'wf-a2', 'wf-a3']);
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      const [url1] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      const [url2] = fetchSpy.mock.calls[1] as [string, RequestInit];
+      expect(url1).not.toContain('cursor=');
+      expect(url1).toContain('limit=2');
+      expect(url2).toContain('cursor=cursor_2');
+      expect(url2).toContain('limit=2');
+    });
+
+    it('workflows() stops on a non-advancing (repeated) cursor instead of looping forever', async () => {
+      // Server misbehaves: is_truncated stays true but the cursor never changes.
+      fetchSpy
+        .mockResolvedValueOnce(page([summary('wf-b1')], 'stuck', true))
+        .mockResolvedValueOnce(page([summary('wf-b2')], 'stuck', true));
+
+      const ids: string[] = [];
+      for await (const wf of client.workflows()) {
+        ids.push(wf.workflowId);
+      }
+
+      expect(ids).toEqual(['wf-b1', 'wf-b2']);
+      // Exactly 2 fetches — the repeated cursor halts the walk.
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe('resumeWorkflow', () => {
     it('POSTs /api/workflows/{id}/resume and returns the in_progress envelope', async () => {
       fetchSpy.mockResolvedValueOnce(
