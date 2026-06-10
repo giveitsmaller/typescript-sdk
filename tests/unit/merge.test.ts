@@ -503,10 +503,12 @@ describe('MergeBuilder — local validation (BEFORE any upload)', () => {
     expect(mock.uploadFile).not.toHaveBeenCalled();
   });
 
-  it('throws GislConfigError when targetSize is an unparseable string (before any upload)', async () => {
+  it('throws GislConfigError when targetSize is an unparseable string on a VIDEO merge (before any upload)', async () => {
     // Parity with PHP test_invalid_target_size_string_raises_config_error — a
     // garbage size string must fail locally in planSequence, not after burning
-    // N uploads then hitting parseSizeString from wireMergeOptions().
+    // N uploads then hitting parseSizeString from wireMergeOptions(). The .mp4
+    // assets infer a video merge, where targetSize DOES cross the wire — so the
+    // pre-upload validation applies (codex #176 r3 DCJUvvfA gates it to video).
     const mock = makeMockClient();
     const pending = new MergeBuilder(mock.client, [asset('a.mp4'), asset('b.mp4')], {
       targetSize: 'garbage',
@@ -520,6 +522,25 @@ describe('MergeBuilder — local validation (BEFORE any upload)', () => {
       message: expect.stringMatching(/Invalid targetSize string 'garbage'/),
     });
     expect(mock.uploadFile).not.toHaveBeenCalled();
+  });
+
+  it('does NOT validate a garbage targetSize on a NON-video merge — the field is dropped, not parsed (DCJUvvfA)', async () => {
+    // targetSize → target_size_bytes is video-only (wireMergeOptions drops it for
+    // image/audio). Validating its string form on a non-video merge would reject
+    // the workflow over a value that never leaves the SDK. codex #176 r3 gated the
+    // pre-upload check to video, so an image merge with garbage targetSize must
+    // succeed and simply omit target_size_bytes from the wire. PHP parity:
+    // test_garbage_target_size_string_is_ignored_on_non_video_merge.
+    const mock = makeMockClient();
+    await new MergeBuilder(mock.client, [asset('a.png'), asset('b.png')], {
+      mediaKind: 'image',
+      output: 'video',
+      targetSize: 'garbage',
+    }).run({ maxWait: '30s' });
+    const opts = mergeOptions(mock.createWorkflow.mock.calls[0][0]);
+    expect(opts.target_size_bytes).toBeUndefined();
+    expect(opts.encoding_mode).toBeUndefined();
+    expect(mock.uploadFile).toHaveBeenCalled();
   });
 
   it('throws GislConfigError on an image merge with neither output nor outputType (before any upload)', async () => {

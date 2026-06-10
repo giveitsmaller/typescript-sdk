@@ -333,7 +333,12 @@ export class MergeBuilder {
     // Validate merge-level options BEFORE upload (parity with PHP MergeBuilder).
     // A `targetSize: 'garbage'` typo must fail locally rather than burning N
     // uploads before parseSizeString fires from wireMergeOptions().
-    if (typeof this.opOptions.targetSize === 'string') {
+    //
+    // Gated to video (codex #176 r3 DCJUvvfA) — `target_size_bytes` only
+    // crosses the wire for video merges (see wireMergeOptions); for image/audio
+    // the field is silently dropped, so validating its string form would reject
+    // a merge over a value that never leaves the SDK.
+    if (mediaKind === 'video' && typeof this.opOptions.targetSize === 'string') {
       try {
         parseSizeString(this.opOptions.targetSize);
       } catch {
