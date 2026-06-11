@@ -34,10 +34,16 @@ import { OptimizeFor } from './generated/sdk_spec/enums.js';
 import type { PresetDefaults, PresetMedia } from './ergonomic/presets/index.js';
 import type {
   JobDefinitionPayload,
+  JobInputV2Payload,
   OperationDef,
   WorkflowCreatePayload,
 } from './types.js';
-import { uploadSource } from './types.js';
+import { uploadSource, jobOutputSource } from './types.js';
+import type { MergeMediaKind, MergeOptions } from './merge.js';
+// Value import used only at call-time (inside MergedRecipe.toWorkflowPayload),
+// never at module-eval, so the file-first <-> merge <-> handle import cycle
+// resolves cleanly under ESM (same deferred-usage discipline as `Handle`).
+import { wireMergeOptions } from './merge.js';
 // Deferred-usage-only import: `Handle` is constructed inside `submit()` at call
 // time, never at module-eval, so the handle.ts <-> file-first.ts back-edge
 // (handle.ts imports RunResult/projectDownloadsToRunResult from here) resolves
@@ -442,6 +448,34 @@ const _FANOUT_REF = /^file-\d+$/;
 export function isFanoutStatus(finalStatus: WorkflowStatusResponse): boolean {
   const jobs = finalStatus.jobs ?? [];
   return jobs.length > 0 && jobs.every((job) => _FANOUT_REF.test(job.ref));
+}
+
+const _MERGE_SRC_REF = /^src_\d+$/;
+
+/**
+ * True when a terminal status describes a fluent `files([...]).merge(...)`
+ * combine — at least one job ref `merge` and every OTHER job ref is `src_{i}`
+ * (the ids the {@link MergedRecipe} lowering assigns). The data-driven seam that
+ * lets {@link Handle.wait}/{@link Handle.result} project ONLY the merged output
+ * — filtering the `src_*` passthrough plumbing — even after a
+ * `client.workflow(id)` reattach (no construction-time marker), matching
+ * {@link MergedRecipe.run}'s `ref === 'merge'` filter. Mutually exclusive with
+ * {@link isFanoutStatus} (a fan-out's refs are all `file-{i}`).
+ *
+ * @internal Exported for the file-first `Handle`; not part of the public API.
+ */
+export function isMergeStatus(finalStatus: WorkflowStatusResponse): boolean {
+  const jobs = finalStatus.jobs ?? [];
+  if (jobs.length === 0) return false;
+  let hasMerge = false;
+  for (const job of jobs) {
+    if (job.ref === 'merge') {
+      hasMerge = true;
+      continue;
+    }
+    if (!_MERGE_SRC_REF.test(job.ref)) return false;
+  }
+  return hasMerge;
 }
 
 /**
@@ -896,6 +930,35 @@ export class FilesRecipe {
     return this.withStep(this.baseRecipe().textWatermark(text));
   }
 
+  /**
+   * Combine the inputs into ONE output (N→1), in array order (FF3b). Returns a
+   * single-output {@link MergedRecipe} you chain further ops on
+   * (`files([...]).merge().compress()`). Reuses the operation-first
+   * {@link MergeOptions} for the merge-level options, so the wire shape matches
+   * `client.merge([...], options)`.
+   *
+   * `merge()` must be the FIRST op on `files([...])` — per-file ops before a
+   * combine (compress-each-then-merge) are a separate follow-up, rejected here
+   * with `GislConfigError` reason `pre_merge_ops_unsupported`.
+   */
+  merge(options: MergeOptions = {}): MergedRecipe {
+    if (this.steps.length !== 0) {
+      throw new GislConfigError(
+        'merge() must be the first operation on files([...]); applying per-file ops before a combine ' +
+          '(compress-each-then-merge) is not yet supported — call merge() directly, then chain ops on the merged output.',
+        { reason: 'pre_merge_ops_unsupported' },
+      );
+    }
+    return new MergedRecipe(
+      this.inputs,
+      options,
+      [],
+      this.presetDefaults,
+      this.scopedPresetDefaults,
+      this.client,
+    );
+  }
+
   /** The number of inputs in this fan-out (introspection / tests). */
   get inputCount(): number {
     return this.inputs.length;
@@ -1125,6 +1188,344 @@ export class FilesRecipe {
     return new FilesRecipe(
       this.inputs,
       recipeWithStep.recipeSteps,
+      this.presetDefaults,
+      this.scopedPresetDefaults,
+      this.client,
+    );
+  }
+}
+
+/**
+ * The single-output recipe you're in AFTER a fluent `files([...]).merge(...)`
+ * (FF3b). Merge collapses the N inputs into ONE output, so the per-file ops
+ * ({@link FilesRecipe.compress} etc.) no longer apply — instead this exposes the
+ * SAME chain ops as the single-file {@link Recipe}, applied to the merged
+ * result. `files([...]).merge().compress()` is the flagship case (example 14).
+ *
+ * **Lowering (one workflow):** each input is uploaded once and wrapped in its
+ * own single-input `passthrough` source job (`src_N`); the `merge` job consumes
+ * those via `job_output` inputs (array order = play order) and carries the merge
+ * op FIRST in its `operations[]`, followed by any post-combine ops (compress /
+ * convert / thumbnail) so they run on the merged output in the same job. The
+ * merge-level wire options reuse {@link wireMergeOptions} so a fluent merge
+ * lowers identically to the operation-first `client.merge()`.
+ *
+ * Immutable / clone-on-write like {@link Recipe} / {@link FilesRecipe}. Mirrors
+ * the PHP `MergedRecipe` in `packages/php/src/FileFirst/MergedRecipe.php`.
+ */
+export class MergedRecipe {
+  constructor(
+    private readonly inputs: readonly FileInput[],
+    private readonly mergeOptions: MergeOptions,
+    private readonly postSteps: readonly RecipeStep[] = [],
+    private readonly presetDefaults?: PresetDefaults,
+    private readonly scopedPresetDefaults?: PresetDefaults,
+    private readonly client?: GislClient,
+  ) {}
+
+  /** Reduce the merged output's size. See {@link Recipe.compress}. */
+  compress(optimize?: OptimizeFor): MergedRecipe {
+    if (optimize !== undefined && !Object.values(OptimizeFor).includes(optimize)) {
+      const allowed = Object.values(OptimizeFor).join(', ');
+      throw new GislConfigError(
+        `compress 'optimize' must be one of ${allowed}; got '${String(optimize)}'.`,
+        { reason: 'invalid_optimize', conflictingFields: ['optimize'] },
+      );
+    }
+    return this.withStep({ opType: 'compress', options: optimize === undefined ? {} : { optimize } });
+  }
+
+  /** Change the merged output's format. See {@link Recipe.convert}. */
+  convert(format: string): MergedRecipe {
+    return this.withStep({ opType: 'convert', options: { format } });
+  }
+
+  /** Thumbnail the merged output. Omitted dimensions are dropped from the wire options. */
+  thumbnail(options: { width?: number; height?: number } = {}): MergedRecipe {
+    const wire: Record<string, unknown> = {};
+    if (options.width !== undefined) wire.width = options.width;
+    if (options.height !== undefined) wire.height = options.height;
+    return this.withStep({ opType: 'thumbnail', options: wire });
+  }
+
+  /**
+   * Lower to the merge DAG: one `passthrough` source job per input + one
+   * `merge` job whose `operations[]` is `[merge, ...post-combine ops]`. The
+   * merge job's `inputs[]` consume the source jobs via `job_output` in input
+   * (play) order.
+   *
+   * @internal Consumed by {@link run} (after uploading all inputs), {@link submit}
+   *   (with a webhook), and the cross-language parity harness (with fixed ids).
+   */
+  toWorkflowPayload(fileIds: readonly string[], callbackUrl?: string): WorkflowCreatePayload {
+    const mediaKind = this.inferMediaKind();
+
+    const sourceJobs: JobDefinitionPayload[] = [];
+    const inputs: JobInputV2Payload[] = [];
+    fileIds.forEach((fileId, i) => {
+      const srcId = `src_${i}`;
+      // Key order (id, source, operations) matches the PHP `toWire()` so the
+      // JSON-string serialisation is byte-identical across languages.
+      sourceJobs.push({ id: srcId, source: uploadSource(fileId), operations: [{ type: 'passthrough' }] });
+      inputs.push({ source: jobOutputSource(srcId) });
+    });
+
+    const operations: OperationDef[] = [
+      { type: 'merge', options: wireMergeOptions(this.mergeOptions, mediaKind) },
+      ...this.lowerPostSteps(mediaKind),
+    ];
+    const mergeJob: JobDefinitionPayload = { id: 'merge', inputs, operations };
+
+    const jobs = [...sourceJobs, mergeJob];
+    return callbackUrl === undefined ? { jobs } : { jobs, callback_url: callbackUrl };
+  }
+
+  /** The number of inputs being combined (introspection / tests). */
+  get inputCount(): number {
+    return this.inputs.length;
+  }
+
+  /** The number of post-combine ops chained so far (introspection / tests). */
+  get stepCount(): number {
+    return this.postSteps.length;
+  }
+
+  /**
+   * Execute end-to-end: upload every input, create the merge workflow, await a
+   * terminal state (SSE with poll fallback), then resolve ONLY the merged output
+   * into a {@link RunResult}. Throws {@link GislTimeoutError} on `maxWait`.
+   *
+   * Requires a client bound at construction time — `gisl().files(...).merge(...)`
+   * wires it; a directly-constructed `MergedRecipe` throws {@link GislConfigError}.
+   * Mirrors the single-file {@link Recipe.run}.
+   */
+  async run(
+    options: {
+      maxWait?: string | number;
+      onProgress?: (event: ProgressEvent) => void;
+      signal?: AbortSignal;
+      pollIntervalMs?: number;
+    } = {},
+  ): Promise<RunResult> {
+    const signal = options.signal;
+    const onProgress = options.onProgress;
+    if (this.client === undefined) {
+      throw new GislConfigError(
+        'MergedRecipe.run() requires a client; build the merge via gisl().files(...).merge(...) rather than constructing MergedRecipe directly.',
+        { reason: 'no_client' },
+      );
+    }
+    const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 300_000);
+
+    const created = await this._uploadAllAndCreate(undefined, deadline, onProgress, signal);
+
+    let finalStatus;
+    try {
+      finalStatus = await _consumeSseToTerminal(this.client, {
+        workflowId: created.workflowId,
+        deadline,
+        signal,
+        onProgress,
+      });
+    } catch (err) {
+      if (err instanceof GislTimeoutError) throw err;
+      if (err instanceof DOMException && err.name === 'AbortError') throw err;
+      if (err instanceof GislApiError) throw err;
+      finalStatus = await _pollToTerminal(this.client, {
+        workflowId: created.workflowId,
+        deadline,
+        signal,
+        pollIntervalMs: options.pollIntervalMs,
+      });
+    }
+
+    if (Date.now() >= deadline) {
+      throw new GislTimeoutError(
+        `Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`,
+      );
+    }
+    const downloads = await this.client.getWorkflowDownloads(created.workflowId);
+
+    // Project ONLY the merge job's output — the `src_*` passthrough jobs
+    // re-expose the raw uploads, which are plumbing, not the deliverable
+    // (mirrors the operation-first merge.ts `ref === 'merge'` filter + PHP).
+    const mergeDownloads = downloads.downloads.filter((d) => d.ref === 'merge');
+    const downloader = new LazyHttpDownloader();
+    return projectDownloadsToRunResult(created.workflowId, finalStatus, mergeDownloads, null, downloader);
+  }
+
+  /**
+   * Fire-and-forget: upload + create the merge workflow (wiring `webhook` into
+   * `callback_url` when given), return a client-bound {@link Handle}. Does NOT
+   * wait for terminal status. Mirrors {@link Recipe.submit}.
+   */
+  async submit(webhook?: string): Promise<Handle> {
+    if (this.client === undefined) {
+      throw new GislConfigError(
+        'MergedRecipe.submit() requires a client; build the merge via gisl().files(...).merge(...) rather than constructing MergedRecipe directly.',
+        { reason: 'no_client' },
+      );
+    }
+    const created = await this._uploadAllAndCreate(webhook, undefined);
+    return new Handle(
+      created.workflowId,
+      created.webhookSecret != null ? created.webhookSecret : undefined,
+      this.client,
+      null,
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Upload every input (verbatim for a pre-uploaded id; uploading a path / blob
+   * otherwise, emitting `{phase:'upload'}` progress) then create ONE merge
+   * workflow. Rejects fewer than 2 inputs BEFORE any upload fires. Shared first
+   * half of {@link run} + {@link submit}.
+   */
+  private async _uploadAllAndCreate(
+    webhook: string | undefined,
+    deadline: number | undefined,
+    onProgress?: (event: ProgressEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<WorkflowCreateResponse> {
+    this.validatePreUpload();
+    const fileIds: string[] = [];
+    for (const input of this.inputs) {
+      _checkAborted(signal);
+      if (deadline !== undefined && Date.now() >= deadline) {
+        throw new GislTimeoutError(
+          'maxWait elapsed during merge uploads before all inputs were uploaded',
+        );
+      }
+      if (input.kind === 'uploadId') {
+        fileIds.push(input.fileId);
+      } else {
+        const source = input.kind === 'path' ? input.path : input.blob;
+        const up = await this.client!.uploadFile(source, {
+          signal,
+          ...(onProgress !== undefined
+            ? {
+                onProgress: (uploadedBytes: number, totalBytes: number): void => {
+                  onProgress({ phase: 'upload', uploadedBytes, totalBytes });
+                },
+              }
+            : {}),
+        });
+        fileIds.push(up.fileId);
+      }
+    }
+    _checkAborted(signal);
+    if (deadline !== undefined && Date.now() >= deadline) {
+      throw new GislTimeoutError(
+        'Uploads completed but maxWait elapsed before the merge workflow could be created',
+      );
+    }
+    const created = await this.client!.createWorkflow(this.toWorkflowPayload(fileIds, webhook));
+    _checkAborted(signal);
+    return created;
+  }
+
+  /**
+   * Reject an invalid combine BEFORE any upload fires — mirrors the operation-
+   * first `MergeBuilder.planSequence()` bounds so a typo'd merge costs no
+   * bandwidth: 2–10 inputs (merge schema `min/max_inputs`), and an image merge
+   * must carry an explicit `output_type` (the server rejects image merges
+   * without one). Shared by {@link run} + {@link submit} via
+   * {@link _uploadAllAndCreate}.
+   */
+  private validatePreUpload(): void {
+    if (this.inputs.length < 2) {
+      throw new GislConfigError(
+        `merge requires at least 2 inputs to combine (got ${this.inputs.length}).`,
+        { reason: 'too_few_inputs' },
+      );
+    }
+    if (this.inputs.length > 10) {
+      throw new GislConfigError(
+        `merge accepts at most 10 inputs (got ${this.inputs.length}). Split the merge or reduce the input list.`,
+        { reason: 'too_many_inputs' },
+      );
+    }
+    if (
+      this.inferMediaKind() === 'image' &&
+      this.mergeOptions.output === undefined &&
+      this.mergeOptions.outputType === undefined
+    ) {
+      throw new GislConfigError(
+        'image merges require an explicit output_type — set MergeOptions output: "video" | "gif" (or outputType). ' +
+          'The server rejects image merge requests with no output_type.',
+        { reason: 'image_merge_requires_output_type' },
+      );
+    }
+  }
+
+  /**
+   * Lower the post-combine chain by composing a single-file {@link Recipe} over a
+   * synthetic input whose extension matches the merged OUTPUT media — so
+   * `compress(optimize)` resolves the correct preset for the merged result (it
+   * needs a media hint, which a merge output carries no filename for). Reuses
+   * Recipe's `lowerStep` rather than duplicating it.
+   */
+  private lowerPostSteps(mediaKind: MergeMediaKind): OperationDef[] {
+    if (this.postSteps.length === 0) {
+      return [];
+    }
+    const synthetic = fileInput.path(`merged.${this.outputExtensionFor(mediaKind)}`);
+    const recipe = new Recipe(synthetic, undefined, this.postSteps, this.presetDefaults, this.scopedPresetDefaults);
+    return recipe.toWorkflowPayload('merged').jobs[0].operations;
+  }
+
+  /**
+   * The merged-output media. Honours an explicit {@link MergeOptions.mediaKind};
+   * otherwise infers from the first PATH input's extension (mirrors
+   * {@link MergeBuilder}); defaults to video.
+   */
+  private inferMediaKind(): MergeMediaKind {
+    if (this.mergeOptions.mediaKind !== undefined) {
+      return this.mergeOptions.mediaKind;
+    }
+    // Sniff the first input carrying a media signal — a path extension or a
+    // Blob MIME type (mirrors the operation-first MergeBuilder.inferMediaKind,
+    // codex c2). Pre-uploaded ids carry no signal, so they are skipped.
+    for (const input of this.inputs) {
+      if (input.kind === 'path') {
+        const lower = input.path.toLowerCase();
+        if (/\.(jpe?g|png|webp|avif|gif|heic|tiff?)$/.test(lower)) return 'image';
+        if (/\.(mp3|wav|flac|aac|ogg|m4a)$/.test(lower)) return 'audio';
+        return 'video';
+      }
+      if (input.kind === 'blob') {
+        if (input.blob.type.startsWith('image/')) return 'image';
+        if (input.blob.type.startsWith('audio/')) return 'audio';
+        return 'video';
+      }
+    }
+    return 'video';
+  }
+
+  private outputExtensionFor(mediaKind: MergeMediaKind): string {
+    // An image merge produces a video/gif output (output_type), so the
+    // post-combine media follows the output type when set.
+    const output = this.mergeOptions.output ?? this.mergeOptions.outputType;
+    if (mediaKind === 'image' && typeof output === 'string') {
+      return output === 'gif' ? 'gif' : 'mp4';
+    }
+    switch (mediaKind) {
+      case 'audio':
+        return 'mp3';
+      case 'image':
+        return 'png';
+      default:
+        return 'mp4';
+    }
+  }
+
+  private withStep(step: RecipeStep): MergedRecipe {
+    return new MergedRecipe(
+      this.inputs,
+      this.mergeOptions,
+      [...this.postSteps, step],
       this.presetDefaults,
       this.scopedPresetDefaults,
       this.client,

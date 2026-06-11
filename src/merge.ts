@@ -585,7 +585,17 @@ function assetIdentity(a: Asset): string {
   return `path:${a.path}`;
 }
 
-function wireMergeOptions(opts: MergeOptions, mediaKind: MergeMediaKind): Record<string, unknown> {
+/**
+ * Project the merge-level {@link MergeOptions} into the per-media wire
+ * allowlist. Exported so the file-first `MergedRecipe`
+ * (`files([...]).merge(...)`) lowers identically to this operation-first
+ * `client.merge(...)` builder — one allowlist, no drift. Mirrors the PHP
+ * `MergeBuilder::wireMergeOptions()` public-static seam.
+ *
+ * @internal Not re-exported from `index.ts`; shared between the two merge
+ *   surfaces only.
+ */
+export function wireMergeOptions(opts: MergeOptions, mediaKind: MergeMediaKind): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   // Per-media wire allowlist — mirror of PHP MergeBuilder::wireMergeOptions
   // (codex 30d…/parity): a field set on the wrong media kind is DROPPED

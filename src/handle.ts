@@ -51,6 +51,7 @@ import {
   projectDownloadsToRunResult,
   projectMultiJobToRunResult,
   isFanoutStatus,
+  isMergeStatus,
   type Downloader,
 } from './file-first.js';
 import { LazyHttpDownloader } from './lazy-downloader.js';
@@ -252,6 +253,21 @@ export class Handle {
         finalStatus,
         jobDownloads,
         new Map<string, string | null>(),
+        downloader,
+      );
+    }
+    // A fluent `files([...]).merge(...)` combine — project ONLY the merged
+    // output, filtering the `src_*` passthrough plumbing (which re-exposes the
+    // raw inputs). Matches MergedRecipe.run()'s `ref === 'merge'` filter so a
+    // submitted/reattached merge handle never surfaces the input artifacts
+    // alongside the combined output (codex c1).
+    if (isMergeStatus(finalStatus)) {
+      const mergeDownloads = jobDownloads.filter((d) => d.ref === 'merge');
+      return projectDownloadsToRunResult(
+        this.workflowId,
+        finalStatus,
+        mergeDownloads,
+        null,
         downloader,
       );
     }

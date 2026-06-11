@@ -130,6 +130,10 @@ export type { FileInput } from './file-first.js';
 // `projectMultiJobToRunResult` is intentionally NOT re-exported — it is the
 // @internal per-job producer consumed only by FilesRecipe.run (codex).
 export { FilesRecipe } from './file-first.js';
+// File-first N→1 combine (FF3b / IE29x9QL) — `client.files([...]).merge(opts?)`
+// returns a single-output MergedRecipe you chain post-combine ops on, then
+// run()/submit(). Mirrors the operation-first `client.merge()` wire shape.
+export { MergedRecipe } from './file-first.js';
 // `HttpDownloader` (Node streaming downloader) is re-exported from the Node-only
 // entry `index.ts`, NOT here — it statically imports node:fs/node:stream.
 // `projectDownloadsToRunResult` is intentionally NOT re-exported here — it is an
