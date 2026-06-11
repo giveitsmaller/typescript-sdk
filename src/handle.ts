@@ -52,6 +52,7 @@ import {
   projectMultiJobToRunResult,
   isFanoutStatus,
   isMergeStatus,
+  isArchiveStatus,
   type Downloader,
 } from './file-first.js';
 import { LazyHttpDownloader } from './lazy-downloader.js';
@@ -267,6 +268,19 @@ export class Handle {
         this.workflowId,
         finalStatus,
         mergeDownloads,
+        null,
+        downloader,
+      );
+    }
+    // A fluent `files([...]).archive(...)` bundle — project ONLY the archive
+    // output, filtering the `src_*` passthrough plumbing (mirror of the merge
+    // branch for archive).
+    if (isArchiveStatus(finalStatus)) {
+      const archiveDownloads = jobDownloads.filter((d) => d.ref === 'archive');
+      return projectDownloadsToRunResult(
+        this.workflowId,
+        finalStatus,
+        archiveDownloads,
         null,
         downloader,
       );

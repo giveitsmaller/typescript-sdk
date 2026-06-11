@@ -479,6 +479,30 @@ export function isMergeStatus(finalStatus: WorkflowStatusResponse): boolean {
 }
 
 /**
+ * True when a terminal status describes a fluent `files([...]).archive(...)`
+ * bundle — at least one job ref `archive` and every OTHER job ref is `src_{i}`
+ * (the ids the {@link ArchivedRecipe} lowering assigns). Lets
+ * {@link Handle.wait}/{@link Handle.result} project ONLY the archive output —
+ * filtering the `src_*` passthrough plumbing — even after a `client.workflow(id)`
+ * reattach. Mutually exclusive with {@link isFanoutStatus} / {@link isMergeStatus}.
+ *
+ * @internal Exported for the file-first `Handle`; not part of the public API.
+ */
+export function isArchiveStatus(finalStatus: WorkflowStatusResponse): boolean {
+  const jobs = finalStatus.jobs ?? [];
+  if (jobs.length === 0) return false;
+  let hasArchive = false;
+  for (const job of jobs) {
+    if (job.ref === 'archive') {
+      hasArchive = true;
+      continue;
+    }
+    if (!_MERGE_SRC_REF.test(job.ref)) return false;
+  }
+  return hasArchive;
+}
+
+/**
  * The primary file a {@link Recipe} operates on — the "subject" of the
  * file-first surface. A discriminated union over the ways a caller names an
  * input:
@@ -957,6 +981,26 @@ export class FilesRecipe {
       this.scopedPresetDefaults,
       this.client,
     );
+  }
+
+  /**
+   * Bundle the inputs into ONE archive (N→1, zip / tar.gz) — media-agnostic,
+   * inputs may mix types. Returns a terminal {@link ArchivedRecipe} (a zip is
+   * the final artefact — no post-bundle chain). `format` / `folderStructure` are
+   * optional; the server defaults to zip + flat.
+   *
+   * `archive()` must be the FIRST op on `files([...])` → `GislConfigError` reason
+   * `pre_archive_ops_unsupported` otherwise.
+   */
+  archive(options: ArchiveRecipeOptions = {}): ArchivedRecipe {
+    if (this.steps.length !== 0) {
+      throw new GislConfigError(
+        'archive() must be the first operation on files([...]); applying per-file ops before a bundle ' +
+          'is not yet supported — call archive() directly on the files you want to bundle.',
+        { reason: 'pre_archive_ops_unsupported' },
+      );
+    }
+    return new ArchivedRecipe(this.inputs, options, this.client);
   }
 
   /** The number of inputs in this fan-out (introspection / tests). */
@@ -1530,5 +1574,226 @@ export class MergedRecipe {
       this.scopedPresetDefaults,
       this.client,
     );
+  }
+}
+
+/**
+ * Options for a fluent `files([...]).archive(...)` bundle. Both fields are
+ * optional — the server defaults `format` to `zip` and `folderStructure` to
+ * `flat` (archive op schema). Mirrors the PHP `ArchivedRecipe` ctor params.
+ */
+export interface ArchiveRecipeOptions {
+  /** Archive container format. */
+  readonly format?: 'zip' | 'tar.gz';
+  /** `flat` = all files at the top level; `by_job` = a subfolder per source. */
+  readonly folderStructure?: 'flat' | 'by_job';
+}
+
+/**
+ * The single-output recipe you're in AFTER a fluent `files([...]).archive(...)`
+ * (FF3b). Archive bundles the N inputs into ONE downloadable archive (zip /
+ * tar.gz) — media-agnostic, inputs may mix types. Unlike {@link MergedRecipe},
+ * archive is TERMINAL: a zip is the final artefact, so there is no post-bundle
+ * chain — this exposes only `run()` / `submit()`.
+ *
+ * **Lowering (one workflow):** each input is uploaded once and wrapped in its
+ * own single-input `passthrough` source job (`src_N`); the `archive` job
+ * consumes those via `job_output` inputs (array order = entry order) and carries
+ * the single `archive` op. The archive job's id is `archive`, so {@link RunResult}
+ * projects ONLY its output. Mirrors the PHP `ArchivedRecipe`.
+ */
+export class ArchivedRecipe {
+  constructor(
+    private readonly inputs: readonly FileInput[],
+    private readonly options: ArchiveRecipeOptions = {},
+    private readonly client?: GislClient,
+  ) {}
+
+  /** The number of inputs being bundled (introspection / tests). */
+  get inputCount(): number {
+    return this.inputs.length;
+  }
+
+  /**
+   * Lower to the archive DAG: one `passthrough` source job per input + one
+   * `archive` job consuming them via `job_output`.
+   *
+   * @internal Consumed by {@link run} / {@link submit} (after uploading) and the
+   *   cross-language parity harness (with fixed ids).
+   */
+  toWorkflowPayload(fileIds: readonly string[], callbackUrl?: string): WorkflowCreatePayload {
+    const sourceJobs: JobDefinitionPayload[] = [];
+    const inputs: JobInputV2Payload[] = [];
+    fileIds.forEach((fileId, i) => {
+      const srcId = `src_${i}`;
+      sourceJobs.push({ id: srcId, source: uploadSource(fileId), operations: [{ type: 'passthrough' }] });
+      inputs.push({ source: jobOutputSource(srcId) });
+    });
+
+    const archiveJob: JobDefinitionPayload = {
+      id: 'archive',
+      inputs,
+      operations: [{ type: 'archive', options: this.wireArchiveOptions() }],
+    };
+
+    const jobs = [...sourceJobs, archiveJob];
+    return callbackUrl === undefined ? { jobs } : { jobs, callback_url: callbackUrl };
+  }
+
+  /**
+   * Execute end-to-end: upload every input, create the archive workflow, await a
+   * terminal state (SSE with poll fallback), then resolve ONLY the archive output
+   * into a {@link RunResult}. Throws {@link GislTimeoutError} on `maxWait`.
+   * Requires a client bound via `gisl().files(...).archive(...)`.
+   */
+  async run(
+    options: {
+      maxWait?: string | number;
+      onProgress?: (event: ProgressEvent) => void;
+      signal?: AbortSignal;
+      pollIntervalMs?: number;
+    } = {},
+  ): Promise<RunResult> {
+    const signal = options.signal;
+    const onProgress = options.onProgress;
+    if (this.client === undefined) {
+      throw new GislConfigError(
+        'ArchivedRecipe.run() requires a client; build the bundle via gisl().files(...).archive(...) rather than constructing ArchivedRecipe directly.',
+        { reason: 'no_client' },
+      );
+    }
+    const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 300_000);
+
+    const created = await this._uploadAllAndCreate(undefined, deadline, onProgress, signal);
+
+    let finalStatus;
+    try {
+      finalStatus = await _consumeSseToTerminal(this.client, {
+        workflowId: created.workflowId,
+        deadline,
+        signal,
+        onProgress,
+      });
+    } catch (err) {
+      if (err instanceof GislTimeoutError) throw err;
+      if (err instanceof DOMException && err.name === 'AbortError') throw err;
+      if (err instanceof GislApiError) throw err;
+      finalStatus = await _pollToTerminal(this.client, {
+        workflowId: created.workflowId,
+        deadline,
+        signal,
+        pollIntervalMs: options.pollIntervalMs,
+      });
+    }
+
+    if (Date.now() >= deadline) {
+      throw new GislTimeoutError(
+        `Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`,
+      );
+    }
+    const downloads = await this.client.getWorkflowDownloads(created.workflowId);
+
+    // Project ONLY the archive job's output — the `src_*` passthrough jobs
+    // re-expose the raw uploads, which are plumbing, not the deliverable.
+    const archiveDownloads = downloads.downloads.filter((d) => d.ref === 'archive');
+    const downloader = new LazyHttpDownloader();
+    return projectDownloadsToRunResult(created.workflowId, finalStatus, archiveDownloads, null, downloader);
+  }
+
+  /**
+   * Fire-and-forget: upload + create the archive workflow (wiring `webhook` into
+   * `callback_url` when given), return a client-bound {@link Handle}. Mirrors
+   * {@link MergedRecipe.submit}.
+   */
+  async submit(webhook?: string): Promise<Handle> {
+    if (this.client === undefined) {
+      throw new GislConfigError(
+        'ArchivedRecipe.submit() requires a client; build the bundle via gisl().files(...).archive(...) rather than constructing ArchivedRecipe directly.',
+        { reason: 'no_client' },
+      );
+    }
+    const created = await this._uploadAllAndCreate(webhook, undefined);
+    return new Handle(
+      created.workflowId,
+      created.webhookSecret != null ? created.webhookSecret : undefined,
+      this.client,
+      null,
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+
+  private async _uploadAllAndCreate(
+    webhook: string | undefined,
+    deadline: number | undefined,
+    onProgress?: (event: ProgressEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<WorkflowCreateResponse> {
+    this.validatePreUpload();
+    const fileIds: string[] = [];
+    for (const input of this.inputs) {
+      _checkAborted(signal);
+      if (deadline !== undefined && Date.now() >= deadline) {
+        throw new GislTimeoutError(
+          'maxWait elapsed during archive uploads before all inputs were uploaded',
+        );
+      }
+      if (input.kind === 'uploadId') {
+        fileIds.push(input.fileId);
+      } else {
+        const source = input.kind === 'path' ? input.path : input.blob;
+        const up = await this.client!.uploadFile(source, {
+          signal,
+          ...(onProgress !== undefined
+            ? {
+                onProgress: (uploadedBytes: number, totalBytes: number): void => {
+                  onProgress({ phase: 'upload', uploadedBytes, totalBytes });
+                },
+              }
+            : {}),
+        });
+        fileIds.push(up.fileId);
+      }
+    }
+    _checkAborted(signal);
+    if (deadline !== undefined && Date.now() >= deadline) {
+      throw new GislTimeoutError(
+        'Uploads completed but maxWait elapsed before the archive workflow could be created',
+      );
+    }
+    const created = await this.client!.createWorkflow(this.toWorkflowPayload(fileIds, webhook));
+    _checkAborted(signal);
+    return created;
+  }
+
+  /**
+   * Reject an invalid bundle BEFORE any upload fires — the archive schema allows
+   * 2–50 inputs (`min/max_inputs`), so a typo'd bundle costs no bandwidth.
+   */
+  private validatePreUpload(): void {
+    if (this.inputs.length < 2) {
+      throw new GislConfigError(
+        `archive requires at least 2 inputs to bundle (got ${this.inputs.length}).`,
+        { reason: 'too_few_inputs' },
+      );
+    }
+    if (this.inputs.length > 50) {
+      throw new GislConfigError(
+        `archive accepts at most 50 inputs (got ${this.inputs.length}). Split the bundle or reduce the input list.`,
+        { reason: 'too_many_inputs' },
+      );
+    }
+  }
+
+  /**
+   * Project the archive options into the wire shape. Both fields are optional
+   * (the server defaults `format` to zip and `folder_structure` to flat), so an
+   * omitted option is dropped rather than sent.
+   */
+  private wireArchiveOptions(): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    if (this.options.format !== undefined) out.format = this.options.format;
+    if (this.options.folderStructure !== undefined) out.folder_structure = this.options.folderStructure;
+    return out;
   }
 }
