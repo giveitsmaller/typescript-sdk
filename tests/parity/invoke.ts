@@ -20,7 +20,7 @@ import {
   type SequenceEntry,
 } from '../../src/merge.js';
 import { verifyWebhook } from '../../src/webhook.js';
-import { Recipe, FilesRecipe, fileInput, type FileInput } from '../../src/file-first.js';
+import { Recipe, FilesRecipe, MergedRecipe, fileInput, type FileInput } from '../../src/file-first.js';
 import type { OptimizeFor } from '../../src/generated/sdk_spec/enums.js';
 import type { WorkflowCreatePayload } from '../../src/types.js';
 
@@ -284,11 +284,56 @@ export function lowerFilesFixture(fixture: Fixture): WorkflowCreatePayload {
   const inputs: FileInput[] = spec.files.map((f) =>
     f.kind === 'upload_id' ? fileInput.uploadId(f.uploadId as string) : fileInput.path(f.path as string),
   );
+
+  // aQMm5khm — merge-combine lowering. `files([...]).merge(opts)` collapses the
+  // N inputs into ONE `MergedRecipe`; the fixture's `operations` then lower as
+  // POST-COMBINE ops on the merged output. The merge-level options reuse the
+  // operation-first `MergeOptions` shape (same camelCase keys), so a fluent
+  // merge lowers identically to `client.merge(assets, options)`.
+  //
+  // toWorkflowPayload() is called directly, BYPASSING the run/submit-time merge
+  // preflight (`validatePreUpload`: 2-10 inputs, image-needs-output_type) — this
+  // is BY DESIGN and consistent with the FF2a single-file and FF3a fan-out
+  // lowering paths, which likewise lower without run-time validation. Lowering
+  // mode is a pure, network-free WIRE-SHAPE pin; merge preflight is covered by
+  // file-first-merge.test.ts + (future) local_validation_error fixtures.
+  if (spec.merge !== undefined) {
+    const mergeOptions = (spec.merge.options ?? {}) as MergeOptions;
+    let merged: MergedRecipe = new FilesRecipe(inputs).merge(mergeOptions);
+    for (const op of spec.operations) {
+      merged = applyMergedOp(merged, op);
+    }
+    return merged.toWorkflowPayload(spec.resolvedFileIds);
+  }
+
   let recipe = new FilesRecipe(inputs);
   for (const op of spec.operations) {
     recipe = applyFilesOp(recipe, op);
   }
   return recipe.toWorkflowPayload(spec.resolvedFileIds);
+}
+
+/**
+ * aQMm5khm — apply a post-combine op to a {@link MergedRecipe}. The merged
+ * output exposes the single-file chain ops MINUS `text_watermark` (no merged
+ * equivalent); the loader rejects `text_watermark` as a post-merge op, so the
+ * default branch is defence-in-depth. Mirrors PHP `Invoke::applyMergedOp`.
+ */
+function applyMergedOp(recipe: MergedRecipe, op: FixtureLoweringOp): MergedRecipe {
+  switch (op.op) {
+    case 'compress':
+      return recipe.compress(op.optimize as OptimizeFor | undefined);
+    case 'convert':
+      return recipe.convert(op.format as string);
+    case 'thumbnail': {
+      const dims: { width?: number; height?: number } = {};
+      if (op.width !== undefined) dims.width = op.width;
+      if (op.height !== undefined) dims.height = op.height;
+      return recipe.thumbnail(dims);
+    }
+    default:
+      throw new Error(`[files.merge] unsupported post-combine op '${String((op as { op: string }).op)}'`);
+  }
 }
 
 /**

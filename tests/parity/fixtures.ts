@@ -148,10 +148,29 @@ export interface FixtureSubmit {
  * Reuses {@link FixtureLoweringFile} + {@link FixtureLoweringOp} for the
  * per-input + operation grammar.
  */
+/**
+ * aQMm5khm — file-first `files([...]).merge(opts).<postOp>*` COMBINE sub-block.
+ * When present on a {@link FixtureFiles} lowering variant, the runner builds a
+ * `FilesRecipe`, calls `.merge(options)` to transition to a `MergedRecipe`, then
+ * applies each `operations` entry as a POST-COMBINE op on the merged output
+ * before lowering. `options` is the merge-level {@link
+ * import('../../src/merge.js').MergeOptions} map (the SAME camelCase keys the
+ * operation-first `client.merge(assets, options)` accepts); omit it for a bare
+ * merge with no merge-level options. Lowering-variant only (run/submit merge is
+ * out of scope — see the card).
+ */
+export interface FixtureFilesMerge {
+  readonly options?: Record<string, FixtureValue>;
+}
+
 export interface FixtureFiles {
   readonly files: readonly FixtureLoweringFile[];
   readonly resolvedFileIds?: readonly string[];
   readonly operations: readonly FixtureLoweringOp[];
+  // aQMm5khm — presence switches the lowering variant to the merge-combine path
+  // (FilesRecipe.merge() -> MergedRecipe -> post-combine ops). `operations` are
+  // then the POST-COMBINE ops (and MAY be empty for a bare merge).
+  readonly merge?: FixtureFilesMerge;
   readonly maxWait?: string | number;
   readonly pollIntervalMs?: number;
   // uUnCtVAr (FF3a-submit): when present, the files fixture is a fire-and-forget
@@ -594,6 +613,19 @@ export function validateFixture(raw: unknown, file: string): Fixture {
     if (r.files === undefined) {
       throw new Error(`${ctx} mode=files requires a files block`);
     }
+    // aQMm5khm — the merge-combine path is LOWERING-ONLY (run/submit merge is
+    // out of scope). Reject `files.merge` on any non-lowering variant (run =
+    // expected_run_result, submit = files.webhook) so a misplaced merge block
+    // can't silently no-op — runFilesFixture/submitFilesFixture build a plain
+    // FilesRecipe and would ignore `spec.merge` entirely.
+    if (
+      (r.files as Record<string, unknown>).merge !== undefined &&
+      r.expected_payload === undefined
+    ) {
+      throw new Error(
+        `${ctx} files.merge is only supported in the lowering variant (expected_payload); a run/submit mode=files fixture cannot carry a merge block`,
+      );
+    }
     // uUnCtVAr (FF3a-submit): a `files.webhook` marks the SUBMIT variant —
     // it drives FilesRecipe.submit() and asserts the create `callback_url`
     // request + the returned Handle (expected_return), NOT a lowering/run
@@ -821,9 +853,38 @@ const FILES_KEYS = new Set([
   'files',
   'resolvedFileIds',
   'operations',
+  // aQMm5khm — merge-combine sub-block.
+  'merge',
   'maxWait',
   'pollIntervalMs',
   'webhook',
+]);
+// aQMm5khm — keys allowed inside a `files.merge` sub-block.
+const FILES_MERGE_KEYS = new Set(['options']);
+// aQMm5khm — allowed `files.merge.options` keys (the camelCase MergeOptions
+// fields both runners read). Rejecting unknowns at load time stops a typo'd or
+// snake_case key (e.g. `gap_duration` for `gapDuration`) from being silently
+// dropped by wireMergeOptions, which would leave the fixture passing with the
+// wrong wire shape. Keep in sync with the MergeOptions interface (merge.ts) +
+// the PHP loader's FILES_MERGE_OPTION_KEYS.
+const FILES_MERGE_OPTION_KEYS = new Set([
+  'transition',
+  'crossfadeDuration',
+  'gapDuration',
+  'normalizeAudio',
+  'codec',
+  'crf',
+  'preset',
+  'targetSize',
+  'transitionDuration',
+  'fps',
+  'durationPerImage',
+  'loopCount',
+  'output',
+  'videoFormat',
+  'outputType',
+  'mediaKind',
+  'allowUnusedAssets',
 ]);
 
 /**
@@ -977,8 +1038,31 @@ function validateFiles(value: unknown, ctx: string): FixtureFiles {
     resolvedFileIds = [...(v.resolvedFileIds as string[])];
   }
 
-  if (!Array.isArray(v.operations) || v.operations.length === 0) {
-    throw new Error(`${ctx} operations must be a non-empty array`);
+  // aQMm5khm — a `merge` sub-block switches the lowering variant to the
+  // merge-combine path; `operations` then carry the POST-COMBINE ops and MAY
+  // be empty (a bare merge). Without it, `operations` are the shared fan-out
+  // chain and stay non-empty (FF3a).
+  let merge: FixtureFilesMerge | undefined;
+  if (v.merge !== undefined) {
+    requireObject(v.merge, ctx, 'merge');
+    const m = v.merge as Record<string, unknown>;
+    rejectUnknownKeys(m, FILES_MERGE_KEYS, `${ctx} merge`);
+    if (m.options !== undefined) {
+      requireObject(m.options, ctx, 'merge.options');
+      rejectUnknownKeys(m.options as Record<string, unknown>, FILES_MERGE_OPTION_KEYS, `${ctx} merge.options`);
+    }
+    // NOTE: the merge-combine path is LOWERING-ONLY (run/submit merge is out of
+    // scope). The "merge requires the expected_payload lowering variant" guard
+    // lives in the mode=files discriminator (validateFixture), where
+    // expected_payload / expected_run_result / webhook are all visible — here
+    // in validateFiles only the files block is in scope.
+    merge = m.options !== undefined ? { options: m.options as Record<string, FixtureValue> } : {};
+  }
+
+  if (!Array.isArray(v.operations) || (merge === undefined && v.operations.length === 0)) {
+    throw new Error(
+      `${ctx} operations must be ${merge === undefined ? 'a non-empty array' : 'an array (may be empty for a bare merge)'}`,
+    );
   }
   const operations = v.operations.map((op, i): FixtureLoweringOp => {
     requireObject(op, ctx, `operations[${i}]`);
@@ -986,6 +1070,14 @@ function validateFiles(value: unknown, ctx: string): FixtureFiles {
     rejectUnknownKeys(o, LOWERING_OP_KEYS, `${ctx} operations[${i}]`);
     if (typeof o.op !== 'string' || !LOWERING_OPS.has(o.op)) {
       throw new Error(`${ctx} operations[${i}].op must be one of ${[...LOWERING_OPS].join('|')}`);
+    }
+    // text_watermark has no MergedRecipe equivalent (the merged output exposes
+    // compress/convert/thumbnail only) — reject it as a post-combine op so the
+    // failure is at load time, not a runtime dispatch error.
+    if (merge !== undefined && o.op === 'text_watermark') {
+      throw new Error(
+        `${ctx} operations[${i}].op 'text_watermark' is not a valid post-merge op (MergedRecipe exposes compress/convert/thumbnail only)`,
+      );
     }
     validateLoweringOpParams(o.op, o, `${ctx} operations[${i}]`);
     return o as unknown as FixtureLoweringOp;
@@ -1005,6 +1097,7 @@ function validateFiles(value: unknown, ctx: string): FixtureFiles {
     files: inputs,
     ...(resolvedFileIds !== undefined ? { resolvedFileIds } : {}),
     operations,
+    ...(merge !== undefined ? { merge } : {}),
     ...(v.maxWait !== undefined ? { maxWait: v.maxWait as string | number } : {}),
     ...(v.pollIntervalMs !== undefined ? { pollIntervalMs: v.pollIntervalMs as number } : {}),
     ...(v.webhook !== undefined ? { webhook: v.webhook as string } : {}),
