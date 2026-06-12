@@ -10,7 +10,7 @@
  * Mirrors `packages/php/src/FileFirst/*`.
  */
 
-import { GislApiError, GislConfigError, GislNoSuchKeyError, GislSinkError, GislTimeoutError } from './errors.js';
+import { GislConfigError, GislNetworkError, GislNoSuchKeyError, GislSinkError, GislTimeoutError, SseEndedWithoutTerminal } from './errors.js';
 import {
   _detectCompressMedia,
   _consumeSseToTerminal,
@@ -708,15 +708,16 @@ export class Recipe {
         onProgress,
       });
     } catch (err) {
-      // Only genuine SSE transport / clean-stream-end failures fall through to
-      // poll. Caller-deadline, abort, and API errors (a 401/402/etc. from
-      // /events, or an onProgress callback throw surfacing as GislApiError)
-      // MUST propagate — re-issuing the same doomed request via poll would mask
-      // them. Mirrors the PHP BuilderInternals::awaitTerminal sealed-marker
-      // discipline (codex review medium).
-      if (err instanceof GislTimeoutError) throw err;
-      if (err instanceof DOMException && err.name === 'AbortError') throw err;
-      if (err instanceof GislApiError) throw err;
+      // TDqmkWpX: poll-fallback ONLY on a clean SSE stream-end
+      // (SseEndedWithoutTerminal) or a typed transport error (GislNetworkError).
+      // Everything else — caller-deadline, abort, an API error from /events, an
+      // onProgress callback throw (propagates as-is, NOT wrapped), anything
+      // unexpected — MUST propagate; re-issuing the same doomed request via poll
+      // would mask it. Mirrors the PHP BuilderInternals::awaitTerminal sealed-
+      // marker discipline.
+      if (!(err instanceof SseEndedWithoutTerminal || err instanceof GislNetworkError)) {
+        throw err;
+      }
       finalStatus = await _pollToTerminal(this.client, {
         workflowId: created.workflowId,
         deadline,
@@ -733,6 +734,13 @@ export class Recipe {
       );
     }
     const downloads = await this.client.getWorkflowDownloads(created.workflowId);
+    // TDqmkWpX: re-check AFTER the downloads fetch so a slow getWorkflowDownloads
+    // cannot return a success past the advertised maxWait deadline.
+    if (Date.now() >= deadline) {
+      throw new GislTimeoutError(
+        `Workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`,
+      );
+    }
 
     // Download URLs from getWorkflowDownloads are pre-signed and require no SDK
     // auth, so the downloader issues a plain unauthenticated fetch.
@@ -1084,9 +1092,9 @@ export class FilesRecipe {
         onProgress,
       });
     } catch (err) {
-      if (err instanceof GislTimeoutError) throw err;
-      if (err instanceof DOMException && err.name === 'AbortError') throw err;
-      if (err instanceof GislApiError) throw err;
+      if (!(err instanceof SseEndedWithoutTerminal || err instanceof GislNetworkError)) {
+        throw err;
+      }
       finalStatus = await _pollToTerminal(this.client, {
         workflowId: created.workflowId,
         deadline,
@@ -1102,6 +1110,13 @@ export class FilesRecipe {
       );
     }
     const downloads = await this.client.getWorkflowDownloads(created.workflowId);
+    // TDqmkWpX: re-check AFTER the downloads fetch so a slow getWorkflowDownloads
+    // cannot return a success past the advertised maxWait deadline.
+    if (Date.now() >= deadline) {
+      throw new GislTimeoutError(
+        `Workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`,
+      );
+    }
 
     // keyByRef maps each job ref ("file-{i}") to the partition key. Today the
     // key is just the index string; the Map seam leaves room for the FF3b
@@ -1372,9 +1387,9 @@ export class MergedRecipe {
         onProgress,
       });
     } catch (err) {
-      if (err instanceof GislTimeoutError) throw err;
-      if (err instanceof DOMException && err.name === 'AbortError') throw err;
-      if (err instanceof GislApiError) throw err;
+      if (!(err instanceof SseEndedWithoutTerminal || err instanceof GislNetworkError)) {
+        throw err;
+      }
       finalStatus = await _pollToTerminal(this.client, {
         workflowId: created.workflowId,
         deadline,
@@ -1389,6 +1404,13 @@ export class MergedRecipe {
       );
     }
     const downloads = await this.client.getWorkflowDownloads(created.workflowId);
+    // TDqmkWpX: re-check AFTER the downloads fetch so a slow getWorkflowDownloads
+    // cannot return a success past the advertised maxWait deadline.
+    if (Date.now() >= deadline) {
+      throw new GislTimeoutError(
+        `Workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`,
+      );
+    }
 
     // Project ONLY the merge job's output — the `src_*` passthrough jobs
     // re-expose the raw uploads, which are plumbing, not the deliverable
@@ -1675,9 +1697,9 @@ export class ArchivedRecipe {
         onProgress,
       });
     } catch (err) {
-      if (err instanceof GislTimeoutError) throw err;
-      if (err instanceof DOMException && err.name === 'AbortError') throw err;
-      if (err instanceof GislApiError) throw err;
+      if (!(err instanceof SseEndedWithoutTerminal || err instanceof GislNetworkError)) {
+        throw err;
+      }
       finalStatus = await _pollToTerminal(this.client, {
         workflowId: created.workflowId,
         deadline,
@@ -1692,6 +1714,13 @@ export class ArchivedRecipe {
       );
     }
     const downloads = await this.client.getWorkflowDownloads(created.workflowId);
+    // TDqmkWpX: re-check AFTER the downloads fetch so a slow getWorkflowDownloads
+    // cannot return a success past the advertised maxWait deadline.
+    if (Date.now() >= deadline) {
+      throw new GislTimeoutError(
+        `Workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`,
+      );
+    }
 
     // Project ONLY the archive job's output — the `src_*` passthrough jobs
     // re-expose the raw uploads, which are plumbing, not the deliverable.

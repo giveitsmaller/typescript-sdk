@@ -44,7 +44,7 @@ import type {
   WorkflowCreatePayload,
 } from './types.js';
 import { uploadSource } from './types.js';
-import { GislTimeoutError } from './errors.js';
+import { GislTimeoutError, GislNetworkError, SseEndedWithoutTerminal } from './errors.js';
 // Deferred-usage-only import: `Handle` is constructed inside submit() at call
 // time, not at module load, so the builder.ts <-> handle.ts cycle is safe
 // under ESM (handle.ts imports the await-primitives from this module).
@@ -497,6 +497,14 @@ export class OperationBuilder {
       );
     }
     const downloads = await this.client.getWorkflowDownloads(created.workflowId);
+    // TDqmkWpX: the maxWait deadline also covers the downloads fetch itself — a
+    // slow getWorkflowDownloads must not return a success after the advertised
+    // whole-run deadline. Re-check AFTER the call (the check above is BEFORE).
+    if (Date.now() >= deadline) {
+      throw new GislTimeoutError(
+        `Workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`,
+      );
+    }
     return _projectResult(finalStatus, downloads.downloads, resolved.wireOptions, resolved.resolvedOptions);
   }
 
@@ -578,12 +586,15 @@ export class OperationBuilder {
       try {
         return await _consumeSseToTerminal(this.client, args);
       } catch (err) {
-        // Caller-aborted or deadline-elapsed errors MUST propagate — they
-        // are NOT transient SSE failures. Only fall through to poll on a
-        // genuine SSE connect/mid-stream error (codex-reviewer P0).
-        if (err instanceof GislTimeoutError) throw err;
-        if (err instanceof DOMException && err.name === 'AbortError') throw err;
-        // Genuine SSE connect / stream error — fall through to poll fallback.
+        // TDqmkWpX: poll-fallback ONLY on a clean SSE stream-end
+        // (SseEndedWithoutTerminal) or a typed transport error (GislNetworkError).
+        // Everything else — timeout, abort, API error, an onProgress callback
+        // throw, anything unexpected — MUST propagate; re-issuing the same doomed
+        // request via poll would mask the real failure.
+        if (!(err instanceof SseEndedWithoutTerminal || err instanceof GislNetworkError)) {
+          throw err;
+        }
+        // Genuine SSE stream-end / transport error — fall through to poll fallback.
       }
     }
     return await _pollToTerminal(this.client, args);
@@ -697,6 +708,18 @@ const TERMINAL_STATUS = new Set([
   'paused_insufficient_credits',
 ]);
 
+/**
+ * Internal marker (TDqmkWpX): tags an error thrown by the caller's `onProgress`
+ * callback so the mid-stream transport-error wrap in {@link _consumeSseToTerminal}
+ * cannot mistake it for a transport failure (a callback that throws a `TypeError`
+ * would otherwise be wrapped as `GislNetworkError` → masked by poll-fallback).
+ * The inner catch unwraps it and rethrows the ORIGINAL `cause`, so the caller
+ * sees their own error and the run never silently succeeds.
+ */
+class _OnProgressThrew {
+  constructor(readonly cause: unknown) {}
+}
+
 /** @internal — exported for reuse by `merge.ts` (T3) and future builders. */
 export async function _consumeSseToTerminal(
   client: GislClient,
@@ -741,6 +764,15 @@ export async function _consumeSseToTerminal(
           `Workflow ${args.workflowId} did not complete before maxWait deadline`,
         );
       }
+      // TDqmkWpX: a genuine connect-phase TRANSPORT failure surfaces as a raw
+      // `TypeError` from `fetch` (DNS/TCP/TLS) — wrap it as a typed
+      // GislNetworkError so the await-terminal callers poll-fallback on it
+      // (and ONLY on it / a clean stream-end), never on an onProgress throw.
+      if (err instanceof TypeError) {
+        throw new GislNetworkError(
+          `SSE connect to workflow ${args.workflowId} events failed: ${err.message}`,
+        );
+      }
       throw err;
     }
     // for-await also throws if the iterator's .next() rejects (e.g. the
@@ -773,7 +805,14 @@ export async function _consumeSseToTerminal(
             ? { phaseTotalInputs: (data as { phaseTotalInputs?: number }).phaseTotalInputs }
             : {}),
         };
-        args.onProgress(proj);
+        // TDqmkWpX: an onProgress callback throw (ANY type, incl. TypeError)
+        // must propagate, never be mistaken for a transport failure. Tag it so
+        // the mid-stream TypeError wrap in the catch below skips it.
+        try {
+          args.onProgress(proj);
+        } catch (cbErr) {
+          throw new _OnProgressThrew(cbErr);
+        }
       }
       if (
         event.event === SseEventType.workflow_completed ||
@@ -800,11 +839,20 @@ export async function _consumeSseToTerminal(
         `Workflow ${args.workflowId} did not complete before maxWait deadline`,
       );
     }
-    // Otherwise it was a clean server-side close — fall back to poll.
-    throw new Error('SSE stream ended without terminal event');
+    // Otherwise it was a clean server-side close — fall back to poll. TDqmkWpX:
+    // a sealed marker (not a bare Error) so callers poll ONLY on this + a typed
+    // transport error, never on an onProgress callback throw.
+    throw new SseEndedWithoutTerminal();
     } catch (innerErr) {
-      // Same conversion as the outer catch: if deadline expired and the
-      // iterator rejected with AbortError, surface as GislTimeoutError.
+      // TDqmkWpX: an onProgress callback throw was tagged so it is NEVER treated
+      // as a transport failure — unwrap and rethrow the ORIGINAL cause so it
+      // propagates to the caller (never masked by a poll retry), even when the
+      // callback threw a TypeError.
+      if (innerErr instanceof _OnProgressThrew) {
+        throw innerErr.cause;
+      }
+      // If deadline expired and the iterator rejected with AbortError, surface
+      // as GislTimeoutError.
       if (
         deadlineExpired &&
         innerErr instanceof DOMException &&
@@ -812,6 +860,15 @@ export async function _consumeSseToTerminal(
       ) {
         throw new GislTimeoutError(
           `Workflow ${args.workflowId} did not complete before maxWait deadline`,
+        );
+      }
+      // A genuine mid-stream TRANSPORT failure (reader disconnect) surfaces as a
+      // raw `TypeError` from the iterator — wrap as GislNetworkError so callers
+      // poll-fallback. (An onProgress throw was already handled above, so a
+      // TypeError here is unambiguously transport.)
+      if (innerErr instanceof TypeError) {
+        throw new GislNetworkError(
+          `SSE stream for workflow ${args.workflowId} failed mid-stream: ${innerErr.message}`,
         );
       }
       throw innerErr;

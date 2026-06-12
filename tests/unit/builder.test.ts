@@ -284,12 +284,13 @@ describe('OperationBuilder.run', () => {
     expect(roundtrip.resolvedOptions).toEqual(resolved);
   });
 
-  it('SSE rejecting (e.g. connect error) falls through to poll fallback cleanly', async () => {
-    // Codex-reviewer P1: test the SSE → poll fall-through that lives in
-    // the bare `catch` inside awaitTerminal. Without this, a contract
-    // mistake (catching too much / too little) goes uncaught.
+  it('SSE rejecting (transport connect error) falls through to poll fallback cleanly', async () => {
+    // Codex-reviewer P1: test the SSE → poll fall-through inside awaitTerminal.
+    // A genuine connect transport failure surfaces as a fetch TypeError, which
+    // the SDK wraps as GislNetworkError → poll fallback (TDqmkWpX: only transport
+    // / clean stream-end fall back; other errors propagate).
     const mock = makeMockClient();
-    mock.streamEvents.mockRejectedValueOnce(new Error('SSE connect refused'));
+    mock.streamEvents.mockRejectedValueOnce(new TypeError('SSE connect refused'));
     const result = await new OperationBuilder(mock.client, 'compress', 'p.jpg', {}).run({
       maxWait: '30s',
     });
@@ -928,5 +929,56 @@ describe('T4b — MapEachBuilder child inherits client presetDefaults via Proxy'
 
     vi.restoreAllMocks();
     delete process.env.GISL_API_KEY;
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TDqmkWpX — SSE await-terminal sealed-marker discipline + downloads deadline.
+// ---------------------------------------------------------------------------
+
+describe('OperationBuilder.run — TDqmkWpX await-terminal discipline', () => {
+  it('propagates an onProgress callback throw during SSE (does NOT poll-fallback then succeed)', async () => {
+    const mock = makeMockClient();
+    // Stream a single progress event so onProgress fires, then a terminal —
+    // but onProgress throws on the progress event, before any terminal.
+    mock.streamEvents.mockImplementationOnce(async function* (_id: string, _opts: unknown) {
+      yield {
+        event: 'operation.progress',
+        data: { job_ref: 'op', operation_id: 'opid_1', type: 'compress', status: 'encoding', progress: 10 },
+      };
+      yield { event: 'workflow.completed', data: { workflow_id: 'wf_1', status: 'completed' } };
+    });
+    // Throw a TypeError specifically — it must NOT be confused with a mid-stream
+    // transport TypeError (which DOES poll-fallback). The callback error always
+    // propagates verbatim.
+    const onProgress = vi.fn(() => {
+      throw new TypeError('onProgress boom');
+    });
+    await expect(
+      new OperationBuilder(mock.client, 'compress', 'p.jpg', {}).run({ maxWait: '30s', onProgress }),
+    ).rejects.toThrow('onProgress boom');
+    // The throw MUST NOT be masked by a poll fallback: _pollToTerminal probes
+    // getWorkflowStatus, which must never be called here. Before TDqmkWpX the
+    // throw was swallowed → poll → the run succeeded, hiding the user's bug.
+    expect(mock.getWorkflowStatus).not.toHaveBeenCalled();
+  });
+
+  it('throws GislTimeoutError when getWorkflowDownloads completes after the maxWait deadline', async () => {
+    const mock = makeMockClient();
+    let now = 1_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    // deadline = now (1_000_000) + 30s. The empty SSE stream falls through to a
+    // poll that resolves terminal immediately at base time (< deadline). The
+    // downloads fetch itself runs long — bump the clock PAST the deadline when
+    // it is invoked, so the post-fetch re-check must time out rather than
+    // returning a success after the advertised whole-run deadline.
+    mock.getWorkflowDownloads.mockImplementationOnce(async (_id: string) => {
+      now += 31_000;
+      return { downloads: [] };
+    });
+    await expect(
+      new OperationBuilder(mock.client, 'compress', 'p.jpg', {}).run({ maxWait: '30s' }),
+    ).rejects.toBeInstanceOf(GislTimeoutError);
+    expect(mock.getWorkflowDownloads).toHaveBeenCalledOnce();
   });
 });

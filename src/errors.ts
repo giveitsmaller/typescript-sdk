@@ -642,6 +642,23 @@ export class GislNetworkError extends GislError {
   }
 }
 
+/**
+ * Internal control-flow marker (TDqmkWpX): the SSE event stream closed cleanly
+ * WITHOUT a terminal (`workflow_completed`/`failed`/`partially_failed`) event.
+ * Raised by {@link _consumeSseToTerminal} so the await-terminal callers can
+ * distinguish a benign server-side stream close (→ fall back to polling) from a
+ * genuine failure that must propagate (an `onProgress` callback throw, an API
+ * error, a caller abort). Mirrors the PHP `SseStreamEndedWithoutTerminal`
+ * sealed marker. Not part of the public error contract — never surfaced to a
+ * caller (the await-terminal path catches it internally and polls).
+ */
+export class SseEndedWithoutTerminal extends GislError {
+  constructor(message = 'SSE stream ended without a terminal event') {
+    super(message);
+    this.name = 'SseEndedWithoutTerminal';
+  }
+}
+
 export class GislAbortError extends GislError {
   constructor(message: string) {
     super(message);

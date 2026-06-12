@@ -36,10 +36,12 @@ import type {
 import { uploadSource, jobOutputSource } from './types.js';
 import {
   GislConfigError,
+  GislNetworkError,
   GislPerInputOptionsNotSupportedError,
   GislTimeoutError,
   GislUndeclaredAssetError,
   GislUnusedAssetError,
+  SseEndedWithoutTerminal,
 } from './errors.js';
 import {
   _checkAborted,
@@ -228,6 +230,14 @@ export class MergeBuilder {
       );
     }
     const downloads = await this.client.getWorkflowDownloads(created.workflowId);
+    // TDqmkWpX: the maxWait deadline also covers the downloads fetch itself —
+    // re-check AFTER the call so a slow getWorkflowDownloads cannot return a
+    // success past the advertised whole-run deadline.
+    if (Date.now() >= deadline) {
+      throw new GislTimeoutError(
+        `Merge workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`,
+      );
+    }
     // p0SuJEeK — project ONLY the merge job's output. getWorkflowDownloads
     // returns a download group per terminal job, which now INCLUDES the
     // `passthrough` source jobs (their output is the unchanged upload). Those
@@ -524,8 +534,12 @@ export class MergeBuilder {
       try {
         return await _consumeSseToTerminal(this.client, args);
       } catch (err) {
-        if (err instanceof GislTimeoutError) throw err;
-        if (err instanceof DOMException && err.name === 'AbortError') throw err;
+        // TDqmkWpX: poll-fallback ONLY on a clean SSE stream-end or a typed
+        // transport error; rethrow everything else (timeout, abort, API, an
+        // onProgress callback throw, anything unexpected) so it isn't masked.
+        if (!(err instanceof SseEndedWithoutTerminal || err instanceof GislNetworkError)) {
+          throw err;
+        }
       }
     }
     return await _pollToTerminal(this.client, args);

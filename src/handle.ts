@@ -35,10 +35,11 @@
 
 import type { GislClient } from './client.js';
 import {
-  GislApiError,
   GislConfigError,
+  GislNetworkError,
   GislResultNotReadyError,
   GislTimeoutError,
+  SseEndedWithoutTerminal,
 } from './errors.js';
 import {
   _consumeSseToTerminal,
@@ -185,13 +186,14 @@ export class Handle {
         onProgress,
       });
     } catch (err) {
-      // Mirror Recipe.run(): only genuine SSE transport / clean-stream-end
-      // failures fall through to poll. Caller-deadline, abort, and API errors
-      // MUST propagate — re-issuing the same doomed request via poll would mask
-      // them.
-      if (err instanceof GislTimeoutError) throw err;
-      if (err instanceof DOMException && err.name === 'AbortError') throw err;
-      if (err instanceof GislApiError) throw err;
+      // TDqmkWpX: mirror Recipe.run() — poll-fallback ONLY on a clean SSE
+      // stream-end (SseEndedWithoutTerminal) or a typed transport error
+      // (GislNetworkError). Everything else (timeout, abort, API, an onProgress
+      // callback throw, anything unexpected) MUST propagate — re-issuing the same
+      // doomed request via poll would mask the real failure.
+      if (!(err instanceof SseEndedWithoutTerminal || err instanceof GislNetworkError)) {
+        throw err;
+      }
       finalStatus = await _pollToTerminal(client, {
         workflowId: this.workflowId,
         deadline,
@@ -205,6 +207,13 @@ export class Handle {
       );
     }
     const downloads = await client.getWorkflowDownloads(this.workflowId);
+    // TDqmkWpX: re-check AFTER the downloads fetch so a slow getWorkflowDownloads
+    // cannot return a success past the advertised maxWait.
+    if (Date.now() >= deadline) {
+      throw new GislTimeoutError(
+        `Workflow ${this.workflowId} downloads fetch completed after maxWait elapsed`,
+      );
+    }
     return this.project(finalStatus, downloads.downloads);
   }
 

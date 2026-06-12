@@ -164,10 +164,13 @@ describe('Recipe.run — uploadId arm', () => {
 });
 
 describe('Recipe.run — poll fallback', () => {
-  it('falls back to polling when SSE throws, reaching the same RunResult', async () => {
+  it('falls back to polling when SSE transport fails, reaching the same RunResult', async () => {
     const mock = makeMockClient();
+    // A genuine fetch transport failure surfaces as a TypeError; the SDK wraps it
+    // as GislNetworkError and falls back to poll (TDqmkWpX: only a transport error
+    // or a clean stream-end fall back — other errors propagate).
     mock.streamEvents.mockImplementation(async function* () {
-      throw new Error('sse boom');
+      throw new TypeError('sse boom');
       // eslint-disable-next-line no-unreachable
       yield;
     });
