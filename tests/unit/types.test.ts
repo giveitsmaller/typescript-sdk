@@ -404,6 +404,8 @@ describe('WORKFLOW_CREATE_PAYLOAD_KEYS', () => {
   it('contains exactly the documented v2 top-level wire keys, in order', () => {
     expect([...WORKFLOW_CREATE_PAYLOAD_KEYS]).toEqual([
       'jobs',
+      'source',
+      'operations',
       'workflow_edges',
       'callback_url',
       'callback_events',

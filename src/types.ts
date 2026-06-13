@@ -347,6 +347,17 @@ export interface WorkflowProcessingPayload {
 
 export interface WorkflowCreatePayload {
   jobs: JobDefinitionPayload[];
+  /**
+   * Flat single-job form (with `operations`): top-level input source, exactly
+   * equivalent to `jobs: [{ source, operations }]` (contracts D0Gsri8V, v2.64.0).
+   * The spec's `oneOf` makes `jobs` and `source`+`operations` mutually exclusive;
+   * the SDK builders always emit the explicit `jobs[]` form, so these are typed
+   * optional for spec-completeness (a consumer hand-building the flat form omits
+   * `jobs`). Builder adoption of the flat form is a follow-up.
+   */
+  source?: WorkflowSourcePayload;
+  /** Flat-form operation set (with `source`); equivalent to one job's `operations`. */
+  operations?: OperationDef[];
   workflow_edges?: Array<{ from: string; to: string }>;
   callback_url?: string;
   callback_events?: CallbackEventType[];
@@ -364,6 +375,8 @@ export interface WorkflowCreatePayload {
  */
 export const WORKFLOW_CREATE_PAYLOAD_KEYS = Object.freeze([
   'jobs',
+  'source',
+  'operations',
   'workflow_edges',
   'callback_url',
   'callback_events',

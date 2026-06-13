@@ -118,6 +118,33 @@ function resolveSchema(doc: OpenApiDoc, schema: OpenApiSchemaRef): OpenApiSchema
         const merged = mergeAllOf(doc, obj);
         return merged;
       }
+      // A schema may carry oneOf/anyOf as a PRESENCE CONSTRAINT (which subset of
+      // its own declared properties must appear together) while still declaring
+      // every candidate property at the top level — e.g. WorkflowCreateRequest's
+      // jobs-vs-(source+operations) mutex (contracts D0Gsri8V, v2.64.0). When the
+      // schema has its own `properties`, those are authoritative for property-name
+      // drift; fold each oneOf/anyOf branch's `required` into a unioned `required`
+      // so the required-coverage check still sees branch-required fields. The
+      // `not`/nested composition inside the branches is a presence constraint the
+      // drift helpers don't need to model.
+      const choice = obj.oneOf ?? obj.anyOf;
+      if (Array.isArray(choice) && obj.properties !== undefined) {
+        const required = new Set<string>((obj.required as string[] | undefined) ?? []);
+        for (const branch of choice) {
+          if (
+            branch !== null &&
+            typeof branch === 'object' &&
+            Array.isArray((branch as Record<string, unknown>).required)
+          ) {
+            for (const r of (branch as { required: string[] }).required) required.add(r);
+          }
+        }
+        return {
+          type: 'object',
+          properties: obj.properties as Record<string, unknown>,
+          required: [...required],
+        } as OpenApiSchema;
+      }
       const unsupported = UNSUPPORTED_COMPOSITION_KEYS.find(k => k in obj);
       if (unsupported !== undefined) {
         throw new Error(
