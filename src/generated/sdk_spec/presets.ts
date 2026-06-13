@@ -53,27 +53,18 @@ export const PRESETS: PresetMatrix = Object.freeze({
   } as Readonly<Record<PresetLevel, PresetCell>>),
   "video_compress": Object.freeze({
     Size: Object.freeze({
-      "codec": "H265",
       "crf": 30,
       "preset": "Slow",
-      "faststart": true,
-      "audioCodec": "Aac",
       "audioBitrate": "_96",
     } as PresetCell),
     Balanced: Object.freeze({
-      "codec": "H264",
       "crf": 23,
       "preset": "Medium",
-      "faststart": true,
-      "audioCodec": "Aac",
       "audioBitrate": "_128",
     } as PresetCell),
     Quality: Object.freeze({
-      "codec": "H264",
       "crf": 18,
       "preset": "Slow",
-      "faststart": true,
-      "audioCodec": "Aac",
       "audioBitrate": "_192",
     } as PresetCell),
   } as Readonly<Record<PresetLevel, PresetCell>>),

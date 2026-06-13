@@ -82,18 +82,21 @@ describe('resolveCompressOptions — layer 1 (sdkDefault)', () => {
     expect([...resolvedOptions.sources.sdkDefault].sort()).toEqual(['bitrate', 'normalize', 'sample_rate'].sort());
   });
 
-  it('video Size shipped defaults — H265 CRF 30 Slow preset, audio_codec/audio_bitrate snake-cased', () => {
+  it('video Size shipped defaults — CRF 30 Slow preset, audio_bitrate snake-cased; codec/audio_codec server-resolved', () => {
     const { wireOptions, resolvedOptions } = resolveCompressOptions({
       media: 'video',
       op: 'compress',
       optimize: OptimizeFor.Size,
       explicitOptions: {},
     });
-    expect(wireOptions.codec).toBe('h265');
     expect(wireOptions.crf).toBe(30);
     expect(wireOptions.preset).toBe('slow');
-    expect(wireOptions.audio_codec).toBe('aac');
     expect(wireOptions.audio_bitrate).toBe(96);
+    // v2.66.0 (ADR-0020): presets no longer bake codec / audio_codec / faststart;
+    // the server container-resolves them (sparse-delta), so they are absent here.
+    expect(wireOptions.codec).toBeUndefined();
+    expect(wireOptions.audio_codec).toBeUndefined();
+    expect(wireOptions.faststart).toBeUndefined();
     // crf with no targetSize implies encoding_mode='crf' (resolver derives).
     expect(wireOptions.encoding_mode).toBe('crf');
     expect(resolvedOptions.sources.sdkDefault).toContain('encoding_mode');
@@ -740,9 +743,10 @@ describe('PresetDefaults builder integration (T4a x T4b)', () => {
 
   it('shippedDefaultsFor wires up the same wire values the resolver consumes', () => {
     const shipped = VideoCompressPresetOptions.shippedDefaultsFor(OptimizeFor.Balanced);
-    expect(shipped.codec).toBe('h264');
     expect(shipped.crf).toBe(23);
     expect(shipped.preset).toBe('medium');
+    // v2.66.0: codec no longer baked into the preset (server container-resolves).
+    expect(shipped.codec).toBeUndefined();
   });
 
   it('AudioCompressPresetOptions.shippedDefaultsFor Size translates _96 → 96', () => {

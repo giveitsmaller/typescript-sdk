@@ -4,4 +4,4 @@
 
 export const SDK_SPEC_VERSION = "1.5.0" as const;
 export const PRESET_VERSION = "1.0" as const;
-export const PRESET_CONFIG_HASH = "sha256:dc48f4d31f4037cc07fb0686519122c03a55b03a41f05fbfc2af54e54950a0d2" as const;
+export const PRESET_CONFIG_HASH = "sha256:3791bd2d0cd474c5029707f6e50480bf49be33899f7fc5c1a4e77edb136f6e95" as const;

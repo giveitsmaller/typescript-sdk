@@ -100,23 +100,28 @@ describe('AudioCompressPresetOptions.shippedDefaultsFor', () => {
 });
 
 describe('VideoCompressPresetOptions.shippedDefaultsFor', () => {
-  it('Size cell — H265, CRF 30, Slow preset, Aac 96kbps audio', () => {
+  // v2.66.0 (contracts ADR-0020): video_compress presets no longer bake
+  // codec / audioCodec / faststart. Those are container-coupled, so the server
+  // container-resolves effective defaults for the unset options (sparse-delta) —
+  // a WebM target can no longer 422 on a baked MP4-oriented codec. Presets carry
+  // only the genuine size/quality knobs (crf / preset / audioBitrate).
+  it('Size cell — CRF 30, Slow preset, 96kbps audio; codec/audioCodec/faststart server-resolved', () => {
     const opts = VideoCompressPresetOptions.shippedDefaultsFor(OptimizeFor.Size);
-    expect(opts.codec).toBe(VideoCodec.H265);
-    expect(opts.codec).toBe('h265');
     expect(opts.crf).toBe(30);
     expect(opts.preset).toBe(VideoPreset.Slow);
-    expect(opts.faststart).toBe(true);
-    expect(opts.audioCodec).toBe(AudioCodec.Aac);
     expect(opts.audioBitrate).toBe(96);
+    expect(opts.codec).toBeUndefined();
+    expect(opts.audioCodec).toBeUndefined();
+    expect(opts.faststart).toBeUndefined();
   });
 
-  it('Balanced cell — H264, CRF 23, Medium preset, 128kbps audio', () => {
+  it('Balanced cell — CRF 23, Medium preset, 128kbps audio; codec server-resolved', () => {
     const opts = VideoCompressPresetOptions.shippedDefaultsFor(OptimizeFor.Balanced);
-    expect(opts.codec).toBe(VideoCodec.H264);
     expect(opts.crf).toBe(23);
     expect(opts.preset).toBe(VideoPreset.Medium);
     expect(opts.audioBitrate).toBe(128);
+    expect(opts.codec).toBeUndefined();
+    expect(opts.faststart).toBeUndefined();
   });
 
   it('width / height / fit / fps / targetSize undefined in shipped cells', () => {
