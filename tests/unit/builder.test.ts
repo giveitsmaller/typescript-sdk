@@ -840,6 +840,94 @@ describe('T4b — _detectCompressMedia (input → media classification)', () => 
   });
 });
 
+describe('0Vcogefw — _detectAudioLossless (audio input → lossless classification)', () => {
+  it.each(['song.flac', 'a.wav', 'PATH/X.FLAC', 'audio/clip.WAV'])(
+    'filename %s → true (case-insensitive, flac/wav only)',
+    async (input) => {
+      const { _detectAudioLossless } = await import('../../src/builder.js');
+      expect(_detectAudioLossless(input)).toBe(true);
+    },
+  );
+
+  it.each([
+    'song.mp3',
+    'a.aac',
+    'b.m4a',
+    'c.ogg',
+    'd.oga',
+    'e.opus',
+    'f.unknownext',
+    'noextension',
+  ])('lossy / unknown filename %s → false', async (input) => {
+    const { _detectAudioLossless } = await import('../../src/builder.js');
+    expect(_detectAudioLossless(input)).toBe(false);
+  });
+
+  it.each(['audio/flac', 'audio/x-flac', 'audio/wav', 'audio/x-wav', 'audio/wave'])(
+    'Blob with lossless audio MIME %s → true',
+    async (type) => {
+      const { _detectAudioLossless } = await import('../../src/builder.js');
+      expect(_detectAudioLossless(new Blob(['x'], { type }))).toBe(true);
+    },
+  );
+
+  it('Blob with lossy audio MIME audio/mpeg → false', async () => {
+    const { _detectAudioLossless } = await import('../../src/builder.js');
+    expect(_detectAudioLossless(new Blob(['x'], { type: 'audio/mpeg' }))).toBe(false);
+  });
+
+  it('Blob with a parameterised lossless MIME (audio/flac; codecs=flac) → true', async () => {
+    // MIME params must be stripped before the exact-set lookup — media is
+    // already audio via the prefix check, so a miss would wrongly KEEP the
+    // shipped bitrate on a lossless input (codex 18b6b684).
+    const { _detectAudioLossless } = await import('../../src/builder.js');
+    expect(_detectAudioLossless(new Blob(['x'], { type: 'audio/flac; codecs=flac' }))).toBe(true);
+  });
+
+  it('MIME-first only applies to audio/* — a non-audio MIME falls back to the extension', async () => {
+    // Edge case: a Blob typed application/octet-stream but named x.flac is
+    // NOT matched by the audio/* MIME branch, so it falls through to the
+    // extension fallback → flac → TRUE. (Document this fall-through.)
+    const { _detectAudioLossless } = await import('../../src/builder.js');
+    const b = new Blob(['x'], { type: 'application/octet-stream' });
+    Object.defineProperty(b, 'name', { value: 'x.flac' });
+    expect(_detectAudioLossless(b)).toBe(true);
+  });
+
+  it('typeless / nameless Blob → false (no inferable signal)', async () => {
+    const { _detectAudioLossless } = await import('../../src/builder.js');
+    expect(_detectAudioLossless(new Blob(['x']))).toBe(false);
+  });
+});
+
+describe('0Vcogefw — operation-first end-to-end audio bitrate drop (both call-sites)', () => {
+  it('compress(optimize: Size) on a *.flac input lowers WITHOUT bitrate', async () => {
+    const { OptimizeFor } = await import('../../src/generated/sdk_spec/enums.js');
+    const mock = makeMockClient();
+    await new OperationBuilder(mock.client, 'compress', 'track.flac', {
+      optimize: OptimizeFor.Size,
+    }).run({ maxWait: '30s' });
+    const payload = mock.createWorkflow.mock.calls[0][0];
+    const options = payload.jobs[0].operations[0].options as Record<string, unknown>;
+    expect('bitrate' in options).toBe(false);
+    // The rest of the audio Size cell survives.
+    expect(options.sample_rate).toBe(44100);
+    expect(options.normalize).toBe(true);
+  });
+
+  it('compress(optimize: Size) on a *.mp3 input KEEPS bitrate 96', async () => {
+    const { OptimizeFor } = await import('../../src/generated/sdk_spec/enums.js');
+    const mock = makeMockClient();
+    await new OperationBuilder(mock.client, 'compress', 'song.mp3', {
+      optimize: OptimizeFor.Size,
+    }).run({ maxWait: '30s' });
+    const payload = mock.createWorkflow.mock.calls[0][0];
+    const options = payload.jobs[0].operations[0].options as Record<string, unknown>;
+    expect(options.bitrate).toBe(96);
+    expect(options.sample_rate).toBe(44100);
+  });
+});
+
 describe('T4b — non-compress ops bypass the resolver (passthrough)', () => {
   it('opType="convert" wireOptions === opOptions verbatim (no preset resolution)', async () => {
     const mock = makeMockClient();

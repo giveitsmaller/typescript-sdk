@@ -864,3 +864,128 @@ describe('code-review R1 regression: type_mismatch suggestion uses correct Pasca
     expect(wireOptions.output_format).toBe('jpeg');
   });
 });
+
+// ---------------------------------------------------------------------------
+// 0Vcogefw — audio_compress lossless bitrate drop
+// ---------------------------------------------------------------------------
+//
+// The shipped audio preset bakes a bitrate (Size 96 / Balanced 192 /
+// Quality 320). The worker rejects `bitrate` on lossless outputs
+// (flac/wav — contracts iakhSy3E). The resolver drops ONLY the
+// sdkDefault-sourced bitrate when `audioLossless === true`; sample_rate
+// and normalize from the same cell MUST survive. Any user-supplied
+// bitrate (clientDefault / scoped / override / explicit) is KEPT so the
+// worker's 422 surfaces — no silent-ignore.
+
+describe('resolveCompressOptions — audio lossless bitrate drop (0Vcogefw)', () => {
+  it.each([
+    [OptimizeFor.Size, 96, 44100],
+    [OptimizeFor.Balanced, 192, 44100],
+    [OptimizeFor.Quality, 320, 48000],
+  ])(
+    'lossy audio %s KEEPS the shipped bitrate %d (sample_rate / normalize survive)',
+    (optimize, expectedBitrate, expectedSampleRate) => {
+      const { wireOptions, resolvedOptions } = resolveCompressOptions({
+        media: 'audio',
+        op: 'compress',
+        optimize,
+        explicitOptions: {},
+        audioLossless: false,
+      });
+      expect(wireOptions.bitrate).toBe(expectedBitrate);
+      expect(wireOptions.sample_rate).toBe(expectedSampleRate);
+      expect('normalize' in wireOptions).toBe(true);
+      expect(resolvedOptions.sources.sdkDefault).toContain('bitrate');
+    },
+  );
+
+  it.each([
+    [OptimizeFor.Size, 44100],
+    [OptimizeFor.Balanced, 44100],
+    [OptimizeFor.Quality, 48000],
+  ])(
+    'lossless audio %s DROPS the shipped bitrate but keeps the level-correct sample_rate + normalize',
+    (optimize, expectedSampleRate) => {
+      const { wireOptions, resolvedOptions } = resolveCompressOptions({
+        media: 'audio',
+        op: 'compress',
+        optimize,
+        explicitOptions: {},
+        audioLossless: true,
+      });
+      expect('bitrate' in wireOptions).toBe(false);
+      // The rest of the preset cell survives the drop — value-checked per
+      // level so a Quality-only sample_rate corruption (48000→44100) fails.
+      expect(wireOptions.sample_rate).toBe(expectedSampleRate);
+      expect('normalize' in wireOptions).toBe(true);
+      // The audit trail no longer attributes a bitrate to any layer.
+      expect(resolvedOptions.sources.sdkDefault).not.toContain('bitrate');
+      expect(resolvedOptions.applied).not.toHaveProperty('bitrate');
+    },
+  );
+
+  it('lossless audio with optimize UNSET does not crash (no sdkDefault bitrate to drop)', () => {
+    const { wireOptions } = resolveCompressOptions({
+      media: 'audio',
+      op: 'compress',
+      explicitOptions: {},
+      audioLossless: true,
+    });
+    expect(wireOptions).toEqual({});
+    expect('bitrate' in wireOptions).toBe(false);
+  });
+
+  // --- worker-authoritative: USER-supplied bitrate is NEVER dropped -------
+
+  it('lossless audio KEEPS an EXPLICIT bitrate (winning source != sdkDefault → 422 surfaces)', () => {
+    const { wireOptions, resolvedOptions } = resolveCompressOptions({
+      media: 'audio',
+      op: 'compress',
+      optimize: OptimizeFor.Size,
+      explicitOptions: { bitrate: AudioBitrate._320 },
+      audioLossless: true,
+    });
+    expect(wireOptions.bitrate).toBe(320);
+    expect(resolvedOptions.sources.explicit).toContain('bitrate');
+  });
+
+  it('lossless audio KEEPS a presetOverrides bitrate', () => {
+    const { wireOptions, resolvedOptions } = resolveCompressOptions({
+      media: 'audio',
+      op: 'compress',
+      optimize: OptimizeFor.Size,
+      presetOverrides: { bitrate: AudioBitrate._192 },
+      explicitOptions: {},
+      audioLossless: true,
+    });
+    expect(wireOptions.bitrate).toBe(192);
+    expect(resolvedOptions.sources.callPresetOverride).toContain('bitrate');
+  });
+
+  it('lossless audio KEEPS a clientDefault preset bitrate', () => {
+    const defaults = presetDefaults().audioCompress(OptimizeFor.Size, { bitrate: AudioBitrate._320 });
+    const { wireOptions, resolvedOptions } = resolveCompressOptions({
+      media: 'audio',
+      op: 'compress',
+      optimize: OptimizeFor.Size,
+      presetDefaults: defaults,
+      explicitOptions: {},
+      audioLossless: true,
+    });
+    expect(wireOptions.bitrate).toBe(320);
+    expect(resolvedOptions.sources.clientDefault).toContain('bitrate');
+  });
+
+  it('audioLossless flag is inert for non-audio media (defensive)', () => {
+    const { wireOptions } = resolveCompressOptions({
+      media: 'image',
+      op: 'compress',
+      optimize: OptimizeFor.Size,
+      explicitOptions: {},
+      audioLossless: true,
+    });
+    // Image has no bitrate concept; the flag changes nothing.
+    expect(wireOptions.mode).toBe('lossy');
+    expect('bitrate' in wireOptions).toBe(false);
+  });
+});

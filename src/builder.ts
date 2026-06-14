@@ -116,6 +116,57 @@ export function _detectCompressMedia(input: string | Blob): PresetMedia | undefi
   return undefined;
 }
 
+// LOSSLESS audio per the compress.yaml contract (contracts iakhSy3E) —
+// flac/wav ONLY. Everything else audio (mp3/mpeg, aac, ogg, m4a/mp4, opus)
+// and any unknown input is treated as lossy so the shipped-preset bitrate is
+// kept. `aiff` is deliberately absent — not a contract audio format.
+const LOSSLESS_AUDIO_MIMES = new Set([
+  'audio/flac',
+  'audio/x-flac',
+  'audio/wav',
+  'audio/x-wav',
+  'audio/wave',
+]);
+const LOSSLESS_AUDIO_EXTENSIONS = new Set(['flac', 'wav']);
+
+/**
+ * Best-effort classification of whether an audio input is LOSSLESS
+ * (flac/wav) vs lossy. The worker rejects `bitrate` on lossless audio
+ * (compress.yaml / contracts iakhSy3E), so the preset resolver uses this
+ * to drop the shipped-preset bitrate for clear-cut lossless inputs.
+ *
+ * Detection is filename/MIME only — it CANNOT probe the actual codec, so
+ * any ambiguous or unknown input classifies as lossy (keep bitrate). The
+ * worker stays authoritative: a user-supplied bitrate on a lossless file
+ * still reaches the wire and earns a deliberate 422.
+ *
+ * @internal — exported for tests + the preset resolver.
+ */
+export function _detectAudioLossless(input: string | Blob): boolean {
+  let filename: string | undefined;
+  let mime: string | undefined;
+  if (typeof input === 'string') {
+    filename = input;
+  } else {
+    mime = input.type !== '' ? input.type : undefined;
+    const named = (input as { name?: string }).name;
+    if (typeof named === 'string') filename = named;
+  }
+  // MIME-first if a recognised audio MIME is present — Blob.type is canonical.
+  // Strip any MIME parameters (`audio/flac; codecs=flac`) before the exact-set
+  // lookup so a parameterised type still classifies as lossless — `media` is
+  // already `audio` via the prefix check, so a miss would wrongly keep the
+  // bitrate (codex 18b6b684).
+  if (mime !== undefined && mime.startsWith('audio/')) {
+    const bareMime = mime.split(';')[0]!.trim().toLowerCase();
+    return LOSSLESS_AUDIO_MIMES.has(bareMime);
+  }
+  if (filename === undefined) return false;
+  const ext = filename.toLowerCase().split('.').pop();
+  if (ext === undefined) return false;
+  return LOSSLESS_AUDIO_EXTENSIONS.has(ext);
+}
+
 // ---------------------------------------------------------------------------
 // ArtifactRef — the shape passed to `.mapEach(fn)` callbacks.
 // ---------------------------------------------------------------------------
@@ -418,6 +469,9 @@ export class OperationBuilder {
       op: 'compress',
       explicitOptions,
     };
+    if (media === 'audio') {
+      (input as { audioLossless?: boolean }).audioLossless = _detectAudioLossless(this.input);
+    }
     if (this.presetDefaults !== undefined) {
       (input as { presetDefaults?: PresetDefaults }).presetDefaults = this.presetDefaults;
     }

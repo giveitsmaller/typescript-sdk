@@ -13,6 +13,7 @@
 import { GislConfigError, GislNetworkError, GislNoSuchKeyError, GislSinkError, GislTimeoutError, SseEndedWithoutTerminal } from './errors.js';
 import {
   _detectCompressMedia,
+  _detectAudioLossless,
   _consumeSseToTerminal,
   _pollToTerminal,
   _parseMaxWait,
@@ -880,6 +881,9 @@ export class Recipe {
       return {};
     }
     const input: ResolveCompressOptionsInput = { media, op: 'compress', explicitOptions: {} };
+    if (media === 'audio') {
+      (input as { audioLossless?: boolean }).audioLossless = this.compressAudioLossless();
+    }
     if (this.presetDefaults !== undefined) {
       (input as { presetDefaults?: PresetDefaults }).presetDefaults = this.presetDefaults;
     }
@@ -901,6 +905,12 @@ export class Recipe {
       return _detectCompressMedia(this.input.blob);
     }
     return undefined;
+  }
+
+  private compressAudioLossless(): boolean {
+    if (this.input.kind === 'path') return _detectAudioLossless(this.input.path);
+    if (this.input.kind === 'blob') return _detectAudioLossless(this.input.blob);
+    return false;
   }
 }
 

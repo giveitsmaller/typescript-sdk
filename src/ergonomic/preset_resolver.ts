@@ -129,6 +129,12 @@ export interface ResolveCompressOptionsInput {
    * layer.
    */
   readonly explicitOptions: Readonly<Record<string, unknown>>;
+  /**
+   * Classifier result from media detection. When `true` on audio, the
+   * shipped-preset (sdkDefault) bitrate is dropped — the worker rejects
+   * `bitrate` on lossless outputs (flac/wav — contracts iakhSy3E).
+   */
+  readonly audioLossless?: boolean;
 }
 
 /**
@@ -584,7 +590,7 @@ function computePresetConfigHash(
 export function resolveCompressOptions(
   input: ResolveCompressOptionsInput,
 ): ResolveCompressOptionsOutput {
-  const { media, op, presetDefaults, scopedPresetDefaults, presetOverrides, optimize, explicitOptions } = input;
+  const { media, op, presetDefaults, scopedPresetDefaults, presetOverrides, optimize, explicitOptions, audioLossless } = input;
   if (op !== 'compress') {
     throw new GislConfigError(
       `Preset resolution is only wired for compress operations today; got op='${op}'.`,
@@ -666,6 +672,16 @@ export function resolveCompressOptions(
       acc.merged.encoding_mode = 'crf';
       acc.winners.set('encoding_mode', crfSource);
     }
+  }
+
+  // audio_compress bakes a bitrate (Size 96 / Balanced 192 / Quality 320); the
+  // worker rejects `bitrate` on lossless outputs (flac/wav — contracts iakhSy3E).
+  // Drop ONLY the shipped-preset (sdkDefault) bitrate for clear-cut lossless
+  // audio; any user-supplied bitrate (client/scoped default, per-call override
+  // or explicit) is left for the worker to reject — no silent-ignore.
+  if (media === 'audio' && audioLossless === true && acc.winners.get('bitrate') === 'sdkDefault') {
+    delete acc.merged.bitrate;
+    acc.winners.delete('bitrate');
   }
 
   // 7. Validate the merged payload (post-merge — catches cross-layer

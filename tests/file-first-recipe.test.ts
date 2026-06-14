@@ -184,6 +184,26 @@ describe('Recipe — compress preset delegation', () => {
     );
   });
 
+  it('0Vcogefw — file-first compress on a *.flac input lowers WITHOUT bitrate', () => {
+    // Proves the file-first call-site is wired (a regression here = only the
+    // operation-first site got the audio-lossless drop). The Recipe must
+    // resolve audioLossless from the *.flac path and drop the sdkDefault
+    // bitrate while keeping sample_rate / normalize.
+    const ops = operations(recipe('track.flac').compress(OptimizeFor.Size));
+    expect(ops[0].type).toBe('compress');
+    const options = ops[0].options as Record<string, unknown>;
+    expect('bitrate' in options).toBe(false);
+    expect(options.sample_rate).toBe(44100);
+    expect(options.normalize).toBe(true);
+  });
+
+  it('0Vcogefw — file-first compress on a *.mp3 input KEEPS bitrate (lossy)', () => {
+    const ops = operations(recipe('song.mp3').compress(OptimizeFor.Size));
+    const options = ops[0].options as Record<string, unknown>;
+    expect(options.bitrate).toBe(96);
+    expect(options.sample_rate).toBe(44100);
+  });
+
   it('example 02 chain lowers convert then resolved compress', () => {
     // examples/php/02-chain.php: clip.mov → convert(mp4) → compress(Size).
     const expectedCompress = resolveCompressOptions({
