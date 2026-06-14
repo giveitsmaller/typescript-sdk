@@ -114,7 +114,7 @@ describe('FilesRecipe — toWorkflowPayload (multi-job lowering)', () => {
     payload.jobs.forEach((job, i) => {
       expect(job.source).toEqual({ type: 'upload', file_id: `file_${i}` });
       // Every input gets the SAME lowered operations[].
-      expect(job.operations).toEqual([{ type: 'convert', options: { format: 'webp' } }]);
+      expect(job.operations).toEqual([{ type: 'convert', options: { output_format: 'webp' } }]);
       // Wire key order (id, source, operations) for cross-language JSON parity.
       expect(Object.keys(job)).toEqual(['id', 'source', 'operations']);
     });
@@ -166,7 +166,7 @@ describe('FilesRecipe — toWorkflowPayload (multi-job lowering)', () => {
   it('serialises a single-input fan-out to a stable JSON shape', () => {
     const json = JSON.stringify(filesRecipe('a.jpg').convert('webp').toWorkflowPayload(['file_0']));
     expect(json).toBe(
-      '{"jobs":[{"id":"file-0","source":{"type":"upload","file_id":"file_0"},"operations":[{"type":"convert","options":{"format":"webp"}}]}]}',
+      '{"jobs":[{"id":"file-0","source":{"type":"upload","file_id":"file_0"},"operations":[{"type":"convert","options":{"output_format":"webp"}}]}]}',
     );
   });
 

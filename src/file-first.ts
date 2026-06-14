@@ -607,13 +607,19 @@ export class Recipe {
   }
 
   /**
-   * Change format. `format` is lowered verbatim to the `format` wire option;
-   * `options` carries any additional per-op convert options.
+   * Change format. The `format` shorthand lowers to the `output_format` wire
+   * option (the convert op's wire key per the contract); `options` carries any
+   * additional per-op convert options.
    */
   convert(format: string, options: Record<string, unknown> = {}): Recipe {
-    // Spread options FIRST so the explicit `format` argument is authoritative —
-    // a `format` key in the bag must NOT silently override the call's format.
-    return this.withStep({ opType: 'convert', options: { ...options, format } });
+    // The convert op's wire key is `output_format` (contract: convert.yaml,
+    // required, all media), NOT `format`. Spread options FIRST so the explicit
+    // shorthand wins over an `output_format` key in the bag.
+    // The shorthand owns the format → a stray legacy `format` key in the bag is
+    // not a valid convert option; drop it so the wire never carries both keys.
+    const rest = { ...options };
+    delete rest.format;
+    return this.withStep({ opType: 'convert', options: { ...rest, output_format: format } });
   }
 
   /**
@@ -1375,9 +1381,14 @@ export class MergedRecipe {
 
   /** Change the merged output's format. See {@link Recipe.convert}. */
   convert(format: string, options: Record<string, unknown> = {}): MergedRecipe {
-    // Spread options FIRST so the explicit `format` argument is authoritative —
-    // a `format` key in the bag must NOT silently override the call's format.
-    return this.withStep({ opType: 'convert', options: { ...options, format } });
+    // The convert op's wire key is `output_format` (contract: convert.yaml,
+    // required, all media), NOT `format`. Spread options FIRST so the explicit
+    // shorthand wins over an `output_format` key in the bag.
+    // The shorthand owns the format → a stray legacy `format` key in the bag is
+    // not a valid convert option; drop it so the wire never carries both keys.
+    const rest = { ...options };
+    delete rest.format;
+    return this.withStep({ opType: 'convert', options: { ...rest, output_format: format } });
   }
 
   /** Thumbnail the merged output. Omitted dimensions are dropped from the wire options. */

@@ -35,10 +35,10 @@ const operations = (r: Recipe): OperationDef[] => loweredJob(r).operations;
 // ---------------------------------------------------------------------------
 
 describe('Recipe chain options — explicit options reach the wire', () => {
-  it('convert(format, options) merges the bag after format', () => {
+  it('convert(format, options) lowers the shorthand to output_format + merges the bag', () => {
     const ops = operations(recipe('clip.mov').convert('mp4', { codec: 'h265', quality: 90 }));
     expect(ops).toEqual([
-      { type: 'convert', options: { format: 'mp4', codec: 'h265', quality: 90 } },
+      { type: 'convert', options: { output_format: 'mp4', codec: 'h265', quality: 90 } },
     ]);
   });
 
@@ -79,11 +79,19 @@ describe('Recipe chain options — explicit options reach the wire', () => {
 // ---------------------------------------------------------------------------
 
 describe('Recipe chain options — explicit shorthand arg wins over a bag key', () => {
-  it('convert(\'mp4\', { format: \'webm\' }) lowers format=mp4 (the bag format is overridden)', () => {
-    const ops = operations(recipe('clip.mov').convert('mp4', { format: 'webm' }));
+  it('convert(\'mp4\', { output_format: \'webm\' }) lowers output_format=mp4 (the bag is overridden)', () => {
+    const ops = operations(recipe('clip.mov').convert('mp4', { output_format: 'webm' }));
     expect(ops).toHaveLength(1);
     expect(ops[0].type).toBe('convert');
-    expect((ops[0].options as Record<string, unknown>).format).toBe('mp4');
+    expect((ops[0].options as Record<string, unknown>).output_format).toBe('mp4');
+  });
+
+  it('convert(\'mp4\', { format: \'legacy\' }) drops the stray legacy format key (no double-key leak)', () => {
+    // A `format` key in the bag is the OLD (wrong) wire key — the shorthand now
+    // owns output_format, so the stray `format` must NOT leak onto the wire.
+    const ops = operations(recipe('clip.mov').convert('mp4', { format: 'legacy', codec: 'h264' }));
+    expect(ops[0].options).toEqual({ output_format: 'mp4', codec: 'h264' });
+    expect(ops[0].options).not.toHaveProperty('format');
   });
 
   it('textWatermark(\'real\', { text: \'fake\' }) lowers text=real (the bag text is overridden)', () => {
@@ -93,16 +101,16 @@ describe('Recipe chain options — explicit shorthand arg wins over a bag key', 
     expect((ops[0].options as Record<string, unknown>).text).toBe('real');
   });
 
-  it('files([...]).merge().convert(\'mp4\', { format: \'webm\' }) lowers format=mp4 on the merge job', () => {
+  it('files([...]).merge().convert(\'mp4\', { output_format: \'webm\' }) lowers output_format=mp4 on the merge job', () => {
     const payload = new MergedRecipe([fileInput.path('a.mp4'), fileInput.path('b.mp4')], {
       mediaKind: 'video',
     })
-      .convert('mp4', { format: 'webm' })
+      .convert('mp4', { output_format: 'webm' })
       .toWorkflowPayload(['f0', 'f1']);
 
     const mergeJob = payload.jobs[2]; // 2 src jobs + the merge job
     expect(mergeJob.operations[1].type).toBe('convert');
-    expect((mergeJob.operations[1].options as Record<string, unknown>).format).toBe('mp4');
+    expect((mergeJob.operations[1].options as Record<string, unknown>).output_format).toBe('mp4');
   });
 });
 
@@ -349,9 +357,9 @@ describe('Recipe chain options — minimal forms unchanged (regression guard)', 
     expect(ops[0]).not.toHaveProperty('options');
   });
 
-  it('convert(format) with no bag carries only the format', () => {
+  it('convert(format) with no bag carries only output_format', () => {
     expect(operations(recipe('clip.mov').convert('png'))).toEqual([
-      { type: 'convert', options: { format: 'png' } },
+      { type: 'convert', options: { output_format: 'png' } },
     ]);
   });
 
@@ -381,7 +389,7 @@ describe('FilesRecipe chain options — fan-out threads options into every job',
     expect(payload.jobs).toHaveLength(2);
     payload.jobs.forEach((job) => {
       expect(job.operations).toEqual([
-        { type: 'convert', options: { format: 'mp4', codec: 'h265' } },
+        { type: 'convert', options: { output_format: 'mp4', codec: 'h265' } },
       ]);
     });
   });
@@ -450,7 +458,7 @@ describe('MergedRecipe chain options — post-combine ops carry options', () => 
     const mergeJob = payload.jobs[2];
     expect(mergeJob.operations[1]).toEqual({
       type: 'convert',
-      options: { format: 'webm', codec: 'vp9' },
+      options: { output_format: 'webm', codec: 'vp9' },
     });
   });
 

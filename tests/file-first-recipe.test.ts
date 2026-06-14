@@ -73,9 +73,9 @@ describe('Recipe — client.file() entry point', () => {
 });
 
 describe('Recipe — single-op lowering', () => {
-  it('convert lowers to a format option', () => {
+  it('convert lowers to an output_format option', () => {
     expect(operations(recipe('clip.mov').convert('mp4'))).toEqual([
-      { type: 'convert', options: { format: 'mp4' } },
+      { type: 'convert', options: { output_format: 'mp4' } },
     ]);
   });
 
@@ -216,7 +216,7 @@ describe('Recipe — compress preset delegation', () => {
     const ops = operations(recipe('clip.mov').convert('mp4').compress(OptimizeFor.Size));
 
     expect(ops.map((o) => o.type)).toEqual(['convert', 'compress']);
-    expect(ops[0].options).toEqual({ format: 'mp4' });
+    expect(ops[0].options).toEqual({ output_format: 'mp4' });
     expect(ops[1].options).toEqual(expectedCompress);
   });
 });
@@ -225,7 +225,7 @@ describe('Recipe — cross-language byte parity', () => {
   it('serialises a chain to a stable JSON shape', () => {
     const json = JSON.stringify(recipe('clip.mov').convert('mp4').toWorkflowPayload(FILE_ID));
     expect(json).toBe(
-      `{"jobs":[{"source":{"type":"upload","file_id":"${FILE_ID}"},"operations":[{"type":"convert","options":{"format":"mp4"}}]}]}`,
+      `{"jobs":[{"source":{"type":"upload","file_id":"${FILE_ID}"},"operations":[{"type":"convert","options":{"output_format":"mp4"}}]}]}`,
     );
   });
 });
