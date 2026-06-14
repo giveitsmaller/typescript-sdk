@@ -4,6 +4,8 @@ import {
   GislApiError,
   GislAuthError,
   GislBalanceExhaustedError,
+  GislBundleAlreadyArchivedError,
+  GislConfigError,
   GislError,
   GislFeatureNotAvailableError,
   GislFeatureTierRestrictedError,
@@ -39,6 +41,19 @@ describe('error classes', () => {
       expect(err).toBeInstanceOf(GislError);
       expect(err).toBeInstanceOf(Error);
       expect(err.name).toBe('GislBalanceExhaustedError');
+    });
+
+    it('GislBundleAlreadyArchivedError extends GislConfigError', () => {
+      // P4d / hv3FpLjm — double-bundle prevention; dormant until `.bundle()`
+      // (wpHoJhuo) raises it. Shape-only test (no firing site yet).
+      const err = new GislBundleAlreadyArchivedError();
+      expect(err).toBeInstanceOf(GislBundleAlreadyArchivedError);
+      expect(err).toBeInstanceOf(GislConfigError);
+      expect(err).toBeInstanceOf(GislError);
+      expect(err).toBeInstanceOf(Error);
+      expect(err.name).toBe('GislBundleAlreadyArchivedError');
+      expect(err.message).toContain('already produces an archive');
+      expect(err.message).toContain('.bundle()');
     });
 
     it('GislTierRestrictedError extends GislApiError', () => {

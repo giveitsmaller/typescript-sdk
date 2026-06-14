@@ -619,6 +619,25 @@ export class GislChainCardinalityMismatchError extends GislConfigError {
   }
 }
 
+/**
+ * Thrown by `.bundle(...)` when the target builder's terminal job is already an
+ * `archive` op — double-bundle prevention (a builder that already produces an
+ * archive cannot be bundled again). No HTTP: raised during lowering, before any
+ * upload. Per the lowering spec
+ * (`docs/plans/sdk-ergonomics/lowering.md:484`, id `bundle_already_archived_error`).
+ * Dormant until `.bundle()` ships (wpHoJhuo) — the type lands here so that PR is
+ * a pure addition.
+ */
+export class GislBundleAlreadyArchivedError extends GislConfigError {
+  constructor() {
+    super(
+      'This builder already produces an archive (bundle); .bundle() cannot be ' +
+        'applied to an already-bundled builder.',
+    );
+    this.name = 'GislBundleAlreadyArchivedError';
+  }
+}
+
 export class GislTimeoutError extends GislError {
   constructor(message: string) {
     super(message);

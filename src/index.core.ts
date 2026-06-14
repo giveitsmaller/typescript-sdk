@@ -103,6 +103,9 @@ export {
   // methods on OperationBuilder ship; type + audit registration land
   // here so the future chain-method PR is a pure addition).
   GislChainCardinalityMismatchError,
+  // P4d / hv3FpLjm — double-bundle prevention; raised by `.bundle()` (wpHoJhuo).
+  // Dormant until `.bundle()` ships, so the type lands here as a pure addition.
+  GislBundleAlreadyArchivedError,
   // FF1 / 3BIxEnfR — file-first result sink errors.
   GislNoSuchKeyError,
   GislSinkError,
