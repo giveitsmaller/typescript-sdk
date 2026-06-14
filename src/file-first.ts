@@ -588,8 +588,11 @@ export class Recipe {
   /**
    * Reduce file size. `optimize` selects a per-media preset (resolved to
    * concrete wire fields at lower-time, exactly as `client.compress()` does).
+   * `options` carries the full per-op options bag (mirrors
+   * `client.compress(input, options)`); the explicit `optimize` param wins
+   * over any `optimize` key in the bag.
    */
-  compress(optimize?: OptimizeFor): Recipe {
+  compress(optimize?: OptimizeFor, options: Record<string, unknown> = {}): Recipe {
     if (optimize !== undefined && !Object.values(OptimizeFor).includes(optimize)) {
       const allowed = Object.values(OptimizeFor).join(', ');
       throw new GislConfigError(
@@ -597,31 +600,43 @@ export class Recipe {
         { reason: 'invalid_optimize', conflictingFields: ['optimize'] },
       );
     }
-    return this.withStep({ opType: 'compress', options: optimize === undefined ? {} : { optimize } });
-  }
-
-  /** Change format. `format` is lowered verbatim to the `format` wire option. */
-  convert(format: string): Recipe {
-    return this.withStep({ opType: 'convert', options: { format } });
+    return this.withStep({
+      opType: 'compress',
+      options: { ...options, ...(optimize !== undefined ? { optimize } : {}) },
+    });
   }
 
   /**
-   * Generate a preview. Width and/or height in pixels; an omitted dimension is
-   * dropped from the wire options (not sent as `undefined`).
+   * Change format. `format` is lowered verbatim to the `format` wire option;
+   * `options` carries any additional per-op convert options.
    */
-  thumbnail(options: { width?: number; height?: number } = {}): Recipe {
+  convert(format: string, options: Record<string, unknown> = {}): Recipe {
+    // Spread options FIRST so the explicit `format` argument is authoritative —
+    // a `format` key in the bag must NOT silently override the call's format.
+    return this.withStep({ opType: 'convert', options: { ...options, format } });
+  }
+
+  /**
+   * Generate a preview. Width and/or height in pixels; any additional per-op
+   * thumbnail options pass through. An omitted (`undefined`) value is dropped
+   * from the wire options (not sent as `undefined`).
+   */
+  thumbnail(options: { width?: number; height?: number } & Record<string, unknown> = {}): Recipe {
     const wire: Record<string, unknown> = {};
-    if (options.width !== undefined) wire.width = options.width;
-    if (options.height !== undefined) wire.height = options.height;
+    for (const [key, value] of Object.entries(options)) {
+      if (value !== undefined) wire[key] = value;
+    }
     return this.withStep({ opType: 'thumbnail', options: wire });
   }
 
   /**
    * Apply a text watermark. Single-input (the text is an option, not a
-   * secondary file) — lowers to the `text_watermark` op with a `text` option.
+   * secondary file) — lowers to the `text_watermark` op with a `text` option;
+   * `options` carries any additional per-op watermark options.
    */
-  textWatermark(text: string): Recipe {
-    return this.withStep({ opType: 'text_watermark', options: { text } });
+  textWatermark(text: string, options: Record<string, unknown> = {}): Recipe {
+    // Spread options FIRST so the explicit `text` argument is authoritative.
+    return this.withStep({ opType: 'text_watermark', options: { ...options, text } });
   }
 
   /**
@@ -863,13 +878,49 @@ export class Recipe {
       : { type: step.opType, options };
   }
 
-  private lowerCompressOptions(options: Readonly<Record<string, unknown>>): Record<string, unknown> {
-    const optimize = options.optimize as OptimizeFor | undefined;
+  private lowerCompressOptions(stepOptions: Readonly<Record<string, unknown>>): Record<string, unknown> {
+    // Mirror the op-first resolver precedence (OperationBuilder._resolve in
+    // builder.ts): optimize = preset layer, presetOverrides = callPresetOverride
+    // layer, the rest = explicit layer.
+    const { optimize, presetOverrides, ...explicitOptions } = stepOptions as {
+      optimize?: OptimizeFor;
+      presetOverrides?: unknown;
+      [k: string]: unknown;
+    };
+    // Validate the special bag keys at this chokepoint (every compress lowers
+    // through here). The chain methods' shorthand-param guard only covers a
+    // PARAM-supplied optimize; a bag-supplied optimize / presetOverrides must be
+    // validated too, so a bad value raises the typed SDK error rather than
+    // surfacing as a raw preset-lookup error or TypeError downstream. Mirrors
+    // PHP coerceOptimize + OperationBuilder::normalisePresetOverrides.
+    if (optimize !== undefined && !Object.values(OptimizeFor).includes(optimize)) {
+      const allowed = Object.values(OptimizeFor).join(', ');
+      throw new GislConfigError(
+        `compress 'optimize' must be one of ${allowed}; got '${String(optimize)}'.`,
+        { reason: 'invalid_optimize', conflictingFields: ['optimize'] },
+      );
+    }
+    if (
+      presetOverrides !== undefined &&
+      (presetOverrides === null || typeof presetOverrides !== 'object' || Array.isArray(presetOverrides))
+    ) {
+      const got = Array.isArray(presetOverrides)
+        ? 'array'
+        : presetOverrides === null
+          ? 'null'
+          : typeof presetOverrides;
+      throw new GislConfigError(
+        `compress 'presetOverrides' must be a *CompressPresetOptions object; got ${got}.`,
+        { reason: 'invalid_preset_overrides', conflictingFields: ['presetOverrides'] },
+      );
+    }
     const media = this.compressMediaHint();
     if (media === undefined) {
       // Cannot infer a media class (a Blob without a recognised name, or a
       // bare upload id) → preset resolution is impossible. Fail FAST rather
       // than silently dropping an explicit `optimize`; bare compress() is fine.
+      // When no optimize is set, pass any explicit options through verbatim
+      // (exactly as op-first `_resolve` does when media is undefined).
       if (optimize !== undefined) {
         throw new GislConfigError(
           `compress(optimize: ${String(optimize)}) needs a media type to resolve the preset, but the ` +
@@ -878,9 +929,19 @@ export class Recipe {
           { reason: 'media_unknown', conflictingFields: ['optimize'] },
         );
       }
-      return {};
+      // presetOverrides override a resolved preset; with no media there is no
+      // preset to override, so fail fast rather than silently dropping them.
+      if (presetOverrides !== undefined) {
+        throw new GislConfigError(
+          'compress(presetOverrides) needs a media type to resolve the preset to override, but the ' +
+            'input has no inferable media (a pre-uploaded file id or unnamed Blob carries no extension). ' +
+            'Use a path with a file extension.',
+          { reason: 'media_unknown', conflictingFields: ['presetOverrides'] },
+        );
+      }
+      return { ...explicitOptions };
     }
-    const input: ResolveCompressOptionsInput = { media, op: 'compress', explicitOptions: {} };
+    const input: ResolveCompressOptionsInput = { media, op: 'compress', explicitOptions };
     if (media === 'audio') {
       (input as { audioLossless?: boolean }).audioLossless = this.compressAudioLossless();
     }
@@ -890,6 +951,11 @@ export class Recipe {
     if (this.scopedPresetDefaults !== undefined) {
       (input as { scopedPresetDefaults?: PresetDefaults }).scopedPresetDefaults =
         this.scopedPresetDefaults;
+    }
+    if (presetOverrides !== undefined) {
+      // Validated above to be a non-null, non-array object.
+      (input as { presetOverrides?: Readonly<Record<string, unknown>> }).presetOverrides =
+        presetOverrides as Readonly<Record<string, unknown>>;
     }
     if (optimize !== undefined) {
       (input as { optimize?: OptimizeFor }).optimize = optimize;
@@ -953,23 +1019,23 @@ export class FilesRecipe {
    * preset). Reuses {@link Recipe}'s validation — a directly-constructed
    * lowering builds an internal Recipe that throws the same `GislConfigError`.
    */
-  compress(optimize?: OptimizeFor): FilesRecipe {
-    return this.withStep(this.baseRecipe().compress(optimize));
+  compress(optimize?: OptimizeFor, options: Record<string, unknown> = {}): FilesRecipe {
+    return this.withStep(this.baseRecipe().compress(optimize, options));
   }
 
   /** Change every input's format. `format` lowers verbatim to the `format` option. */
-  convert(format: string): FilesRecipe {
-    return this.withStep(this.baseRecipe().convert(format));
+  convert(format: string, options: Record<string, unknown> = {}): FilesRecipe {
+    return this.withStep(this.baseRecipe().convert(format, options));
   }
 
   /** Generate a preview of every input. Omitted dimensions are dropped from the wire options. */
-  thumbnail(options: { width?: number; height?: number } = {}): FilesRecipe {
+  thumbnail(options: { width?: number; height?: number } & Record<string, unknown> = {}): FilesRecipe {
     return this.withStep(this.baseRecipe().thumbnail(options));
   }
 
   /** Apply the same text watermark to every input. */
-  textWatermark(text: string): FilesRecipe {
-    return this.withStep(this.baseRecipe().textWatermark(text));
+  textWatermark(text: string, options: Record<string, unknown> = {}): FilesRecipe {
+    return this.withStep(this.baseRecipe().textWatermark(text, options));
   }
 
   /**
@@ -1293,7 +1359,7 @@ export class MergedRecipe {
   ) {}
 
   /** Reduce the merged output's size. See {@link Recipe.compress}. */
-  compress(optimize?: OptimizeFor): MergedRecipe {
+  compress(optimize?: OptimizeFor, options: Record<string, unknown> = {}): MergedRecipe {
     if (optimize !== undefined && !Object.values(OptimizeFor).includes(optimize)) {
       const allowed = Object.values(OptimizeFor).join(', ');
       throw new GislConfigError(
@@ -1301,19 +1367,25 @@ export class MergedRecipe {
         { reason: 'invalid_optimize', conflictingFields: ['optimize'] },
       );
     }
-    return this.withStep({ opType: 'compress', options: optimize === undefined ? {} : { optimize } });
+    return this.withStep({
+      opType: 'compress',
+      options: { ...options, ...(optimize !== undefined ? { optimize } : {}) },
+    });
   }
 
   /** Change the merged output's format. See {@link Recipe.convert}. */
-  convert(format: string): MergedRecipe {
-    return this.withStep({ opType: 'convert', options: { format } });
+  convert(format: string, options: Record<string, unknown> = {}): MergedRecipe {
+    // Spread options FIRST so the explicit `format` argument is authoritative —
+    // a `format` key in the bag must NOT silently override the call's format.
+    return this.withStep({ opType: 'convert', options: { ...options, format } });
   }
 
   /** Thumbnail the merged output. Omitted dimensions are dropped from the wire options. */
-  thumbnail(options: { width?: number; height?: number } = {}): MergedRecipe {
+  thumbnail(options: { width?: number; height?: number } & Record<string, unknown> = {}): MergedRecipe {
     const wire: Record<string, unknown> = {};
-    if (options.width !== undefined) wire.width = options.width;
-    if (options.height !== undefined) wire.height = options.height;
+    for (const [key, value] of Object.entries(options)) {
+      if (value !== undefined) wire[key] = value;
+    }
     return this.withStep({ opType: 'thumbnail', options: wire });
   }
 
