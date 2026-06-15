@@ -1029,7 +1029,7 @@ export class FilesRecipe {
     return this.withStep(this.baseRecipe().compress(optimize, options));
   }
 
-  /** Change every input's format. `format` lowers verbatim to the `format` option. */
+  /** Change every input's format. `format` lowers to the contract `output_format` wire key (via {@link Recipe.convert}), NOT `format`. */
   convert(format: string, options: Record<string, unknown> = {}): FilesRecipe {
     return this.withStep(this.baseRecipe().convert(format, options));
   }

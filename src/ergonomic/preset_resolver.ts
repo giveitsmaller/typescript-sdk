@@ -425,7 +425,10 @@ function mergeLayer(
 // Validations on the merged wire payload
 // ---------------------------------------------------------------------------
 
-const KNOWN_WIRE_FIELDS: Readonly<Record<PresetMedia, ReadonlySet<string>>> = Object.freeze({
+// Exported so the wire-key conformance guard (tests/unit/wire-key-conformance.test.ts)
+// can pin this hand-maintained allowlist to the generated contract metadata: every
+// field the resolver may emit MUST be a real contract option key for `compress`.
+export const KNOWN_WIRE_FIELDS: Readonly<Record<PresetMedia, ReadonlySet<string>>> = Object.freeze({
   image: new Set(['mode', 'quality', 'metadata', 'icc_profile', 'progressive', 'output_format']),
   audio: new Set(['bitrate', 'channels', 'sample_rate', 'normalize', 'trim_start', 'trim_end']),
   video: new Set(['codec', 'encoding_mode', 'crf', 'target_size_bytes', 'preset', 'width', 'height', 'fit', 'fps', 'faststart', 'audio_codec', 'audio_bitrate', 'trim_start', 'trim_end']),
