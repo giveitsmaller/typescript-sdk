@@ -12,33 +12,41 @@ Node.js 18+ required.
 
 ## Quickstart
 
+The SDK is **file-first**: you start from a file (`.file(path)` for one,
+`.files([paths])` for many) and call operations *on* it — upload, workflow
+creation, and waiting all happen for you.
+
 ```ts
-import { GislClient, uploadSource, OperationType } from '@giveitsmaller/sdk';
+import { gisl, OptimizeFor } from '@giveitsmaller/sdk';
 
-const client = new GislClient({
-  baseUrl: 'https://api.giveitsmaller.com',
-  apiKey: 'REPLACE_ME_API_KEY',
-});
+// baseUrl defaults to https://api.giveitsmaller.com; the key can also come
+// from GISL_API_KEY or ~/.gisl/credentials.
+const client = await gisl.create({ apiKey: 'sk_...' });
 
-const upload = await client.uploadFile('./photo.jpg');
+// One file:
+const result = await client
+  .file('./photo.jpg')
+  .compress(OptimizeFor.Balanced)
+  .run({ maxWait: '5m' });
 
-const workflow = await client.createWorkflow({
-  jobs: [
-    {
-      id: 'compressed',
-      source: uploadSource(upload.fileId),
-      operations: [
-        { type: OperationType.compress, options: { mode: 'lossy', quality: 80 } },
-      ],
-    },
-  ],
-});
+console.log(result.url); // pre-signed download URL
 
-await client.waitForWorkflow(workflow.workflowId);
+// Many files (fan-out) — the same chain:
+const many = await client
+  .files(['./a.jpg', './b.png'])
+  .compress(OptimizeFor.Balanced)
+  .run();
 
-const dls = await client.getWorkflowDownloads(workflow.workflowId);
-console.log('Compressed:', dls.downloads[0].files[0].downloadUrl);
+for (const artifact of many.artifacts) console.log(artifact.url);
 ```
+
+> **Operation-first / low-level also ships.** A lower-level
+> `client.compress(path, { ... }).run()` form (and `thumbnail` / `convert`) is
+> available, and the raw wire client — `client.createWorkflow({ jobs: [...] })`
+> with `uploadSource` / `OperationType` for hand-built job DAGs — is the advanced
+> escape hatch. File-first is the recommended direction the
+> [examples](https://github.com/AntonioCS/giveitsmaller-sdks/tree/main/docs/typescript/examples)
+> build on.
 
 > **Reusing an upload id across clients?** An upload created by an
 > authenticated caller is owned by that caller. If you persist a `fileId` and
