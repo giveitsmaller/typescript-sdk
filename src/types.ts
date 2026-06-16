@@ -525,6 +525,46 @@ export interface WaitOptions {
 }
 
 // ---------------------------------------------------------------------------
+// Upload-probe wait (waitForProbe) — see GislClient.waitForProbe
+// ---------------------------------------------------------------------------
+
+export interface ProbeWaitOptions {
+  /**
+   * Overall wall-clock bound for the poll loop in ms (default: 30000). On
+   * elapse the loop gives up and resolves `{ landed: false, reason: 'timeout' }`
+   * — it never throws for a slow probe (the caller then creates anyway).
+   */
+  timeoutMs?: number;
+  /** Abort the wait early; aborting rejects the promise with `GislAbortError`. */
+  signal?: AbortSignal;
+  /**
+   * Fires once per poll attempt — drive an "analysing video…" UI in the gap
+   * between upload-complete and workflow-create. `attempt` is 1-based;
+   * `elapsedMs` is wall-clock since the wait started.
+   */
+  onPoll?: (info: { attempt: number; elapsedMs: number }) => void;
+}
+
+export interface ProbeWaitResult {
+  /**
+   * True iff the probe landed — i.e. `POST /api/uploads/{id}/probe` returned
+   * 200 (ANY `probeStatus`: ok / corrupt / unsupported_codec / missing_metadata).
+   * The caller proceeds to create the workflow either way; a landed probe lets
+   * the server admit the parallel video split.
+   */
+  landed: boolean;
+  /** The landed probe response — present iff `landed`. */
+  probe?: UploadProbeResponse;
+  /**
+   * Why the wait gave up WITHOUT a landed probe — present iff `!landed`.
+   * `timeout` = the bound elapsed; `prober_error` = repeated 5xx from the
+   * prober. In both cases the caller should create anyway (never-bounce); the
+   * server's size heuristic routes the job (single-task worst case).
+   */
+  reason?: 'timeout' | 'prober_error';
+}
+
+// ---------------------------------------------------------------------------
 // SSE event types (SDK-level typed discriminated union)
 // ---------------------------------------------------------------------------
 

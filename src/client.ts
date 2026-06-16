@@ -112,6 +112,8 @@ import type {
   MultipartCheckpointState,
   PreflightClipError,
   PreflightClipsResult,
+  ProbeWaitOptions,
+  ProbeWaitResult,
   UploadOptions,
   WaitOptions,
   WorkflowCreatePayload,
@@ -286,6 +288,47 @@ function isRetryableStatus(status: number): boolean {
 // before reaching here by the dedicated isAbortError guard in the catch.
 function isRetryableNetworkError(err: unknown): boolean {
   return err instanceof TypeError;
+}
+
+// Parse an HTTP `Retry-After` header into milliseconds. Accepts the two RFC
+// 9110 forms: delta-seconds (e.g. "5") or an HTTP-date. Returns `undefined`
+// for an absent / unparseable / negative value (caller falls back to its own
+// backoff). A past HTTP-date clamps to 0.
+function parseRetryAfterMs(headerValue: string | undefined): number | undefined {
+  if (headerValue === undefined) return undefined;
+  const trimmed = headerValue.trim();
+  if (trimmed === '') return undefined;
+  let ms: number;
+  if (/^\d+$/.test(trimmed)) {
+    ms = Number(trimmed) * 1000;
+  } else {
+    const when = Date.parse(trimmed);
+    if (Number.isNaN(when)) return undefined;
+    ms = when - Date.now();
+  }
+  // A non-positive Retry-After (e.g. "0" or a past HTTP-date) must NOT short-
+  // circuit the backoff to zero — treat it as absent so the caller falls back
+  // to jitter and the loop can't busy-poll until timeout.
+  return ms > 0 ? ms : undefined;
+}
+
+// Cancellable sleep for poll loops. Resolves after `ms`, or rejects with
+// `GislAbortError` if `signal` aborts. Resolves immediately for ms <= 0.
+function cancellableSleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  if (signal?.aborted) return Promise.reject(new GislAbortError('waitForProbe aborted'));
+  if (ms <= 0) return Promise.resolve();
+  return new Promise<void>((resolve, reject) => {
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      reject(new GislAbortError('waitForProbe aborted'));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 // Full-jitter exponential backoff: delay = random(0, base * 2^attemptIndex).
@@ -2692,18 +2735,119 @@ export class GislClient {
   /**
    * Probe an uploaded file for workflow-readiness — detects corruption,
    * unsupported codecs, and pre-assigns the processing class the server
-   * would route the file to. Designed for the long-form merge edge case
-   * where a single bad input would fail the whole workflow.
+   * would route the file to. For video uploads the probe also lands the
+   * codec + duration the server needs to admit the parallel split, so
+   * calling this (or {@link waitForProbe}) before workflow-create is the
+   * structural unlock for the fast video path on the multipart flow.
    *
-   * Currently `availability: planned` — calls return
-   * `GislFeatureNotAvailableError` (422) until the cross-repo Lambda
-   * support ships. Idempotent: probing the same `fileId` twice returns
-   * the cached result.
+   * Endpoint availability is `stable`. The probe runs asynchronously after
+   * upload: until the result has landed, this returns `422`
+   * `feature_not_available` (surfaced as {@link GislFeatureNotAvailableError})
+   * — i.e. that 422 means "probe not landed yet", NOT "not implemented". Once
+   * landed it returns a `200` with any `probeStatus`. Idempotent: probing the
+   * same `fileId` twice returns the cached result. See {@link waitForProbe}
+   * for a bounded poll that turns this into a single ready/gave-up answer.
    */
-  async probeUpload(fileId: string): Promise<UploadProbeResponse> {
+  async probeUpload(
+    fileId: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<UploadProbeResponse> {
     return this.request('POST', `/api/uploads/${encodeURIComponent(fileId)}/probe`, {
       deserialize: UploadProbeResponseFromJSON,
+      signal: options.signal,
     });
+  }
+
+  /**
+   * Bounded poll of {@link probeUpload} until the probe lands — the helper
+   * frontends call between upload-complete and workflow-create so the server
+   * sees the video's codec + duration and admits the ~3× parallel split.
+   *
+   * Loop (per the API wire contract):
+   * - `422 feature_not_available` → probe not landed yet → keep polling
+   *   (exponential full-jitter backoff, honouring a `Retry-After` header when
+   *   present, clamped to the remaining budget).
+   * - any `200` → STOP. Resolves `{ landed: true, probe }` regardless of
+   *   `probeStatus` (ok / corrupt / unsupported_codec / missing_metadata) —
+   *   the server + fan-out gate decide split-vs-single from the landed
+   *   metadata; the SDK does not interpret it.
+   * - `5xx` (prober crash) → retry a couple of times, then give up.
+   * - timeout → give up.
+   *
+   * **Never bounces:** on give-up (timeout / repeated 5xx / transport) it
+   * resolves `{ landed: false, reason }` rather than throwing, so the caller
+   * proceeds to create the workflow anyway (the server's size heuristic routes
+   * it; worst case = today's single-task behaviour). Genuine failures —
+   * `404 upload_not_found`, auth errors, or caller abort — DO propagate (they
+   * are not "probe not ready"), so a real problem is never silently swallowed.
+   *
+   * `timeoutMs` bounds the OVERALL poll, checked between attempts; each
+   * in-flight probe request is bounded by the client's own per-request timeout
+   * (a hung request surfaces as a transient and the next deadline check gives
+   * up). So a single slow probe may run up to one client-request-timeout before
+   * the wait returns.
+   */
+  async waitForProbe(fileId: string, options: ProbeWaitOptions = {}): Promise<ProbeWaitResult> {
+    const timeoutMs = sanitiseBaseMs(options.timeoutMs, 30_000);
+    const signal = options.signal;
+    const start = Date.now();
+    const deadline = start + timeoutMs;
+    const BASE_BACKOFF_MS = 250;
+    const MAX_PROBER_RETRIES = 2;
+
+    let attempt = 0;
+    // Counts transient probe-call failures (5xx + transport + per-request
+    // timeout) — repeated transients give up so the caller creates anyway
+    // (never-bounce).
+    let transientFailures = 0;
+    for (;;) {
+      if (signal?.aborted) throw new GislAbortError('waitForProbe aborted');
+      const remainingBeforeAttempt = deadline - Date.now();
+      if (remainingBeforeAttempt <= 0) return { landed: false, reason: 'timeout' };
+      attempt += 1;
+      options.onPoll?.({ attempt, elapsedMs: Date.now() - start });
+
+      let retryAfterMs: number | undefined;
+      try {
+        const probe = await this.probeUpload(fileId, { signal });
+        return { landed: true, probe };
+      } catch (err) {
+        // A CALLER abort always propagates (it is not "probe not ready").
+        if (signal?.aborted) {
+          throw err instanceof GislAbortError ? err : new GislAbortError('waitForProbe aborted');
+        }
+        if (err instanceof GislFeatureNotAvailableError) {
+          // Not landed yet — keep polling.
+          retryAfterMs = parseRetryAfterMs(err.responseHeaders?.['retry-after']);
+        } else if (
+          (err instanceof GislApiError && err.statusCode >= 500) ||
+          err instanceof GislTimeoutError ||
+          isRetryableNetworkError(err)
+        ) {
+          // Transient probe-call failure — a 5xx, the client's own per-request
+          // timeout, or a transport error. Retry a couple of times, then give
+          // up (never-bounce: the caller creates anyway).
+          transientFailures += 1;
+          if (transientFailures > MAX_PROBER_RETRIES) {
+            return { landed: false, reason: 'prober_error' };
+          }
+          retryAfterMs =
+            err instanceof GislApiError
+              ? parseRetryAfterMs(err.responseHeaders?.['retry-after'])
+              : undefined;
+        } else {
+          // 404 upload_not_found, auth, validation, or any other typed/unexpected
+          // error is a real failure, not "probe not ready" — propagate.
+          throw err;
+        }
+      }
+
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return { landed: false, reason: 'timeout' };
+      const backoff = retryAfterMs ?? fullJitterDelay(BASE_BACKOFF_MS, attempt - 1);
+      await cancellableSleep(Math.min(backoff, remaining), signal);
+      if (Date.now() >= deadline) return { landed: false, reason: 'timeout' };
+    }
   }
 
   /**

@@ -24,6 +24,8 @@ export type {
   GetSchemaResult,
   PreflightClipError,
   PreflightClipsResult,
+  ProbeWaitOptions,
+  ProbeWaitResult,
   GislClientConfig,
   GislSseEvent,
   UploadOptions,
