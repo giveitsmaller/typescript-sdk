@@ -391,11 +391,27 @@ export interface RunOptions {
   readonly useSSE?: boolean;
   /** Override the poll interval used by the fallback (ms). */
   readonly pollIntervalMs?: number;
+  /**
+   * Best-effort probe-before-create for a VIDEO upload that went multipart:
+   * after upload, before createWorkflow, wait for the server's probe to land
+   * so it admits the parallel video split. Default `true`; set `false` to
+   * skip the wait entirely. Never-bounce — a give-up just proceeds to create.
+   */
+  readonly probeBeforeCreate?: boolean;
+  /** Overall timeout (ms) for the probe-before-create wait. */
+  readonly probeTimeoutMs?: number;
 }
 
 export interface SubmitOptions {
   /** Webhook URL — wired to `WorkflowCreateRequest.callback_url`. */
   readonly webhook: string;
+  /**
+   * Best-effort probe-before-create for a VIDEO upload that went multipart.
+   * Default `true`; set `false` to skip the wait. See {@link RunOptions}.
+   */
+  readonly probeBeforeCreate?: boolean;
+  /** Overall timeout (ms) for the probe-before-create wait. */
+  readonly probeTimeoutMs?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -521,6 +537,27 @@ export class OperationBuilder {
       );
     }
 
+    // Best-effort probe-before-create for a multipart video upload (never-bounce).
+    // Capped to the remaining maxWait budget so a slow probe cannot push
+    // createWorkflow past the caller's deadline.
+    await this.client.maybeWaitForVideoProbe(uploadResp.fileId, {
+      enabled: options.probeBeforeCreate ?? true,
+      isVideo: _detectCompressMedia(this.input) === 'video',
+      sizeBytes: uploadResp.sizeBytes,
+      timeoutMs: _cappedProbeTimeoutMs(options.probeTimeoutMs, deadline),
+      signal,
+    });
+    // A cancel arriving during the FINAL successful probe request must not still
+    // create the workflow (maybeWaitForVideoProbe returns landed without a final
+    // abort re-check), so check here BEFORE createWorkflow.
+    _checkAborted(signal);
+    // RE-CHECK the deadline AFTER the probe wait (it consumes time).
+    if (Date.now() >= deadline) {
+      throw new GislTimeoutError(
+        'Probe wait completed but maxWait elapsed before workflow could be created',
+      );
+    }
+
     // 2. Build + create the workflow.
     const job: JobDefinitionPayload = {
       id: 'op',
@@ -573,6 +610,14 @@ export class OperationBuilder {
     // call before the upload — same fail-early contract as run().
     const resolved = this._resolve();
     const uploadResp = await this.client.uploadFile(this.input);
+
+    // Best-effort probe-before-create for a multipart video upload (never-bounce).
+    await this.client.maybeWaitForVideoProbe(uploadResp.fileId, {
+      enabled: options.probeBeforeCreate ?? true,
+      isVideo: _detectCompressMedia(this.input) === 'video',
+      sizeBytes: uploadResp.sizeBytes,
+      timeoutMs: options.probeTimeoutMs,
+    });
 
     const job: JobDefinitionPayload = {
       id: 'op',
@@ -1096,6 +1141,27 @@ export function _checkAborted(signal: AbortSignal | undefined): void {
   if (signal !== undefined && signal.aborted) {
     throw new DOMException('Aborted', 'AbortError');
   }
+}
+
+/**
+ * Cap a best-effort probe-before-create timeout to the remaining `maxWait`
+ * budget so the probe wait can never push createWorkflow past the caller's
+ * deadline. Under a deadline an UNSET `probeTimeoutMs` becomes the remaining
+ * budget (never the 30s waitForProbe default); a set value is clamped to the
+ * remaining budget. With no deadline (the `submit()` fire-and-forget path),
+ * `probeTimeoutMs` passes through unchanged.
+ *
+ * @internal — exported for reuse by `file-first.ts` + `merge.ts`.
+ */
+export function _cappedProbeTimeoutMs(
+  probeTimeoutMs: number | undefined,
+  deadline: number | undefined,
+): number | undefined {
+  if (deadline === undefined) {
+    return probeTimeoutMs;
+  }
+  const remaining = Math.max(0, deadline - Date.now());
+  return probeTimeoutMs !== undefined ? Math.min(probeTimeoutMs, remaining) : remaining;
 }
 
 async function sleep(ms: number, signal: AbortSignal | undefined): Promise<void> {

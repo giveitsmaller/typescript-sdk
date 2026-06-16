@@ -44,8 +44,10 @@ import {
   SseEndedWithoutTerminal,
 } from './errors.js';
 import {
+  _cappedProbeTimeoutMs,
   _checkAborted,
   _consumeSseToTerminal,
+  _detectCompressMedia,
   _parseMaxWait,
   _pollToTerminal,
   _projectResult,
@@ -196,15 +198,31 @@ export class MergeBuilder {
 
     // 2. Upload each unique asset exactly ONCE. Pass the deadline so the
     // upload loop can abort mid-batch on a slow connection.
+    const probeTargets: { fileId: string; isVideo: boolean; sizeBytes?: number }[] = [];
     const uploadedByAssetId = await this.uploadUniqueAssets(plan.uniqueAssets, {
       signal,
       onProgress,
       deadline,
+      probeTargets,
     });
     _checkAborted(signal);
     if (Date.now() >= deadline) {
       throw new GislTimeoutError(
         `Upload(s) completed but maxWait elapsed before merge workflow could be created`,
+      );
+    }
+
+    // Best-effort probe-before-create for the multipart-video inputs (capped to
+    // the remaining maxWait budget).
+    await this.waitForVideoProbes(probeTargets, options.probeBeforeCreate, options.probeTimeoutMs, signal, deadline);
+    // A cancel arriving during a FINAL successful probe request must not still
+    // create the workflow (the probe waits return landed without a final abort
+    // re-check), so check here BEFORE createWorkflow.
+    _checkAborted(signal);
+    // RE-CHECK the deadline AFTER the probe waits (they consume time).
+    if (Date.now() >= deadline) {
+      throw new GislTimeoutError(
+        `Probe wait completed but maxWait elapsed before merge workflow could be created`,
       );
     }
 
@@ -250,7 +268,12 @@ export class MergeBuilder {
 
   async submit(options: SubmitOptions): Promise<Handle> {
     const plan = this.planSequence();
-    const uploadedByAssetId = await this.uploadUniqueAssets(plan.uniqueAssets, {});
+    const probeTargets: { fileId: string; isVideo: boolean; sizeBytes?: number }[] = [];
+    const uploadedByAssetId = await this.uploadUniqueAssets(plan.uniqueAssets, { probeTargets });
+
+    // Best-effort probe-before-create for the multipart-video inputs.
+    // Fire-and-forget — no deadline, so no cap (mirrors Recipe::submit()).
+    await this.waitForVideoProbes(probeTargets, options.probeBeforeCreate, options.probeTimeoutMs, undefined, undefined);
 
     const payload = this.buildPayload(plan, uploadedByAssetId);
     payload.callback_url = options.webhook;
@@ -396,7 +419,16 @@ export class MergeBuilder {
 
   private async uploadUniqueAssets(
     uniqueAssets: ReadonlyMap<string, Asset>,
-    opts: { signal?: AbortSignal; onProgress?: (e: ProgressEvent) => void; deadline?: number },
+    opts: {
+      signal?: AbortSignal;
+      onProgress?: (e: ProgressEvent) => void;
+      deadline?: number;
+      // Out-parameter: each freshly-uploaded path asset records its probe-gate
+      // inputs here (handle assets carry no local mime/size, so they are never
+      // probed). Per-asset video detection — merge's inferMediaKind is the
+      // OUTPUT media, not each input's.
+      probeTargets?: { fileId: string; isVideo: boolean; sizeBytes?: number }[];
+    },
   ): Promise<Map<string, string>> {
     const uploaded = new Map<string, string>();
     for (const [id, a] of uniqueAssets) {
@@ -420,8 +452,42 @@ export class MergeBuilder {
       }
       const resp = await this.client.uploadFile(a.path, uploadOpts);
       uploaded.set(id, resp.fileId);
+      opts.probeTargets?.push({
+        fileId: resp.fileId,
+        isVideo: _detectCompressMedia(a.path) === 'video',
+        sizeBytes: resp.sizeBytes,
+      });
     }
     return uploaded;
+  }
+
+  /**
+   * Best-effort, concurrent probe-before-create for the multipart-video
+   * inputs (never-bounce; each bounded by the SAME capped timeout, so the
+   * aggregate wall-clock stays ~timeout rather than N×timeout). When `deadline`
+   * is set (the `run()` path) the timeout is capped to the remaining maxWait
+   * budget so the waits cannot push createWorkflow past the caller's deadline;
+   * `submit()` passes `undefined` (fire-and-forget, no cap).
+   */
+  private async waitForVideoProbes(
+    probeTargets: readonly { fileId: string; isVideo: boolean; sizeBytes?: number }[],
+    probeBeforeCreate: boolean | undefined,
+    probeTimeoutMs: number | undefined,
+    signal: AbortSignal | undefined,
+    deadline: number | undefined,
+  ): Promise<void> {
+    const cappedProbeTimeoutMs = _cappedProbeTimeoutMs(probeTimeoutMs, deadline);
+    await Promise.all(
+      probeTargets.map((t) =>
+        this.client.maybeWaitForVideoProbe(t.fileId, {
+          enabled: probeBeforeCreate ?? true,
+          isVideo: t.isVideo,
+          sizeBytes: t.sizeBytes,
+          timeoutMs: cappedProbeTimeoutMs,
+          signal,
+        }),
+      ),
+    );
   }
 
   private buildPayload(

@@ -104,7 +104,7 @@ describe('MergedRecipe — guards', () => {
       undefined,
       undefined,
       // A client whose transport must never be reached; the <2 guard fires first.
-      { uploadFile, createWorkflow } as unknown as GislClient,
+      { uploadFile, createWorkflow, maybeWaitForVideoProbe: vi.fn(async () => undefined) } as unknown as GislClient,
     );
 
     await expect(merged.submit()).rejects.toThrow(/at least 2 inputs/);
@@ -120,7 +120,7 @@ describe('MergedRecipe — guards', () => {
       [],
       undefined,
       undefined,
-      { uploadFile, createWorkflow: vi.fn() } as unknown as GislClient,
+      { uploadFile, createWorkflow: vi.fn(), maybeWaitForVideoProbe: vi.fn(async () => undefined) } as unknown as GislClient,
     );
 
     await expect(merged.submit()).rejects.toThrow(/at most 10 inputs/);
@@ -135,7 +135,7 @@ describe('MergedRecipe — guards', () => {
       [],
       undefined,
       undefined,
-      { uploadFile, createWorkflow: vi.fn() } as unknown as GislClient,
+      { uploadFile, createWorkflow: vi.fn(), maybeWaitForVideoProbe: vi.fn(async () => undefined) } as unknown as GislClient,
     );
 
     await expect(merged.submit()).rejects.toThrow(/output_type/);

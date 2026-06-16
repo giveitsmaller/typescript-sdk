@@ -23,6 +23,7 @@ interface MockClientHandles {
   getWorkflowStatus: ReturnType<typeof vi.fn>;
   getWorkflowDownloads: ReturnType<typeof vi.fn>;
   streamEvents: ReturnType<typeof vi.fn>;
+  maybeWaitForVideoProbe: ReturnType<typeof vi.fn>;
   client: GislClient;
 }
 
@@ -62,14 +63,27 @@ function makeMockClient(): MockClientHandles {
   const streamEvents = vi.fn(async function* (_id: string, _opts?: unknown) {
     yield { event: 'workflow.completed', data: { status: 'completed' } };
   });
+  // YOA6FpFr PR2 — the upload→create seam now calls maybeWaitForVideoProbe
+  // before createWorkflow. A no-op default keeps the orchestration tests
+  // network-free (the gate's own behaviour is covered in its unit test).
+  const maybeWaitForVideoProbe = vi.fn(async () => undefined);
   const client = {
     uploadFile,
     createWorkflow,
     getWorkflowStatus,
     getWorkflowDownloads,
     streamEvents,
+    maybeWaitForVideoProbe,
   } as unknown as GislClient;
-  return { uploadFile, createWorkflow, getWorkflowStatus, getWorkflowDownloads, streamEvents, client };
+  return {
+    uploadFile,
+    createWorkflow,
+    getWorkflowStatus,
+    getWorkflowDownloads,
+    streamEvents,
+    maybeWaitForVideoProbe,
+    client,
+  };
 }
 
 /** Build a Recipe carrying the mock client, mirroring the `gisl().file()` wiring. */

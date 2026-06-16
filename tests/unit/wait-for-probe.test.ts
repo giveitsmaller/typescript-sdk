@@ -99,7 +99,7 @@ describe('GislClient.waitForProbe', () => {
   });
 
   it('gives up with reason "timeout" when the probe never lands (never throws)', async () => {
-    fetchSpy.mockResolvedValue(notLanded());
+    fetchSpy.mockImplementation(() => Promise.resolve(notLanded()));
     const result = await client.waitForProbe(FID, { timeoutMs: 30 });
     expect(result.landed).toBe(false);
     expect(result.reason).toBe('timeout');
@@ -149,7 +149,7 @@ describe('GislClient.waitForProbe', () => {
 
   it('honours Retry-After but CLAMPS it to the remaining budget (no hour-long wait)', async () => {
     // Retry-After: 3600s, but timeoutMs is 40ms → must clamp + give up fast, not wait an hour.
-    fetchSpy.mockResolvedValue(notLanded('3600'));
+    fetchSpy.mockImplementation(() => Promise.resolve(notLanded('3600')));
     const start = Date.now();
     const result = await client.waitForProbe(FID, { timeoutMs: 40 });
     expect(result.landed).toBe(false);
@@ -166,7 +166,7 @@ describe('GislClient.waitForProbe', () => {
 
   it('throws GislAbortError when aborted mid-wait (during the backoff sleep)', async () => {
     const ac = new AbortController();
-    fetchSpy.mockResolvedValue(notLanded());
+    fetchSpy.mockImplementation(() => Promise.resolve(notLanded()));
     // Abort during the first poll's onPoll → the post-422 backoff sleep rejects.
     await expect(
       client.waitForProbe(FID, {

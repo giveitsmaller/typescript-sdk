@@ -373,6 +373,7 @@ interface MockClientHandles {
   getWorkflowStatus: ReturnType<typeof vi.fn>;
   getWorkflowDownloads: ReturnType<typeof vi.fn>;
   streamEvents: ReturnType<typeof vi.fn>;
+  maybeWaitForVideoProbe: ReturnType<typeof vi.fn>;
   client: GislClient;
 }
 
@@ -400,14 +401,25 @@ function makeMockClient(): MockClientHandles {
   const streamEvents = vi.fn(async function* (_id: string) {
     yield { event: 'workflow.completed', data: { status: 'completed' } };
   });
+  // YOA6FpFr PR2 — no-op gate stub (the fan-out seam calls it per video input).
+  const maybeWaitForVideoProbe = vi.fn(async () => undefined);
   const client = {
     uploadFile,
     createWorkflow,
     getWorkflowStatus,
     getWorkflowDownloads,
     streamEvents,
+    maybeWaitForVideoProbe,
   } as unknown as GislClient;
-  return { uploadFile, createWorkflow, getWorkflowStatus, getWorkflowDownloads, streamEvents, client };
+  return {
+    uploadFile,
+    createWorkflow,
+    getWorkflowStatus,
+    getWorkflowDownloads,
+    streamEvents,
+    maybeWaitForVideoProbe,
+    client,
+  };
 }
 
 function boundFilesRecipe(mock: MockClientHandles, ...inputs: ReturnType<typeof fileInput.uploadId>[]): FilesRecipe {

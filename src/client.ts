@@ -2851,6 +2851,23 @@ export class GislClient {
   }
 
   /**
+   * Best-effort probe-before-create for a VIDEO upload that went multipart.
+   * No-op unless enabled AND isVideo AND the upload exceeded the multipart
+   * threshold (i.e. it was a multipart upload — small single-shot videos skip
+   * the wait). Delegates to {@link waitForProbe} (never-bounce): a give-up just
+   * returns; genuine failures / caller abort propagate. The caller passes
+   * `isVideo` so the low-level client never imports ergonomic media detection.
+   */
+  async maybeWaitForVideoProbe(
+    fileId: string,
+    opts: { enabled: boolean; isVideo: boolean; sizeBytes?: number; timeoutMs?: number; signal?: AbortSignal },
+  ): Promise<void> {
+    if (!opts.enabled || !opts.isVideo) return;
+    if (opts.sizeBytes === undefined || opts.sizeBytes <= this.multipartThreshold) return;
+    await this.waitForProbe(fileId, { timeoutMs: opts.timeoutMs, signal: opts.signal });
+  }
+
+  /**
    * Probe N uploaded files in parallel and partition the results by
    * outcome. Returns `{ ok, rejected, errors }` so the caller can
    * cleanly drop bad clips before submitting a long-form merge

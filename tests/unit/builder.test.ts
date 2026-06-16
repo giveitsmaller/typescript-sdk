@@ -19,6 +19,7 @@ interface MockClientHandles {
   getWorkflowStatus: ReturnType<typeof vi.fn>;
   getWorkflowDownloads: ReturnType<typeof vi.fn>;
   streamEvents: ReturnType<typeof vi.fn>;
+  maybeWaitForVideoProbe: ReturnType<typeof vi.fn>;
   client: GislClient;
 }
 
@@ -63,14 +64,25 @@ function makeMockClient(): MockClientHandles {
     // eslint-disable-next-line no-unreachable
     yield;
   });
+  // YOA6FpFr PR2 — no-op gate stub (OperationBuilder.run/submit call it before create).
+  const maybeWaitForVideoProbe = vi.fn(async () => undefined);
   const client = {
     uploadFile,
     createWorkflow,
     getWorkflowStatus,
     getWorkflowDownloads,
     streamEvents,
+    maybeWaitForVideoProbe,
   } as unknown as GislClient;
-  return { uploadFile, createWorkflow, getWorkflowStatus, getWorkflowDownloads, streamEvents, client };
+  return {
+    uploadFile,
+    createWorkflow,
+    getWorkflowStatus,
+    getWorkflowDownloads,
+    streamEvents,
+    maybeWaitForVideoProbe,
+    client,
+  };
 }
 
 beforeEach(() => {

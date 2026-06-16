@@ -72,7 +72,7 @@ describe('ArchivedRecipe — guards', () => {
     const archived = new ArchivedRecipe(
       [fileInput.path('only.pdf')],
       {},
-      { uploadFile, createWorkflow: vi.fn() } as unknown as GislClient,
+      { uploadFile, createWorkflow: vi.fn(), maybeWaitForVideoProbe: vi.fn(async () => undefined) } as unknown as GislClient,
     );
 
     await expect(archived.submit()).rejects.toThrow(/at least 2 inputs/);
@@ -84,7 +84,7 @@ describe('ArchivedRecipe — guards', () => {
     const archived = new ArchivedRecipe(
       Array.from({ length: 51 }, (_, i) => fileInput.path(`f-${i}.pdf`)),
       {},
-      { uploadFile, createWorkflow: vi.fn() } as unknown as GislClient,
+      { uploadFile, createWorkflow: vi.fn(), maybeWaitForVideoProbe: vi.fn(async () => undefined) } as unknown as GislClient,
     );
 
     await expect(archived.submit()).rejects.toThrow(/at most 50 inputs/);
