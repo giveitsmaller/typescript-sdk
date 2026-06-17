@@ -54,6 +54,7 @@ import {
   isFanoutStatus,
   isMergeStatus,
   isArchiveStatus,
+  isWatermarkStatus,
   type Downloader,
 } from './file-first.js';
 import { LazyHttpDownloader } from './lazy-downloader.js';
@@ -290,6 +291,20 @@ export class Handle {
         this.workflowId,
         finalStatus,
         archiveDownloads,
+        null,
+        downloader,
+      );
+    }
+    // A fluent `file(...).watermark(overlay)` — project ONLY the watermark
+    // output, filtering the `src_*` (base/overlay) passthrough plumbing. Matches
+    // WatermarkedRecipe.run()'s `ref === 'watermark'` filter so a
+    // submitted/reattached watermark handle never surfaces the raw inputs.
+    if (isWatermarkStatus(finalStatus)) {
+      const watermarkDownloads = jobDownloads.filter((d) => d.ref === 'watermark');
+      return projectDownloadsToRunResult(
+        this.workflowId,
+        finalStatus,
+        watermarkDownloads,
         null,
         downloader,
       );

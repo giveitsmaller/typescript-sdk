@@ -143,6 +143,12 @@ export { MergedRecipe } from './file-first.js';
 // terminal ArchivedRecipe (zip / tar.gz; no post-bundle chain), then run()/submit().
 export { ArchivedRecipe } from './file-first.js';
 export type { ArchiveRecipeOptions } from './file-first.js';
+// File-first multi-input watermark (FF4a / Z7zTr789) — `client.file(base)
+// .watermark(overlay, opts)` returns a single-output WatermarkedRecipe you chain
+// post-watermark ops on, then run()/submit(). Routes image_watermark / video_watermark
+// by base media; gates planned/unsupported bases locally pre-upload.
+export { WatermarkedRecipe } from './file-first.js';
+export type { WatermarkWireOp } from './file-first.js';
 // `HttpDownloader` (Node streaming downloader) is re-exported from the Node-only
 // entry `index.ts`, NOT here — it statically imports node:fs/node:stream.
 // `projectDownloadsToRunResult` is intentionally NOT re-exported here — it is an

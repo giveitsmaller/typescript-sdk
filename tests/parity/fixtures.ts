@@ -103,10 +103,30 @@ export interface FixtureLoweringOp {
   readonly text?: string;
 }
 
+/**
+ * FF4a (`Z7zTr789`) — watermark overlay sub-block on a `lowering` fixture. The
+ * `overlay` is a secondary file-NODE (its own file + resolved id + optional own
+ * steps); `options` are the wire watermark options; `post` are the
+ * post-watermark ops (compress/convert/thumbnail ONLY — text_watermark rejected).
+ * When present, the base `operations` (preceding steps) MAY be empty.
+ */
+export interface FixtureWatermarkOverlay {
+  readonly file: FixtureLoweringFile;
+  readonly resolvedFileId: string;
+  readonly operations?: readonly FixtureLoweringOp[];
+}
+export interface FixtureWatermark {
+  readonly overlay: FixtureWatermarkOverlay;
+  readonly options?: Readonly<Record<string, unknown>>;
+  readonly post?: readonly FixtureLoweringOp[];
+}
+
 export interface FixtureLowering {
   readonly file: FixtureLoweringFile;
   readonly resolvedFileId: string;
   readonly operations: readonly FixtureLoweringOp[];
+  /** FF4a — when present, this lowers a `file(base).watermark(overlay, opts)`. */
+  readonly watermark?: FixtureWatermark;
 }
 
 /**
@@ -837,9 +857,13 @@ export function validateFixture(raw: unknown, file: string): Fixture {
 }
 
 const LOWERING_OPS = new Set(['compress', 'convert', 'thumbnail', 'text_watermark']);
-const LOWERING_KEYS = new Set(['file', 'resolvedFileId', 'operations']);
+const LOWERING_KEYS = new Set(['file', 'resolvedFileId', 'operations', 'watermark']);
 const LOWERING_FILE_KEYS = new Set(['kind', 'path', 'uploadId', 'key']);
 const LOWERING_OP_KEYS = new Set(['op', 'optimize', 'format', 'width', 'height', 'text']);
+// FF4a (Z7zTr789) — watermark sub-block keys + post-op grammar (no text_watermark).
+const WATERMARK_KEYS = new Set(['overlay', 'options', 'post']);
+const WATERMARK_OVERLAY_KEYS = new Set(['file', 'resolvedFileId', 'operations']);
+const WATERMARK_POST_OPS = new Set(['compress', 'convert', 'thumbnail']);
 // FF2b (tywwynmN) — run-mode block keys: lowering's file + operations plus the
 // run-only maxWait / pollIntervalMs.
 const RUN_KEYS = new Set(['file', 'operations', 'maxWait', 'pollIntervalMs']);
@@ -1135,7 +1159,10 @@ function validateLowering(value: unknown, ctx: string): FixtureLowering {
     throw new Error(`${ctx} resolvedFileId must equal file.uploadId for kind=upload_id`);
   }
 
-  if (!Array.isArray(v.operations) || v.operations.length === 0) {
+  // FF4a — a `watermark` block makes `operations` the BASE preceding steps,
+  // which MAY be empty; a plain chain lowering still requires non-empty ops.
+  const hasWatermark = v.watermark !== undefined;
+  if (!Array.isArray(v.operations) || (v.operations.length === 0 && !hasWatermark)) {
     throw new Error(`${ctx} operations must be a non-empty array`);
   }
   const operations = v.operations.map((op, i): FixtureLoweringOp => {
@@ -1155,8 +1182,83 @@ function validateLowering(value: unknown, ctx: string): FixtureLowering {
     file: file as unknown as FixtureLoweringFile,
     resolvedFileId,
     operations,
+    ...(hasWatermark ? { watermark: validateWatermark(v.watermark, `${ctx} watermark`) } : {}),
   };
   return result;
+}
+
+/**
+ * FF4a (Z7zTr789) — validate the `lowering.watermark` sub-block: the overlay
+ * file-node (file + resolvedFileId + optional own ops), the wire options bag,
+ * and the post-watermark ops (compress/convert/thumbnail ONLY — text_watermark
+ * is rejected, matching the WatermarkedRecipe post-verb set). Mirrors the PHP
+ * `FixtureLoader::validateWatermark`.
+ */
+function validateWatermark(value: unknown, ctx: string): FixtureWatermark {
+  requireObject(value, ctx, '(root)');
+  const v = value as Record<string, unknown>;
+  rejectUnknownKeys(v, WATERMARK_KEYS, ctx);
+
+  requireObject(v.overlay, ctx, 'overlay');
+  const ov = v.overlay as Record<string, unknown>;
+  rejectUnknownKeys(ov, WATERMARK_OVERLAY_KEYS, `${ctx} overlay`);
+  requireObject(ov.file, ctx, 'overlay.file');
+  const ofile = ov.file as Record<string, unknown>;
+  rejectUnknownKeys(ofile, LOWERING_FILE_KEYS, `${ctx} overlay.file`);
+  const okind = ofile.kind;
+  if (okind !== 'path' && okind !== 'upload_id') {
+    throw new Error(`${ctx} overlay.file.kind must be 'path' or 'upload_id'`);
+  }
+  if (okind === 'path' && (typeof ofile.path !== 'string' || ofile.path === '')) {
+    throw new Error(`${ctx} overlay.file.path must be a non-empty string when kind=path`);
+  }
+  if (okind === 'upload_id' && (typeof ofile.uploadId !== 'string' || ofile.uploadId === '')) {
+    throw new Error(`${ctx} overlay.file.uploadId must be a non-empty string when kind=upload_id`);
+  }
+  const overlayResolvedFileId = requireString(ov.resolvedFileId, ctx, 'overlay.resolvedFileId');
+  if (okind === 'upload_id' && ofile.uploadId !== overlayResolvedFileId) {
+    throw new Error(`${ctx} overlay.resolvedFileId must equal overlay.file.uploadId for kind=upload_id`);
+  }
+
+  const overlayOps = validateWatermarkOps(ov.operations, LOWERING_OPS, `${ctx} overlay.operations`);
+  const post = validateWatermarkOps(v.post, WATERMARK_POST_OPS, `${ctx} post`);
+
+  if (v.options !== undefined) {
+    requireObject(v.options, ctx, 'options');
+  }
+
+  const overlay: FixtureWatermarkOverlay = {
+    file: ofile as unknown as FixtureLoweringFile,
+    resolvedFileId: overlayResolvedFileId,
+    ...(overlayOps.length > 0 ? { operations: overlayOps } : {}),
+  };
+  return {
+    overlay,
+    ...(v.options !== undefined ? { options: v.options as Record<string, unknown> } : {}),
+    ...(post.length > 0 ? { post } : {}),
+  };
+}
+
+/** Validate an optional op array against an allowed-op set (FF4a overlay/post). */
+function validateWatermarkOps(
+  value: unknown,
+  allowed: ReadonlySet<string>,
+  ctx: string,
+): FixtureLoweringOp[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new Error(`${ctx} must be an array`);
+  }
+  return value.map((op, i): FixtureLoweringOp => {
+    requireObject(op, ctx, `[${i}]`);
+    const o = op as Record<string, unknown>;
+    rejectUnknownKeys(o, LOWERING_OP_KEYS, `${ctx}[${i}]`);
+    if (typeof o.op !== 'string' || !allowed.has(o.op)) {
+      throw new Error(`${ctx}[${i}].op must be one of ${[...allowed].join('|')}`);
+    }
+    validateLoweringOpParams(o.op, o, `${ctx}[${i}]`);
+    return o as unknown as FixtureLoweringOp;
+  });
 }
 
 /**

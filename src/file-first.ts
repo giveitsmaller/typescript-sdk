@@ -505,6 +505,32 @@ export function isArchiveStatus(finalStatus: WorkflowStatusResponse): boolean {
 }
 
 /**
+ * True when a terminal status describes a fluent `file(...).watermark(overlay)`
+ * — at least one job ref `watermark` and every OTHER job ref is `src_{i}` (the
+ * ids the {@link WatermarkedRecipe} lowering assigns: `src_0` base, `src_1`
+ * overlay). Lets {@link Handle.wait}/{@link Handle.result} AND
+ * {@link WatermarkedRecipe.run} project ONLY the watermark output — filtering
+ * the `src_*` passthrough plumbing — even after a `client.workflow(id)` reattach.
+ * Mutually exclusive with {@link isFanoutStatus} / {@link isMergeStatus} /
+ * {@link isArchiveStatus}.
+ *
+ * @internal Exported for the file-first `Handle`; not part of the public API.
+ */
+export function isWatermarkStatus(finalStatus: WorkflowStatusResponse): boolean {
+  const jobs = finalStatus.jobs ?? [];
+  if (jobs.length === 0) return false;
+  let hasWatermark = false;
+  for (const job of jobs) {
+    if (job.ref === 'watermark') {
+      hasWatermark = true;
+      continue;
+    }
+    if (!_MERGE_SRC_REF.test(job.ref)) return false;
+  }
+  return hasWatermark;
+}
+
+/**
  * The primary file a {@link Recipe} operates on — the "subject" of the
  * file-first surface. A discriminated union over the ways a caller names an
  * input:
@@ -647,6 +673,36 @@ export class Recipe {
   }
 
   /**
+   * Composite an image OVERLAY onto this file (a multi-input op). `overlay` is a
+   * secondary file-NODE (a {@link Recipe} — e.g. `client.file('logo.png')`),
+   * itself optionally processed first. Routes by THIS file's effective media:
+   * image base → `image_watermark` (stable), video base → `video_watermark`
+   * (beta). Audio/document/animated-GIF/unsupported-subtype/undetectable bases
+   * throw locally BEFORE any upload (the planned-op gate). `options` carries the
+   * wire watermark options (`anchor`, `opacity`, `margin_x`, `margin_y`,
+   * `overlay_width`). Returns a {@link WatermarkedRecipe} (chain post-watermark
+   * `compress`/`convert`/`thumbnail`, then `run`/`submit`). Distinct from
+   * {@link textWatermark} (single-input text overlay).
+   */
+  watermark(overlay: Recipe, options: Record<string, unknown> = {}): WatermarkedRecipe {
+    // Eager gate when the base media is KNOWN (unit-testable pre-upload); an
+    // undetectable base is DEFERRED — re-checked pre-upload in run()/submit().
+    const base = _watermarkEffectiveBase(this.input, this.steps);
+    if (base.media !== undefined) _resolveWatermarkWireOp(base);
+    _validateWatermarkOverlay(overlay);
+    return new WatermarkedRecipe(
+      this.input,
+      this.steps,
+      overlay,
+      options,
+      [],
+      this.presetDefaults,
+      this.scopedPresetDefaults,
+      this.client,
+    );
+  }
+
+  /**
    * Lower this recipe to a workflow-create payload against a resolved upload
    * id. Single-input chain → ONE job, `source: upload(fileId)`, ordered
    * `operations[]`; the job `id` is omitted (a single job referenced by
@@ -685,6 +741,16 @@ export class Recipe {
    */
   get recipeSteps(): readonly RecipeStep[] {
     return this.steps;
+  }
+
+  /**
+   * The primary input this recipe operates on. Read by {@link WatermarkedRecipe}
+   * to lift an overlay Recipe's input (for upload + media inference + src-job
+   * lowering) without making the ctor field public.
+   * @internal
+   */
+  get recipeInput(): FileInput {
+    return this.input;
   }
 
   /**
@@ -1099,6 +1165,192 @@ function _resolveConvertOutputMedia(
 ): PresetMedia | undefined {
   if (source === 'video' && outputFormat.toLowerCase() === 'ogg') return 'video';
   return _detectCompressMedia(`f.${outputFormat}`);
+}
+
+// ── Watermark routing + planned-op gating (FF4a) ────────────────────────────
+
+/**
+ * The single SDK-side source of truth for which `(wire op, base mime)`
+ * combinations the file-first `watermark()` verb may emit, and their
+ * availability. The generated typed metadata sidecar does NOT carry the
+ * supported-mime allowlist (`MimeGroupMetadata` has no `mimes` field and
+ * `per_mime_availability` is empty for these ops), so this hand table is the
+ * gate's source — PINNED to the generated `availability.json` by a conformance
+ * test (mirrors the wire-key-conformance pattern): a contract regen that
+ * changes the supported mimes or availability of `image_watermark` /
+ * `video_watermark` fails that test. The gate reads ONLY this table.
+ * @internal
+ */
+export const WATERMARK_CAPABILITY = {
+  image_watermark: {
+    image: { mimes: ['image/jpeg', 'image/png', 'image/webp'], availability: 'stable' },
+    image_gif: { mimes: ['image/gif'], availability: 'planned' },
+  },
+  video_watermark: {
+    video: { mimes: ['video/mp4', 'video/webm'], availability: 'beta' },
+  },
+} as const;
+
+/** Wire op types the file-first `watermark()` verb can route to. */
+export type WatermarkWireOp = 'image_watermark' | 'video_watermark';
+
+const _WATERMARK_SHIPPABLE: ReadonlySet<string> = new Set(['stable', 'beta']);
+
+// extension → canonical MIME for the watermark gate. Covers the supported
+// formats PLUS common known-but-unsupported ones so the gate throws an
+// actionable "unsupported subtype" rather than silently routing a format the
+// server will reject.
+const _WATERMARK_EXT_MIME: Readonly<Record<string, string>> = {
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif',
+  avif: 'image/avif', heic: 'image/heic', heif: 'image/heif', tiff: 'image/tiff', tif: 'image/tiff', bmp: 'image/bmp',
+  mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime', mkv: 'video/x-matroska',
+  avi: 'video/x-msvideo', wmv: 'video/x-ms-wmv', flv: 'video/x-flv', m4v: 'video/x-m4v',
+};
+
+function _watermarkPathMime(path: string): string | undefined {
+  const ext = path.toLowerCase().split('.').pop();
+  return ext !== undefined ? _WATERMARK_EXT_MIME[ext] : undefined;
+}
+
+/**
+ * The watermark MIME of a base/overlay Blob. Mirrors `_detectCompressMedia`'s
+ * mime-first-else-filename precedence: a declared `Blob.type` is used ONLY when
+ * it is media-bearing (image/ video/ audio/ — params stripped, lowercased); a
+ * generic/unknown type (e.g. `application/octet-stream`) falls back to the
+ * `File.name` extension, so a filename-hinted in-memory base routes like a path.
+ */
+function _watermarkBlobMime(blob: Blob): string | undefined {
+  const raw = blob.type ? blob.type.split(';')[0]!.trim().toLowerCase() : '';
+  if (raw.startsWith('image/') || raw.startsWith('video/') || raw.startsWith('audio/')) {
+    return raw;
+  }
+  return _watermarkPathMime((blob as { name?: string }).name ?? '');
+}
+
+/** The effective base of a watermark recipe AFTER folding its preceding steps. */
+interface WatermarkBase {
+  readonly media?: PresetMedia;
+  readonly mime?: string;
+}
+
+/**
+ * Resolve the effective `(media, mime)` a watermark op operates on, folding the
+ * preceding `convert` (output media + format) AND `thumbnail` (always an image
+ * output) steps — mirrors {@link Recipe.compressMediaHint}'s convert fold, plus
+ * the thumbnail→image rule (codex review). Reused for the base and the overlay.
+ */
+function _watermarkEffectiveBase(
+  input: FileInput,
+  steps: readonly RecipeStep[],
+): WatermarkBase {
+  let media: PresetMedia | undefined =
+    input.kind === 'path'
+      ? _detectCompressMedia(input.path)
+      : input.kind === 'blob'
+        ? _detectCompressMedia(input.blob)
+        : undefined;
+  let mime: string | undefined =
+    input.kind === 'path'
+      ? _watermarkPathMime(input.path)
+      : input.kind === 'blob'
+        ? _watermarkBlobMime(input.blob)
+        : undefined;
+  for (const step of steps) {
+    if (step.opType === 'convert') {
+      const fmt = step.options.output_format;
+      if (typeof fmt === 'string') {
+        media = _resolveConvertOutputMedia(media, fmt);
+        mime = _WATERMARK_EXT_MIME[fmt.toLowerCase()];
+      }
+    } else if (step.opType === 'thumbnail') {
+      // A thumbnail of a video/PDF/image is always an image output.
+      media = 'image';
+      mime = 'image/png';
+    }
+  }
+  // Recover the coarse media from a usable (already-normalised) mime when the
+  // case-sensitive media classifier could not (e.g. an oddly-cased `Image/PNG`
+  // content-type) — keeps the gate self-consistent: a usable mime implies media.
+  if (media === undefined && mime !== undefined) {
+    if (mime.startsWith('image/')) media = 'image';
+    else if (mime.startsWith('video/')) media = 'video';
+    else if (mime.startsWith('audio/')) media = 'audio';
+  }
+  return { media, mime };
+}
+
+/**
+ * Resolve the wire op (`image_watermark` / `video_watermark`) for a watermark
+ * base, or THROW {@link GislConfigError} pre-upload — the planned-op gate. The
+ * capability is read from {@link WATERMARK_CAPABILITY} (data-driven, contract-
+ * pinned): a base mime in a `{stable,beta}` group routes; a `planned` group
+ * (animated GIF base) throws; a known image/video subtype outside the allowlist
+ * (AVIF/HEIC/MOV/…) throws "unsupported"; audio/document throw "not supported".
+ * An undetectable base media throws an actionable error (the caller defers the
+ * eager check at `.watermark()` time and re-runs this pre-upload).
+ */
+function _resolveWatermarkWireOp(base: WatermarkBase): WatermarkWireOp {
+  const { media, mime } = base;
+  if (media === undefined) {
+    throw new GislConfigError(
+      "watermark needs a detectable base media to route to image_watermark / video_watermark, " +
+        'but the input has no inferable type (a pre-uploaded file id or unnamed/typeless Blob carries ' +
+        'no extension or MIME). Use a path with a file extension, a Blob with a type, or a named resource.',
+      { reason: 'media_unknown' },
+    );
+  }
+  if (mime !== undefined) {
+    for (const wireOp of Object.keys(WATERMARK_CAPABILITY) as WatermarkWireOp[]) {
+      const groups = WATERMARK_CAPABILITY[wireOp] as Record<string, { mimes: readonly string[]; availability: string }>;
+      for (const group of Object.values(groups)) {
+        if (group.mimes.includes(mime)) {
+          if (_WATERMARK_SHIPPABLE.has(group.availability)) return wireOp;
+          throw new GislConfigError(
+            `watermark for ${mime} bases is not yet available (${wireOp} is '${group.availability}'). ` +
+              'The contract schema is defined but the server returns feature_not_available until it ships.',
+            { reason: 'feature_not_available' },
+          );
+        }
+      }
+    }
+  }
+  if (media === 'image' || media === 'video') {
+    throw new GislConfigError(
+      `watermark does not support ${mime ?? media} base files. image_watermark accepts ` +
+        'image/jpeg, image/png, image/webp; video_watermark accepts video/mp4, video/webm. ' +
+        'Convert the base to a supported format first.',
+      { reason: 'unsupported_media' },
+    );
+  }
+  throw new GislConfigError(
+    `watermark does not support ${media} base files — overlay watermarking targets image or video bases ` +
+      '(audio overlay and luma matte are planned operations). Use textWatermark() for document/text watermarks.',
+    { reason: 'unsupported_media' },
+  );
+}
+
+/**
+ * Validate a watermark overlay locally: the overlay role is always an IMAGE.
+ * A KNOWN non-image overlay (audio/video/document) throws pre-upload; an
+ * undetectable overlay media is ALLOWED (it doesn't affect routing, so the
+ * server enforces it). The overlay's effective media folds its own steps.
+ */
+function _validateWatermarkOverlay(overlay: Recipe): void {
+  const { media } = _watermarkEffectiveBase(overlay.recipeInput, overlay.recipeSteps);
+  if (media !== undefined && media !== 'image') {
+    throw new GislConfigError(
+      `watermark overlay must be an image; got a ${media} overlay. The overlay is the watermark image ` +
+        'composited onto the base — pass an image file (or a recipe whose output is an image).',
+      { reason: 'invalid_overlay_media', conflictingFields: ['overlay'] },
+    );
+  }
+}
+
+function _lowerWatermarkOp(wireOp: WatermarkWireOp, options: Readonly<Record<string, unknown>>): OperationDef {
+  // Watermark options (anchor/opacity/margin_x/margin_y/overlay_width) are
+  // already wire keys; empty options omit the `options` key (byte-identical to PHP).
+  const wire = { ...options };
+  return Object.keys(wire).length === 0 ? { type: wireOp } : { type: wireOp, options: wire };
 }
 
 /**
@@ -2209,5 +2461,337 @@ export class ArchivedRecipe {
     if (this.options.format !== undefined) out.format = this.options.format;
     if (this.options.folderStructure !== undefined) out.folder_structure = this.options.folderStructure;
     return out;
+  }
+}
+
+/**
+ * The single-output recipe you're in AFTER `file(base).watermark(overlay, …)`
+ * (FF4a). Composites an image OVERLAY onto the base (image_watermark for image
+ * bases, video_watermark for video bases — routed at lowering by the base's
+ * effective media). A multi-input op: base + overlay each enter via their own
+ * `passthrough` source job (`src_0` base, `src_1` overlay; their own preceding
+ * steps lower into those jobs), and the `watermark` job consumes them via
+ * `job_output` inputs tagged `role: base` / `role: overlay`. Post-watermark
+ * `compress`/`convert`/`thumbnail` chain onto the watermark output. Mirrors
+ * {@link MergedRecipe}. `textWatermark` is intentionally NOT a post-verb here.
+ */
+export class WatermarkedRecipe {
+  constructor(
+    private readonly baseInput: FileInput,
+    private readonly baseSteps: readonly RecipeStep[],
+    private readonly overlay: Recipe,
+    private readonly watermarkOptions: Readonly<Record<string, unknown>>,
+    private readonly postSteps: readonly RecipeStep[] = [],
+    private readonly presetDefaults?: PresetDefaults,
+    private readonly scopedPresetDefaults?: PresetDefaults,
+    private readonly client?: GislClient,
+  ) {}
+
+  /** Reduce the watermarked output's size. See {@link Recipe.compress}. */
+  compress(optimize?: OptimizeFor, options: Record<string, unknown> = {}): WatermarkedRecipe {
+    if (optimize !== undefined && !Object.values(OptimizeFor).includes(optimize)) {
+      const allowed = Object.values(OptimizeFor).join(', ');
+      throw new GislConfigError(
+        `compress 'optimize' must be one of ${allowed}; got '${String(optimize)}'.`,
+        { reason: 'invalid_optimize', conflictingFields: ['optimize'] },
+      );
+    }
+    return this.withStep({
+      opType: 'compress',
+      options: { ...options, ...(optimize !== undefined ? { optimize } : {}) },
+    });
+  }
+
+  /** Change the watermarked output's format. See {@link Recipe.convert}. */
+  convert(format: string, options: Record<string, unknown> = {}): WatermarkedRecipe {
+    const rest = { ...options };
+    delete rest.format;
+    return this.withStep({ opType: 'convert', options: { ...rest, output_format: format } });
+  }
+
+  /** Thumbnail the watermarked output. Omitted dimensions are dropped from the wire options. */
+  thumbnail(options: { width?: number; height?: number } & Record<string, unknown> = {}): WatermarkedRecipe {
+    const wire: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(options)) {
+      if (value !== undefined) wire[key] = value;
+    }
+    return this.withStep({ opType: 'thumbnail', options: wire });
+  }
+
+  /**
+   * Lower to the watermark DAG: a `src_0` passthrough/base-steps job + a `src_1`
+   * passthrough/overlay-steps job + one `watermark` job whose `inputs[]` consume
+   * them via `job_output` (role base/overlay) and whose `operations[]` is
+   * `[image_watermark|video_watermark, ...post-watermark ops]`. `fileIds` is
+   * `[baseId, overlayId]` (upload order). Throws pre-lowering if the base media
+   * is undetectable/unsupported (the planned-op gate).
+   *
+   * @internal Consumed by {@link run}/{@link submit} (after upload) + the parity harness.
+   */
+  toWorkflowPayload(fileIds: readonly string[], callbackUrl?: string): WorkflowCreatePayload {
+    const wireOp = _resolveWatermarkWireOp(_watermarkEffectiveBase(this.baseInput, this.baseSteps));
+    const baseId = fileIds[0];
+    const overlayId = fileIds[1];
+
+    // src_0: the base (its preceding steps, else a lossless passthrough).
+    const baseOps: OperationDef[] =
+      this.baseSteps.length > 0
+        ? new Recipe(this.baseInput, undefined, this.baseSteps, this.presetDefaults, this.scopedPresetDefaults)
+            .toWorkflowPayload(baseId).jobs[0].operations
+        : [{ type: 'passthrough' }];
+    // src_1: the overlay recipe (its own steps, else a lossless passthrough).
+    const overlayOps: OperationDef[] =
+      this.overlay.recipeSteps.length > 0
+        ? this.overlay.toWorkflowPayload(overlayId).jobs[0].operations
+        : [{ type: 'passthrough' }];
+
+    // Key order (id, source, operations) matches PHP toWire() — byte-identical JSON.
+    const srcBase: JobDefinitionPayload = { id: 'src_0', source: uploadSource(baseId), operations: baseOps };
+    const srcOverlay: JobDefinitionPayload = { id: 'src_1', source: uploadSource(overlayId), operations: overlayOps };
+
+    const inputs: JobInputV2Payload[] = [
+      { source: jobOutputSource('src_0'), role: 'base' },
+      { source: jobOutputSource('src_1'), role: 'overlay' },
+    ];
+    const operations: OperationDef[] = [
+      _lowerWatermarkOp(wireOp, this.watermarkOptions),
+      ...this.lowerPostSteps(wireOp),
+    ];
+    const watermarkJob: JobDefinitionPayload = { id: 'watermark', inputs, operations };
+
+    const jobs = [srcBase, srcOverlay, watermarkJob];
+    return callbackUrl === undefined ? { jobs } : { jobs, callback_url: callbackUrl };
+  }
+
+  /** The number of post-watermark ops chained so far (introspection / tests). */
+  get stepCount(): number {
+    return this.postSteps.length;
+  }
+
+  /**
+   * Execute end-to-end: upload base + overlay, create the watermark workflow,
+   * await terminal (SSE with poll fallback), then resolve ONLY the watermark
+   * output into a {@link RunResult}. Requires a client bound at construction.
+   * Mirrors {@link MergedRecipe.run}.
+   */
+  async run(
+    options: {
+      maxWait?: string | number;
+      onProgress?: (event: ProgressEvent) => void;
+      signal?: AbortSignal;
+      pollIntervalMs?: number;
+      probeBeforeCreate?: boolean;
+      probeTimeoutMs?: number;
+    } = {},
+  ): Promise<RunResult> {
+    const signal = options.signal;
+    const onProgress = options.onProgress;
+    if (this.client === undefined) {
+      throw new GislConfigError(
+        'WatermarkedRecipe.run() requires a client; build the watermark via gisl().file(...).watermark(...) rather than constructing WatermarkedRecipe directly.',
+        { reason: 'no_client' },
+      );
+    }
+    const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 300_000);
+
+    const created = await this._uploadAllAndCreate(
+      undefined,
+      deadline,
+      onProgress,
+      signal,
+      options.probeBeforeCreate,
+      options.probeTimeoutMs,
+    );
+
+    let finalStatus;
+    try {
+      finalStatus = await _consumeSseToTerminal(this.client, {
+        workflowId: created.workflowId,
+        deadline,
+        signal,
+        onProgress,
+      });
+    } catch (err) {
+      if (!(err instanceof SseEndedWithoutTerminal || err instanceof GislNetworkError)) {
+        throw err;
+      }
+      finalStatus = await _pollToTerminal(this.client, {
+        workflowId: created.workflowId,
+        deadline,
+        signal,
+        pollIntervalMs: options.pollIntervalMs,
+      });
+    }
+
+    if (Date.now() >= deadline) {
+      throw new GislTimeoutError(
+        `Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`,
+      );
+    }
+    const downloads = await this.client.getWorkflowDownloads(created.workflowId);
+    if (Date.now() >= deadline) {
+      throw new GislTimeoutError(
+        `Workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`,
+      );
+    }
+
+    // Project ONLY the watermark job's output — the `src_*` passthrough jobs
+    // re-expose the raw base/overlay uploads, which are plumbing.
+    const watermarkDownloads = downloads.downloads.filter((d) => d.ref === 'watermark');
+    const downloader = new LazyHttpDownloader();
+    return projectDownloadsToRunResult(created.workflowId, finalStatus, watermarkDownloads, null, downloader);
+  }
+
+  /**
+   * Fire-and-forget: upload base + overlay + create the watermark workflow
+   * (wiring `webhook` into `callback_url` when given), return a client-bound
+   * {@link Handle}. Does NOT wait for terminal status. Mirrors {@link MergedRecipe.submit}.
+   */
+  async submit(
+    webhook?: string,
+    options?: { probeBeforeCreate?: boolean; probeTimeoutMs?: number },
+  ): Promise<Handle> {
+    if (this.client === undefined) {
+      throw new GislConfigError(
+        'WatermarkedRecipe.submit() requires a client; build the watermark via gisl().file(...).watermark(...) rather than constructing WatermarkedRecipe directly.',
+        { reason: 'no_client' },
+      );
+    }
+    const created = await this._uploadAllAndCreate(
+      webhook,
+      undefined,
+      undefined,
+      undefined,
+      options?.probeBeforeCreate,
+      options?.probeTimeoutMs,
+    );
+    return new Handle(
+      created.workflowId,
+      created.webhookSecret != null ? created.webhookSecret : undefined,
+      this.client,
+      null,
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+
+  /** Base + overlay inputs, in upload/lowering order (`[base, overlay]`). */
+  private inputsInOrder(): readonly FileInput[] {
+    return [this.baseInput, this.overlay.recipeInput];
+  }
+
+  /**
+   * Validate the watermark BEFORE any upload: the base must route to a shippable
+   * wire op (throws for undetectable/unsupported/planned bases), and the overlay
+   * must be an image. Shared by {@link run}/{@link submit}. Mirrors
+   * {@link MergedRecipe.validatePreUpload}.
+   */
+  private validatePreUpload(): void {
+    _resolveWatermarkWireOp(_watermarkEffectiveBase(this.baseInput, this.baseSteps));
+    _validateWatermarkOverlay(this.overlay);
+  }
+
+  /**
+   * Upload base + overlay (verbatim for a pre-uploaded id; uploading a path /
+   * blob otherwise) then create ONE watermark workflow. Validates pre-upload.
+   * Shared first half of {@link run} + {@link submit}; mirrors
+   * {@link MergedRecipe._uploadAllAndCreate}.
+   */
+  private async _uploadAllAndCreate(
+    webhook: string | undefined,
+    deadline: number | undefined,
+    onProgress?: (event: ProgressEvent) => void,
+    signal?: AbortSignal,
+    probeBeforeCreate?: boolean,
+    probeTimeoutMs?: number,
+  ): Promise<WorkflowCreateResponse> {
+    this.validatePreUpload();
+    const fileIds: string[] = [];
+    const probeTargets: { fileId: string; isVideo: boolean; sizeBytes?: number }[] = [];
+    for (const input of this.inputsInOrder()) {
+      _checkAborted(signal);
+      if (deadline !== undefined && Date.now() >= deadline) {
+        throw new GislTimeoutError(
+          'maxWait elapsed during watermark uploads before all inputs were uploaded',
+        );
+      }
+      if (input.kind === 'uploadId') {
+        fileIds.push(input.fileId);
+      } else {
+        const source = input.kind === 'path' ? input.path : input.blob;
+        const up = await this.client!.uploadFile(source, {
+          signal,
+          ...(onProgress !== undefined
+            ? {
+                onProgress: (uploadedBytes: number, totalBytes: number): void => {
+                  onProgress({ phase: 'upload', uploadedBytes, totalBytes });
+                },
+              }
+            : {}),
+        });
+        fileIds.push(up.fileId);
+        probeTargets.push({
+          fileId: up.fileId,
+          isVideo: _detectCompressMedia(source) === 'video',
+          sizeBytes: up.sizeBytes,
+        });
+      }
+    }
+    _checkAborted(signal);
+    if (deadline !== undefined && Date.now() >= deadline) {
+      throw new GislTimeoutError(
+        'Uploads completed but maxWait elapsed before the watermark workflow could be created',
+      );
+    }
+    const cappedProbeTimeoutMs = _cappedProbeTimeoutMs(probeTimeoutMs, deadline);
+    await Promise.all(
+      probeTargets.map((t) =>
+        this.client!.maybeWaitForVideoProbe(t.fileId, {
+          enabled: probeBeforeCreate ?? true,
+          isVideo: t.isVideo,
+          sizeBytes: t.sizeBytes,
+          timeoutMs: cappedProbeTimeoutMs,
+          signal,
+        }),
+      ),
+    );
+    _checkAborted(signal);
+    if (deadline !== undefined && Date.now() >= deadline) {
+      throw new GislTimeoutError(
+        'Probe wait completed but maxWait elapsed before the watermark workflow could be created',
+      );
+    }
+    const created = await this.client!.createWorkflow(this.toWorkflowPayload(fileIds, webhook));
+    _checkAborted(signal);
+    return created;
+  }
+
+  /**
+   * Lower the post-watermark chain over a synthetic input whose extension
+   * matches the watermark OUTPUT media (image→png, video→mp4) so
+   * `compress(optimize)` resolves the correct preset — mirrors
+   * {@link MergedRecipe.lowerPostSteps}.
+   */
+  private lowerPostSteps(wireOp: WatermarkWireOp): OperationDef[] {
+    if (this.postSteps.length === 0) {
+      return [];
+    }
+    const ext = wireOp === 'video_watermark' ? 'mp4' : 'png';
+    const synthetic = fileInput.path(`watermarked.${ext}`);
+    const recipe = new Recipe(synthetic, undefined, this.postSteps, this.presetDefaults, this.scopedPresetDefaults);
+    return recipe.toWorkflowPayload('watermarked').jobs[0].operations;
+  }
+
+  private withStep(step: RecipeStep): WatermarkedRecipe {
+    return new WatermarkedRecipe(
+      this.baseInput,
+      this.baseSteps,
+      this.overlay,
+      this.watermarkOptions,
+      [...this.postSteps, step],
+      this.presetDefaults,
+      this.scopedPresetDefaults,
+      this.client,
+    );
   }
 }

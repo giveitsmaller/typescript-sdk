@@ -92,6 +92,9 @@ import type {
   HttpDownloader,
   // FF3a (u0hBt6fl) — homogeneous fan-out builder (`client.files([...])`).
   FilesRecipe,
+  // FF4a (Z7zTr789) — multi-input watermark recipe (`file(b).watermark(overlay)`).
+  WatermarkedRecipe,
+  WatermarkWireOp,
 } from './index.js';
 import type { GislNoSuchKeyError, GislSinkError, GislNetworkError } from './index.js';
 // FF5a (Ao8RPVxD) — file-first StatusSnapshot value object + the
@@ -313,6 +316,9 @@ export function _runAudit(): void {
   accept<HttpDownloader>();
   // FF3a / u0hBt6fl — homogeneous fan-out builder surface.
   accept<FilesRecipe>();
+  // FF4a / Z7zTr789 — multi-input watermark recipe surface.
+  accept<WatermarkedRecipe>();
+  accept<WatermarkWireOp>();
   accept<GislNoSuchKeyError>();
   accept<GislSinkError>();
   accept<GislNetworkError>();

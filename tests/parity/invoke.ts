@@ -20,7 +20,7 @@ import {
   type SequenceEntry,
 } from '../../src/merge.js';
 import { verifyWebhook } from '../../src/webhook.js';
-import { Recipe, FilesRecipe, MergedRecipe, fileInput, type FileInput } from '../../src/file-first.js';
+import { Recipe, FilesRecipe, MergedRecipe, WatermarkedRecipe, fileInput, type FileInput } from '../../src/file-first.js';
 import type { OptimizeFor } from '../../src/generated/sdk_spec/enums.js';
 import type { WorkflowCreatePayload } from '../../src/types.js';
 
@@ -185,6 +185,28 @@ export function lowerFixture(fixture: Fixture): WorkflowCreatePayload {
   for (const op of spec.operations) {
     recipe = applyLoweringOp(recipe, op);
   }
+
+  // FF4a (Z7zTr789) — a `watermark` block lowers `file(base).watermark(overlay,
+  // opts)` -> WatermarkedRecipe. The base recipe above carries the base's
+  // preceding steps; build the overlay file-node + its own steps, then lower
+  // against [baseId, overlayId].
+  if (spec.watermark !== undefined) {
+    const ov = spec.watermark.overlay;
+    const overlayInput: FileInput =
+      ov.file.kind === 'upload_id'
+        ? fileInput.uploadId(ov.file.uploadId as string)
+        : fileInput.path(ov.file.path as string);
+    let overlay = new Recipe(overlayInput, ov.file.key ?? undefined);
+    for (const op of ov.operations ?? []) {
+      overlay = applyLoweringOp(overlay, op);
+    }
+    let wr = recipe.watermark(overlay, { ...(spec.watermark.options ?? {}) });
+    for (const op of spec.watermark.post ?? []) {
+      wr = applyWatermarkedOp(wr, op);
+    }
+    return wr.toWorkflowPayload([spec.resolvedFileId, ov.resolvedFileId]);
+  }
+
   return recipe.toWorkflowPayload(spec.resolvedFileId);
 }
 
@@ -333,6 +355,28 @@ function applyMergedOp(recipe: MergedRecipe, op: FixtureLoweringOp): MergedRecip
     }
     default:
       throw new Error(`[files.merge] unsupported post-combine op '${String((op as { op: string }).op)}'`);
+  }
+}
+
+/**
+ * FF4a (Z7zTr789) — apply a post-watermark op to a {@link WatermarkedRecipe}.
+ * The watermark output exposes compress/convert/thumbnail (NOT text_watermark —
+ * the schema/loader reject it). Mirrors PHP `Invoke::applyWatermarkedOp`.
+ */
+function applyWatermarkedOp(recipe: WatermarkedRecipe, op: FixtureLoweringOp): WatermarkedRecipe {
+  switch (op.op) {
+    case 'compress':
+      return recipe.compress(op.optimize as OptimizeFor | undefined);
+    case 'convert':
+      return recipe.convert(op.format as string);
+    case 'thumbnail': {
+      const dims: { width?: number; height?: number } = {};
+      if (op.width !== undefined) dims.width = op.width;
+      if (op.height !== undefined) dims.height = op.height;
+      return recipe.thumbnail(dims);
+    }
+    default:
+      throw new Error(`[watermark] unsupported post-watermark op '${String((op as { op: string }).op)}'`);
   }
 }
 
