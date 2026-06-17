@@ -120,7 +120,11 @@ describe('GislClient.maybeWaitForVideoProbe', () => {
   });
 
   it('never-bounce: video+multipart but probe always 422 + tiny timeout → returns void without throwing', async () => {
-    fetchSpy.mockResolvedValue(notLanded());
+    // mockImplementation (NOT mockResolvedValue): waitForProbe POLLS, so each poll
+    // needs a FRESH Response — a single reused Response has its body consumed after
+    // the first read, so the 2nd poll would see "Invalid JSON" and lose the 422
+    // feature_not_available signal (a latent flake surfaced by poll timing).
+    fetchSpy.mockImplementation(() => Promise.resolve(notLanded()));
     // A give-up resolves silently (returns void) — the caller creates anyway.
     await expect(
       client.maybeWaitForVideoProbe(FID, { enabled: true, isVideo: true, sizeBytes: LARGE, timeoutMs: 30 }),

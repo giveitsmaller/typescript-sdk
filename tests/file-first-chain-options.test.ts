@@ -474,3 +474,82 @@ describe('MergedRecipe chain options — post-combine ops carry options', () => 
     });
   });
 });
+
+/**
+ * 56N4chXY / N8eESzQN — a chained `compress()` resolves its preset against the
+ * media produced by a preceding `convert()`, not the original input. The fold is
+ * context-aware: a video→`ogg` convert keeps video (an OGG video container; `ogg`
+ * otherwise lands in the audio extension list and would mis-resolve to audio).
+ */
+describe('chain media inference from prior step output (56N4chXY / N8eESzQN)', () => {
+  const compressOptions = (r: Recipe): Record<string, unknown> => {
+    const op = operations(r).find((o) => o.type === 'compress');
+    return (op?.options ?? {}) as Record<string, unknown>;
+  };
+
+  it('mp3 → convert(flac) → compress(Size): resolves against flac (lossless) → drops the preset bitrate', () => {
+    const opts = compressOptions(recipe('song.mp3').convert('flac').compress(OptimizeFor.Size));
+    expect(opts).not.toHaveProperty('bitrate'); // lossless flac: the worker 422s a bitrate; preset drops it
+    expect(opts.sample_rate).toBe(44100); // still an audio preset
+    expect(opts.normalize).toBe(true);
+  });
+
+  it('mp3 → convert(aac) → compress(Size): still lossy audio → keeps the preset bitrate', () => {
+    const opts = compressOptions(recipe('song.mp3').convert('aac').compress(OptimizeFor.Size));
+    expect(opts.bitrate).toBe(96);
+  });
+
+  it('video → convert(ogg) → compress(Size): ogg-from-video stays VIDEO (the guard), not audio', () => {
+    const opts = compressOptions(recipe('clip.mp4').convert('ogg').compress(OptimizeFor.Size));
+    expect(opts.crf).toBe(30); // video Size preset
+    expect(opts.encoding_mode).toBe('crf');
+    expect(opts).not.toHaveProperty('bitrate'); // NOT mis-resolved to audio
+  });
+
+  it('video → convert(gif) → compress(Size): gif resolves the image preset', () => {
+    const opts = compressOptions(recipe('clip.mp4').convert('gif').compress(OptimizeFor.Size));
+    expect(opts.quality).toBe(65); // image Size preset
+    expect(opts).not.toHaveProperty('crf');
+  });
+
+  it('no convert: compress resolves against the ORIGINAL input (unchanged behaviour)', () => {
+    const opts = compressOptions(recipe('song.mp3').compress(OptimizeFor.Size));
+    expect(opts.bitrate).toBe(96); // mp3 is lossy — original input resolution preserved
+  });
+
+  it('files([...]).merge().convert(flac).compress(Size): post-merge convert wins → lossless', () => {
+    const payload = new MergedRecipe(
+      [fileInput.path('a.mp3'), fileInput.path('b.mp3')],
+      { mediaKind: 'audio' },
+    )
+      .convert('flac')
+      .compress(OptimizeFor.Size)
+      .toWorkflowPayload(['f0', 'f1']);
+    const mergeJob = payload.jobs[payload.jobs.length - 1];
+    const compress = mergeJob.operations.find((o) => o.type === 'compress');
+    const opts = (compress?.options ?? {}) as Record<string, unknown>;
+    expect(opts).not.toHaveProperty('bitrate'); // resolved against the post-merge flac output
+  });
+
+  // Multi-convert: the MOST RECENT preceding convert wins (the fold loop runs >once).
+  it('mp3 → convert(flac) → convert(aac) → compress(Size): most-recent aac wins → lossy, keeps bitrate', () => {
+    const opts = compressOptions(
+      recipe('song.mp3').convert('flac').convert('aac').compress(OptimizeFor.Size),
+    );
+    expect(opts.bitrate).toBe(96);
+  });
+
+  it('mp3 → convert(aac) → convert(flac) → compress(Size): most-recent flac wins → lossless, drops bitrate', () => {
+    const opts = compressOptions(
+      recipe('song.mp3').convert('aac').convert('flac').compress(OptimizeFor.Size),
+    );
+    expect(opts).not.toHaveProperty('bitrate');
+  });
+
+  // The OTHER lossless format (wav), not just flac.
+  it('mp3 → convert(wav) → compress(Size): wav is lossless → drops bitrate', () => {
+    const opts = compressOptions(recipe('song.mp3').convert('wav').compress(OptimizeFor.Size));
+    expect(opts).not.toHaveProperty('bitrate');
+    expect(opts.sample_rate).toBe(44100);
+  });
+});

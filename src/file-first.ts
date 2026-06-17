@@ -661,7 +661,7 @@ export class Recipe {
    *   fixed id). Not part of the caller-facing fluent surface.
    */
   toWorkflowPayload(fileId: string, callbackUrl?: string): WorkflowCreatePayload {
-    const operations: OperationDef[] = this.steps.map((step) => this.lowerStep(step));
+    const operations: OperationDef[] = this.steps.map((step, i) => this.lowerStep(step, i));
     // Key order (source, operations) matches the PHP `toWire()` so the
     // JSON-string serialisation is byte-identical across languages.
     const job: JobDefinitionPayload = { source: uploadSource(fileId), operations };
@@ -935,9 +935,11 @@ export class Recipe {
     );
   }
 
-  private lowerStep(step: RecipeStep): OperationDef {
+  private lowerStep(step: RecipeStep, stepIndex: number): OperationDef {
     const options =
-      step.opType === 'compress' ? this.lowerCompressOptions(step.options) : { ...step.options };
+      step.opType === 'compress'
+        ? this.lowerCompressOptions(step.options, stepIndex)
+        : { ...step.options };
     // Empty options omit the `options` wire key entirely, so TS (undefined →
     // absent) and PHP (null → absent) serialise byte-identically.
     return Object.keys(options).length === 0
@@ -945,7 +947,10 @@ export class Recipe {
       : { type: step.opType, options };
   }
 
-  private lowerCompressOptions(stepOptions: Readonly<Record<string, unknown>>): Record<string, unknown> {
+  private lowerCompressOptions(
+    stepOptions: Readonly<Record<string, unknown>>,
+    uptoIndex?: number,
+  ): Record<string, unknown> {
     // Mirror the op-first resolver precedence (OperationBuilder._resolve in
     // builder.ts): optimize = preset layer, presetOverrides = callPresetOverride
     // layer, the rest = explicit layer.
@@ -981,7 +986,7 @@ export class Recipe {
         { reason: 'invalid_preset_overrides', conflictingFields: ['presetOverrides'] },
       );
     }
-    const media = this.compressMediaHint();
+    const media = this.compressMediaHint(uptoIndex);
     if (media === undefined) {
       // Cannot infer a media class (a Blob without a recognised name, or a
       // bare upload id) → preset resolution is impossible. Fail FAST rather
@@ -1010,7 +1015,7 @@ export class Recipe {
     }
     const input: ResolveCompressOptionsInput = { media, op: 'compress', explicitOptions };
     if (media === 'audio') {
-      (input as { audioLossless?: boolean }).audioLossless = this.compressAudioLossless();
+      (input as { audioLossless?: boolean }).audioLossless = this.compressAudioLossless(uptoIndex);
     }
     if (this.presetDefaults !== undefined) {
       (input as { presetDefaults?: PresetDefaults }).presetDefaults = this.presetDefaults;
@@ -1030,21 +1035,70 @@ export class Recipe {
     return { ...resolveCompressOptions(input).wireOptions };
   }
 
-  private compressMediaHint(): PresetMedia | undefined {
-    if (this.input.kind === 'path') {
-      return _detectCompressMedia(this.input.path);
-    }
-    if (this.input.kind === 'blob') {
-      return _detectCompressMedia(this.input.blob);
-    }
+  /** Media of the original input (no chain context) — used by the probe gate. */
+  private inputMedia(): PresetMedia | undefined {
+    if (this.input.kind === 'path') return _detectCompressMedia(this.input.path);
+    if (this.input.kind === 'blob') return _detectCompressMedia(this.input.blob);
     return undefined;
   }
 
-  private compressAudioLossless(): boolean {
+  /**
+   * The media class a `compress` step at `uptoIndex` actually operates on. With no
+   * chain context (`uptoIndex` undefined) this is the original input's media. With
+   * context, FOLD the preceding `convert` steps: each `convert(output_format)` changes
+   * the media the next step sees (56N4chXY / N8eESzQN — a chain like
+   * `mp3 -> convert(flac) -> compress` must resolve against flac, not mp3). Reuses the
+   * synthetic-filename detection precedent from {@link MergedRecipe} (`merged.<ext>`).
+   */
+  private compressMediaHint(uptoIndex?: number): PresetMedia | undefined {
+    let media = this.inputMedia();
+    if (uptoIndex === undefined) return media;
+    for (let i = 0; i < uptoIndex; i++) {
+      const step = this.steps[i];
+      if (step.opType === 'convert') {
+        const fmt = step.options.output_format;
+        if (typeof fmt === 'string') media = _resolveConvertOutputMedia(media, fmt);
+      }
+    }
+    return media;
+  }
+
+  /**
+   * Whether the media a `compress` step at `uptoIndex` operates on is lossless audio.
+   * Determined by the most recent preceding `convert` target (`flac`/`wav` -> lossless)
+   * when there is one, else by the original input. Lossless is unaffected by the
+   * video/ogg guard (ogg is never lossless either way).
+   */
+  private compressAudioLossless(uptoIndex?: number): boolean {
+    if (uptoIndex !== undefined) {
+      for (let i = uptoIndex - 1; i >= 0; i--) {
+        const step = this.steps[i];
+        if (step.opType === 'convert') {
+          const fmt = step.options.output_format;
+          return typeof fmt === 'string' ? _detectAudioLossless(`f.${fmt}`) : false;
+        }
+      }
+    }
     if (this.input.kind === 'path') return _detectAudioLossless(this.input.path);
     if (this.input.kind === 'blob') return _detectAudioLossless(this.input.blob);
     return false;
   }
+}
+
+/**
+ * Media of a `convert` step's output, given the media of its source. Reuses the
+ * extension classifier on a synthetic `f.<format>`, with ONE guard: a video source
+ * converted to `ogg` stays video (an OGG *video* container — `ogg` otherwise lands in
+ * the audio extension list, which would mis-resolve a video output to audio). A video
+ * source to `gif` is left as the classifier's `image` result (animated-GIF compress is
+ * image-class). Per the 56N4chXY plan review (architect + karen).
+ */
+function _resolveConvertOutputMedia(
+  source: PresetMedia | undefined,
+  outputFormat: string,
+): PresetMedia | undefined {
+  if (source === 'video' && outputFormat.toLowerCase() === 'ogg') return 'video';
+  return _detectCompressMedia(`f.${outputFormat}`);
 }
 
 /**
