@@ -40,6 +40,7 @@ import { sha256Hex } from '../sha256.js';
 import { GislConfigError } from '../errors.js';
 import type { ResolvedOptions, ResolvedOptionsSources } from '../builder.js';
 import type { OptimizeFor } from '../generated/sdk_spec/enums.js';
+import { PRESET_VERSION as GENERATED_PRESET_VERSION } from '../generated/sdk_spec/version.js';
 import {
   ImageCompressPresetOptions,
   AudioCompressPresetOptions,
@@ -54,13 +55,14 @@ import {
 } from './presets/index.js';
 
 /**
- * Bumped on any change to a `*PresetOptions.shippedDefaultsFor(...)` cell value.
- * Must track the contracts `sdk-spec/version.yaml` `presetVersion` (mirrored in
- * the generated `sdk_spec/version.ts`). 1.0 → 1.2 on the contracts v2.71.0
- * (video_compress `audioBitrate` dropped) + v2.73.0 (image Size/Balanced
- * `outputFormat` Smallest/Auto → Original — VcPeRWdD facade self-422 guard) cuts.
+ * The preset matrix version emitted on every resolve. Re-exported from the
+ * GENERATED `sdk_spec/version.ts` (source of truth: contracts
+ * `sdk-spec/version.yaml` `presetVersion`) so it can NEVER drift from the
+ * generated preset cells — a regen that bumps the cells bumps this by
+ * construction. Previously a hand-typed literal that the v2.73.0 regen had to
+ * bump manually (yREs0srv).
  */
-export const PRESET_VERSION = '1.2';
+export const PRESET_VERSION = GENERATED_PRESET_VERSION;
 
 // ---------------------------------------------------------------------------
 // Wire-field alias map (declarative — NOT generic toSnakeCase).

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { PRESET_VERSION as GENERATED_PRESET_VERSION } from '../../src/generated/sdk_spec/version.js';
 import { OperationBuilder, type Result, type ProgressEvent } from '../../src/builder.js';
 import { GislTimeoutError } from '../../src/errors.js';
 import { Handle } from '../../src/handle.js';
@@ -279,7 +280,7 @@ describe('OperationBuilder.run', () => {
     expect(resolved.applied).toEqual({ quality: 80 });
     // Back-compat (deprecated): `.overrides` mirrors `.sources.explicit`.
     expect(resolved.overrides).toEqual(['quality']);
-    expect(resolved.presetVersion).toBe('1.2');
+    expect(resolved.presetVersion).toBe(GENERATED_PRESET_VERSION);
     // T4b — sources buckets populated by the resolver. Layer-3 (scoped)
     // stays empty until T4c lands `withPresetDefaults`.
     expect(resolved.sources).toEqual({

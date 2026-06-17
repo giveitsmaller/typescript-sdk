@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { PRESET_VERSION as GENERATED_PRESET_VERSION } from '../../src/generated/sdk_spec/version.js';
 import {
   resolveCompressOptions,
   PRESET_VERSION,
@@ -658,15 +659,17 @@ describe('resolveCompressOptions — presetConfigHash', () => {
 // ---------------------------------------------------------------------------
 
 describe('resolveCompressOptions — invariants', () => {
-  it("presetVersion === '1.2' (matches PRESET_VERSION export)", () => {
+  it('presetVersion tracks the GENERATED sdk_spec PRESET_VERSION (no hand-typed literal — yREs0srv)', () => {
     const { resolvedOptions } = resolveCompressOptions({
       media: 'image',
       op: 'compress',
       optimize: OptimizeFor.Size,
       explicitOptions: {},
     });
-    expect(resolvedOptions.presetVersion).toBe('1.2');
-    expect(PRESET_VERSION).toBe('1.2');
+    // Pin to the generated source of truth, NOT a literal, so a regen that bumps
+    // the preset matrix can never leave the resolver emitting a stale version.
+    expect(resolvedOptions.presetVersion).toBe(GENERATED_PRESET_VERSION);
+    expect(PRESET_VERSION).toBe(GENERATED_PRESET_VERSION);
   });
 
   it('overrides[] back-compat mirrors sources.explicit verbatim', () => {

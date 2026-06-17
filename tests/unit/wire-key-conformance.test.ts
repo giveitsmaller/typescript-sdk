@@ -104,6 +104,59 @@ describe('wire-key conformance — compress', () => {
     }
     assertKeysConform('compress', declared, contract);
   });
+
+  // Reverse direction (7dUpPmDZ): the check above only catches a contract key
+  // REMOVED/renamed out from under KNOWN_WIRE_FIELDS. It does NOT catch a contract
+  // key ADDED that KNOWN_WIRE_FIELDS lacks — which is the real drift risk: the
+  // ergonomic resolver would throw `unknown_field` on a field the wire accepts,
+  // silently lagging the contract. Pin the reverse PER MEDIA so a new compress
+  // option fails CI until it is either exposed (added to KNOWN_WIRE_FIELDS) or
+  // explicitly documented as intentionally omitted below.
+  //
+  // INTENTIONALLY_OMITTED: contract compress options the ergonomic resolver
+  // deliberately does NOT expose. `output_format` on compress is the planned
+  // API-side "compress + change format" facade surface (contracts VcPeRWdD /
+  // ADR-0021) — canonicalized to a `convert` op server-side, with all non-
+  // `original` values `per_value_availability: planned`. It is NOT an ergonomic
+  // compress option, so audio's contract `output_format` is an allowed omission.
+  // (Image keeps `output_format` in KNOWN_WIRE_FIELDS — its preset emits the
+  // stable `original` value — so it is NOT listed here.)
+  const INTENTIONALLY_OMITTED: Readonly<Record<string, ReadonlySet<string>>> = {
+    audio: new Set(['output_format']),
+  };
+
+  it('every contract compress option (per media) is in KNOWN_WIRE_FIELDS or the documented omission set', () => {
+    for (const media of Object.keys(KNOWN_WIRE_FIELDS)) {
+      // mediaGroupOptionKeys asserts the mime group exists → a renamed/dropped
+      // PresetMedia⇄mime_group mapping fails loudly rather than silently skipping.
+      const contractForMedia = mediaGroupOptionKeys(compressMetadata, media);
+      const allowed = new Set<string>(KNOWN_WIRE_FIELDS[media as keyof typeof KNOWN_WIRE_FIELDS]);
+      for (const k of INTENTIONALLY_OMITTED[media] ?? []) allowed.add(k);
+      const stray = [...contractForMedia].filter((k) => !allowed.has(k));
+      expect(
+        stray,
+        `compress[${media}]: contract option(s) ${JSON.stringify(stray)} are neither in ` +
+          `KNOWN_WIRE_FIELDS['${media}'] nor INTENTIONALLY_OMITTED['${media}'] — the ergonomic ` +
+          `resolver would throw 'unknown_field' on a field the wire accepts. Either add it to ` +
+          `KNOWN_WIRE_FIELDS (and its preset/alias plumbing) or document the omission.`,
+      ).toEqual([]);
+    }
+  });
+
+  // Whole-media-group coverage (closes the blind spot one level up): the per-media
+  // reverse check above iterates KNOWN_WIRE_FIELDS keys, so a contract mime_group
+  // ABSENT from KNOWN_WIRE_FIELDS would be skipped silently — the resolver would
+  // unknown_field-throw on every option for that media while CI stays green. Assert
+  // every contract compress mime_group has a KNOWN_WIRE_FIELDS entry.
+  it('every contract compress mime_group is covered by KNOWN_WIRE_FIELDS', () => {
+    const known = new Set(Object.keys(KNOWN_WIRE_FIELDS));
+    const uncovered = Object.keys(compressMetadata.mime_groups).filter((m) => !known.has(m));
+    expect(
+      uncovered,
+      `contract compress mime_group(s) ${JSON.stringify(uncovered)} have no KNOWN_WIRE_FIELDS ` +
+        `entry — the per-media reverse check silently skips them. Add the media to KNOWN_WIRE_FIELDS.`,
+    ).toEqual([]);
+  });
 });
 
 describe('wire-key conformance — convert', () => {
