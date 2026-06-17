@@ -36,7 +36,8 @@ describe('resolveCompressOptions — layer 1 (sdkDefault)', () => {
     expect(wireOptions.metadata).toBe('all');
     expect(wireOptions.icc_profile).toBe('strip');
     expect(wireOptions.progressive).toBe(true);
-    expect(wireOptions.output_format).toBe('smallest');
+    // VcPeRWdD (contracts v2.73.0): Size outputFormat re-pointed Smallest -> Original.
+    expect(wireOptions.output_format).toBe('original');
     expect(resolvedOptions.preset).toBe(OptimizeFor.Size);
     expect(resolvedOptions.sources.sdkDefault).toContain('mode');
     expect(resolvedOptions.sources.sdkDefault).toContain('icc_profile');
@@ -82,7 +83,7 @@ describe('resolveCompressOptions — layer 1 (sdkDefault)', () => {
     expect([...resolvedOptions.sources.sdkDefault].sort()).toEqual(['bitrate', 'normalize', 'sample_rate'].sort());
   });
 
-  it('video Size shipped defaults — CRF 30 Slow preset, audio_bitrate snake-cased; codec/audio_codec server-resolved', () => {
+  it('video Size shipped defaults — CRF 30 Slow preset; audio_bitrate/codec/audio_codec server-resolved', () => {
     const { wireOptions, resolvedOptions } = resolveCompressOptions({
       media: 'video',
       op: 'compress',
@@ -91,7 +92,10 @@ describe('resolveCompressOptions — layer 1 (sdkDefault)', () => {
     });
     expect(wireOptions.crf).toBe(30);
     expect(wireOptions.preset).toBe('slow');
-    expect(wireOptions.audio_bitrate).toBe(96);
+    // v2.71.0 (rza1htNO): audioBitrate dropped from video_compress presets
+    // (audio re-encode is opt-in — the worker rejects audio_bitrate + default
+    // `copy` audio_codec), so it no longer reaches the wire from a preset.
+    expect(wireOptions.audio_bitrate).toBeUndefined();
     // v2.66.0 (ADR-0020): presets no longer bake codec / audio_codec / faststart;
     // the server container-resolves them (sparse-delta), so they are absent here.
     expect(wireOptions.codec).toBeUndefined();
@@ -654,15 +658,15 @@ describe('resolveCompressOptions — presetConfigHash', () => {
 // ---------------------------------------------------------------------------
 
 describe('resolveCompressOptions — invariants', () => {
-  it("presetVersion === '1.0' (matches PRESET_VERSION export)", () => {
+  it("presetVersion === '1.2' (matches PRESET_VERSION export)", () => {
     const { resolvedOptions } = resolveCompressOptions({
       media: 'image',
       op: 'compress',
       optimize: OptimizeFor.Size,
       explicitOptions: {},
     });
-    expect(resolvedOptions.presetVersion).toBe('1.0');
-    expect(PRESET_VERSION).toBe('1.0');
+    expect(resolvedOptions.presetVersion).toBe('1.2');
+    expect(PRESET_VERSION).toBe('1.2');
   });
 
   it('overrides[] back-compat mirrors sources.explicit verbatim', () => {

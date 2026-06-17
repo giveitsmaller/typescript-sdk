@@ -16,7 +16,7 @@ export const PRESETS: PresetMatrix = Object.freeze({
       "metadata": "All",
       "iccProfile": "Strip",
       "progressive": true,
-      "outputFormat": "Smallest",
+      "outputFormat": "Original",
     } as PresetCell),
     Balanced: Object.freeze({
       "mode": "Auto",
@@ -24,7 +24,7 @@ export const PRESETS: PresetMatrix = Object.freeze({
       "metadata": "Sensitive",
       "iccProfile": "Preserve",
       "progressive": true,
-      "outputFormat": "Auto",
+      "outputFormat": "Original",
     } as PresetCell),
     Quality: Object.freeze({
       "mode": "Lossless",
@@ -55,17 +55,14 @@ export const PRESETS: PresetMatrix = Object.freeze({
     Size: Object.freeze({
       "crf": 30,
       "preset": "Slow",
-      "audioBitrate": "_96",
     } as PresetCell),
     Balanced: Object.freeze({
       "crf": 23,
       "preset": "Medium",
-      "audioBitrate": "_128",
     } as PresetCell),
     Quality: Object.freeze({
       "crf": 18,
       "preset": "Slow",
-      "audioBitrate": "_192",
     } as PresetCell),
   } as Readonly<Record<PresetLevel, PresetCell>>),
   "document_pdf_compress": Object.freeze({

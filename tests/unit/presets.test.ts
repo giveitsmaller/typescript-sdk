@@ -42,8 +42,10 @@ describe('ImageCompressPresetOptions.shippedDefaultsFor', () => {
     expect(opts.iccProfile).toBe(IccProfilePolicy.Strip);
     expect(opts.iccProfile).toBe('strip');
     expect(opts.progressive).toBe(true);
-    expect(opts.outputFormat).toBe(ImageFormat.Smallest);
-    expect(opts.outputFormat).toBe('smallest');
+    // VcPeRWdD (contracts v2.73.0): Size outputFormat re-pointed Smallest -> Original
+    // (`smallest` is now per_value_availability:planned — the facade self-422 guard).
+    expect(opts.outputFormat).toBe(ImageFormat.Original);
+    expect(opts.outputFormat).toBe('original');
   });
 
   it('Balanced (default) — different cell values', () => {
@@ -52,7 +54,8 @@ describe('ImageCompressPresetOptions.shippedDefaultsFor', () => {
     expect(opts.quality).toBe(80);
     expect(opts.metadata).toBe(ImageMetadataPolicy.Sensitive);
     expect(opts.iccProfile).toBe(IccProfilePolicy.Preserve);
-    expect(opts.outputFormat).toBe(ImageFormat.Auto);
+    // VcPeRWdD: Balanced outputFormat re-pointed Auto -> Original (`auto` now planned).
+    expect(opts.outputFormat).toBe(ImageFormat.Original);
   });
 
   it('Quality — mode=Lossless AND quality=undefined (depends_on: { mode: lossy })', () => {
@@ -103,23 +106,25 @@ describe('VideoCompressPresetOptions.shippedDefaultsFor', () => {
   // v2.66.0 (contracts ADR-0020): video_compress presets no longer bake
   // codec / audioCodec / faststart. Those are container-coupled, so the server
   // container-resolves effective defaults for the unset options (sparse-delta) —
-  // a WebM target can no longer 422 on a baked MP4-oriented codec. Presets carry
-  // only the genuine size/quality knobs (crf / preset / audioBitrate).
-  it('Size cell — CRF 30, Slow preset, 96kbps audio; codec/audioCodec/faststart server-resolved', () => {
+  // a WebM target can no longer 422 on a baked MP4-oriented codec.
+  // v2.71.0 (rza1htNO): audioBitrate ALSO dropped — the worker rejects
+  // audio_bitrate + the default `copy` audio_codec (presets don't set audioCodec),
+  // so audio re-encode is now opt-in. Presets carry only crf / preset.
+  it('Size cell — CRF 30, Slow preset; audioBitrate/codec/audioCodec/faststart server-resolved', () => {
     const opts = VideoCompressPresetOptions.shippedDefaultsFor(OptimizeFor.Size);
     expect(opts.crf).toBe(30);
     expect(opts.preset).toBe(VideoPreset.Slow);
-    expect(opts.audioBitrate).toBe(96);
+    expect(opts.audioBitrate).toBeUndefined();
     expect(opts.codec).toBeUndefined();
     expect(opts.audioCodec).toBeUndefined();
     expect(opts.faststart).toBeUndefined();
   });
 
-  it('Balanced cell — CRF 23, Medium preset, 128kbps audio; codec server-resolved', () => {
+  it('Balanced cell — CRF 23, Medium preset; audioBitrate/codec server-resolved', () => {
     const opts = VideoCompressPresetOptions.shippedDefaultsFor(OptimizeFor.Balanced);
     expect(opts.crf).toBe(23);
     expect(opts.preset).toBe(VideoPreset.Medium);
-    expect(opts.audioBitrate).toBe(128);
+    expect(opts.audioBitrate).toBeUndefined();
     expect(opts.codec).toBeUndefined();
     expect(opts.faststart).toBeUndefined();
   });

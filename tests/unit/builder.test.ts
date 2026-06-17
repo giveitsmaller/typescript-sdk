@@ -279,7 +279,7 @@ describe('OperationBuilder.run', () => {
     expect(resolved.applied).toEqual({ quality: 80 });
     // Back-compat (deprecated): `.overrides` mirrors `.sources.explicit`.
     expect(resolved.overrides).toEqual(['quality']);
-    expect(resolved.presetVersion).toBe('1.0');
+    expect(resolved.presetVersion).toBe('1.2');
     // T4b — sources buckets populated by the resolver. Layer-3 (scoped)
     // stays empty until T4c lands `withPresetDefaults`.
     expect(resolved.sources).toEqual({

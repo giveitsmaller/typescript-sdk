@@ -53,8 +53,14 @@ import {
   type PresetOp,
 } from './presets/index.js';
 
-/** Bumped on any change to a `*PresetOptions.shippedDefaultsFor(...)` cell value. */
-export const PRESET_VERSION = '1.0';
+/**
+ * Bumped on any change to a `*PresetOptions.shippedDefaultsFor(...)` cell value.
+ * Must track the contracts `sdk-spec/version.yaml` `presetVersion` (mirrored in
+ * the generated `sdk_spec/version.ts`). 1.0 → 1.2 on the contracts v2.71.0
+ * (video_compress `audioBitrate` dropped) + v2.73.0 (image Size/Balanced
+ * `outputFormat` Smallest/Auto → Original — VcPeRWdD facade self-422 guard) cuts.
+ */
+export const PRESET_VERSION = '1.2';
 
 // ---------------------------------------------------------------------------
 // Wire-field alias map (declarative — NOT generic toSnakeCase).
