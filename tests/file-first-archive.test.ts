@@ -1,11 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { FilesRecipe, ArchivedRecipe, fileInput, isArchiveStatus } from '../src/file-first.js';
 import type { ArchiveRecipeOptions } from '../src/file-first.js';
 import type { GislClient } from '../src/client.js';
 import type { WorkflowStatusResponse } from '@giveitsmaller/contracts/openapi';
 import { OptimizeFor } from '../src/generated/sdk_spec/enums.js';
-import { GislConfigError } from '../src/errors.js';
+import { GislConfigError, GislTimeoutError } from '../src/errors.js';
 
 /**
  * FF3b — the fluent `files([...]).archive(...)` N→1 bundle (terminal; no
@@ -110,5 +110,132 @@ describe('isArchiveStatus — data-driven archive detection (for Handle projecti
 
   it('is false for an empty job list', () => {
     expect(isArchiveStatus(status([]))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// run() — end-to-end via vi.fn client doubles (mirrors file-first-run.test.ts).
+// xxy5Rlsy follow-up (Wi4OnaJE): ArchivedRecipe.run() only reached the shared
+// `_uploadInputsAndCreate` helper transitively (lowering + count-guard submit
+// tests). These tests drive it at RUNTIME.
+// ---------------------------------------------------------------------------
+
+interface MockClientHandles {
+  uploadFile: ReturnType<typeof vi.fn>;
+  createWorkflow: ReturnType<typeof vi.fn>;
+  getWorkflowStatus: ReturnType<typeof vi.fn>;
+  getWorkflowDownloads: ReturnType<typeof vi.fn>;
+  streamEvents: ReturnType<typeof vi.fn>;
+  maybeWaitForVideoProbe: ReturnType<typeof vi.fn>;
+  client: GislClient;
+}
+
+function makeMockClient(): MockClientHandles {
+  const uploadFile = vi.fn(async (_input: string | Blob) => ({
+    fileId: 'uploaded',
+    contentType: 'application/pdf',
+    sizeBytes: 1024,
+  }));
+  const createWorkflow = vi.fn(async (_payload: unknown) => ({ workflowId: 'wf_1', status: 'running' }));
+  const getWorkflowStatus = vi.fn(async (_id: string) => ({
+    workflowId: 'wf_1',
+    status: 'completed',
+    jobs: [{ ref: 'archive', status: 'completed', operations: [] }],
+  }));
+  // The downloads carry the src_* passthrough re-exposures of the raw uploads
+  // ALONGSIDE the archive output, so run()'s `ref === 'archive'` filter is
+  // genuinely exercised — a regression that stopped filtering would surface the
+  // src_* plumbing as artifacts.
+  const getWorkflowDownloads = vi.fn(async (_id: string) => ({
+    downloads: [
+      { ref: 'src_0', files: [{ operation: 'passthrough', operationId: 's0', filename: 'report.pdf', sizeBytes: 1, downloadUrl: 'https://signed.example.com/report.pdf' }] },
+      { ref: 'src_1', files: [{ operation: 'passthrough', operationId: 's1', filename: 'hero.jpg', sizeBytes: 1, downloadUrl: 'https://signed.example.com/hero.jpg' }] },
+      { ref: 'archive', files: [{ operation: 'archive', operationId: 'oa', filename: 'bundle.zip', sizeBytes: 99, downloadUrl: 'https://signed.example.com/bundle.zip' }] },
+    ],
+  }));
+  const streamEvents = vi.fn(async function* (_id: string) {
+    yield { event: 'workflow.completed', data: { status: 'completed' } };
+  });
+  const maybeWaitForVideoProbe = vi.fn(async () => undefined);
+  const client = {
+    uploadFile,
+    createWorkflow,
+    getWorkflowStatus,
+    getWorkflowDownloads,
+    streamEvents,
+    maybeWaitForVideoProbe,
+  } as unknown as GislClient;
+  return { uploadFile, createWorkflow, getWorkflowStatus, getWorkflowDownloads, streamEvents, maybeWaitForVideoProbe, client };
+}
+
+beforeEach(() => {
+  (globalThis as unknown as { fetch: typeof fetch }).fetch = vi.fn(
+    async () => new Response('{}', { status: 200 }),
+  ) as unknown as typeof fetch;
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe('ArchivedRecipe.run — happy path through the shared helper', () => {
+  it('uploads every input, creates the lowered archive DAG, and projects ONLY the archive output', async () => {
+    const mock = makeMockClient();
+    mock.uploadFile
+      .mockResolvedValueOnce({ fileId: 'up0', contentType: 'application/pdf', sizeBytes: 1 })
+      .mockResolvedValueOnce({ fileId: 'up1', contentType: 'image/jpeg', sizeBytes: 1 });
+
+    const result = await new ArchivedRecipe(
+      [fileInput.path('report.pdf'), fileInput.path('hero.jpg')],
+      { format: 'zip' },
+      mock.client,
+    ).run({ maxWait: '30s' });
+
+    // Both inputs uploaded; the probe gate is consulted once per uploaded input
+    // with that input's id (the helper's per-input probe targets).
+    expect(mock.uploadFile).toHaveBeenCalledTimes(2);
+    expect(mock.maybeWaitForVideoProbe.mock.calls.map((c) => c[0])).toEqual(['up0', 'up1']);
+
+    // ONE workflow created from the lowered archive DAG: a passthrough src job
+    // per input (referencing the uploaded ids) + a terminal archive job.
+    expect(mock.createWorkflow).toHaveBeenCalledOnce();
+    const payload = mock.createWorkflow.mock.calls[0][0];
+    expect(payload.jobs.map((j: { id: string }) => j.id)).toEqual(['src_0', 'src_1', 'archive']);
+    expect(payload.jobs[0].source).toEqual({ type: 'upload', file_id: 'up0' });
+    expect(payload.jobs[1].source).toEqual({ type: 'upload', file_id: 'up1' });
+    expect(payload.jobs[2].operations[0].type).toBe('archive');
+
+    // The RunResult projects ONLY the archive output — the src_* passthrough
+    // downloads (raw uploads) are filtered out.
+    expect(result.state).toBe('completed');
+    expect(result.ok).toBe(true);
+    expect(result.artifacts.map((a) => a.filename)).toEqual(['bundle.zip']);
+    expect(result.url).toBe('https://signed.example.com/bundle.zip');
+  });
+});
+
+describe('ArchivedRecipe.run — timeout label', () => {
+  // Pin the archive label noun the shared helper threads into its timeout
+  // message. A mid-batch deadline (maxWait 1ms + a slow first upload over two
+  // inputs) trips the `during ${uploadsLabel} uploads` throw — asserting the
+  // MESSAGE (not the racy upload call-count) locks the noun.
+  it('its mid-batch timeout message names the archive label', async () => {
+    const mock = makeMockClient();
+    mock.uploadFile.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return { fileId: 'uploaded', contentType: 'application/pdf', sizeBytes: 1 };
+    });
+
+    const err = await new ArchivedRecipe(
+      [fileInput.path('a.pdf'), fileInput.path('b.pdf')],
+      {},
+      mock.client,
+    )
+      .run({ maxWait: 1 })
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(GislTimeoutError);
+    expect((err as Error).message).toContain('archive');
+    expect(mock.createWorkflow).not.toHaveBeenCalled();
   });
 });

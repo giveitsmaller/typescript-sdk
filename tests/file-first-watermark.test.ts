@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   Recipe,
@@ -7,9 +7,10 @@ import {
   fileInput,
   isWatermarkStatus,
 } from '../src/file-first.js';
+import type { GislClient } from '../src/client.js';
 import type { WorkflowStatusResponse } from '@giveitsmaller/contracts/openapi';
 import { OptimizeFor } from '../src/generated/sdk_spec/enums.js';
-import { GislConfigError } from '../src/errors.js';
+import { GislConfigError, GislTimeoutError } from '../src/errors.js';
 
 /**
  * FF4a (Z7zTr789) — the fluent `file(base).watermark(overlay, opts)` multi-input
@@ -249,5 +250,130 @@ describe('WATERMARK_CAPABILITY table', () => {
     expect(WATERMARK_CAPABILITY.image_watermark.image.availability).toBe('stable');
     expect(WATERMARK_CAPABILITY.image_watermark.image_gif.availability).toBe('planned');
     expect(WATERMARK_CAPABILITY.video_watermark.video.availability).toBe('beta');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// run() — end-to-end via vi.fn client doubles (mirrors file-first-run.test.ts).
+// xxy5Rlsy follow-up (Wi4OnaJE): WatermarkedRecipe.run() only reached the
+// shared `_uploadInputsAndCreate` helper transitively (lowering + count-guard
+// submit tests). These tests drive it at RUNTIME.
+// ---------------------------------------------------------------------------
+
+interface MockClientHandles {
+  uploadFile: ReturnType<typeof vi.fn>;
+  createWorkflow: ReturnType<typeof vi.fn>;
+  getWorkflowStatus: ReturnType<typeof vi.fn>;
+  getWorkflowDownloads: ReturnType<typeof vi.fn>;
+  streamEvents: ReturnType<typeof vi.fn>;
+  maybeWaitForVideoProbe: ReturnType<typeof vi.fn>;
+  client: GislClient;
+}
+
+function makeMockClient(): MockClientHandles {
+  const uploadFile = vi.fn(async (_input: string | Blob) => ({
+    fileId: 'uploaded',
+    contentType: 'image/jpeg',
+    sizeBytes: 1024,
+  }));
+  const createWorkflow = vi.fn(async (_payload: unknown) => ({ workflowId: 'wf_1', status: 'running' }));
+  const getWorkflowStatus = vi.fn(async (_id: string) => ({
+    workflowId: 'wf_1',
+    status: 'completed',
+    jobs: [{ ref: 'watermark', status: 'completed', operations: [] }],
+  }));
+  // The downloads carry the src_* passthrough re-exposures of the raw base +
+  // overlay uploads ALONGSIDE the watermark output, so run()'s
+  // `ref === 'watermark'` filter is genuinely exercised.
+  const getWorkflowDownloads = vi.fn(async (_id: string) => ({
+    downloads: [
+      { ref: 'src_0', files: [{ operation: 'passthrough', operationId: 's0', filename: 'photo.jpg', sizeBytes: 1, downloadUrl: 'https://signed.example.com/photo.jpg' }] },
+      { ref: 'src_1', files: [{ operation: 'passthrough', operationId: 's1', filename: 'logo.png', sizeBytes: 1, downloadUrl: 'https://signed.example.com/logo.png' }] },
+      { ref: 'watermark', files: [{ operation: 'image_watermark', operationId: 'ow', filename: 'photo_watermarked.jpg', sizeBytes: 99, downloadUrl: 'https://signed.example.com/photo_watermarked.jpg' }] },
+    ],
+  }));
+  const streamEvents = vi.fn(async function* (_id: string) {
+    yield { event: 'workflow.completed', data: { status: 'completed' } };
+  });
+  const maybeWaitForVideoProbe = vi.fn(async () => undefined);
+  const client = {
+    uploadFile,
+    createWorkflow,
+    getWorkflowStatus,
+    getWorkflowDownloads,
+    streamEvents,
+    maybeWaitForVideoProbe,
+  } as unknown as GislClient;
+  return { uploadFile, createWorkflow, getWorkflowStatus, getWorkflowDownloads, streamEvents, maybeWaitForVideoProbe, client };
+}
+
+/** A client-bound base Recipe, mirroring the `gisl().file(...)` wiring. */
+function boundBase(mock: MockClientHandles, path = 'photo.jpg'): Recipe {
+  return new Recipe(fileInput.path(path), undefined, [], undefined, undefined, mock.client);
+}
+
+beforeEach(() => {
+  (globalThis as unknown as { fetch: typeof fetch }).fetch = vi.fn(
+    async () => new Response('{}', { status: 200 }),
+  ) as unknown as typeof fetch;
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe('WatermarkedRecipe.run — happy path through the shared helper', () => {
+  it('uploads base + overlay, creates the lowered watermark DAG, and projects ONLY the watermark output', async () => {
+    const mock = makeMockClient();
+    mock.uploadFile
+      .mockResolvedValueOnce({ fileId: 'base0', contentType: 'image/jpeg', sizeBytes: 1 })
+      .mockResolvedValueOnce({ fileId: 'ovl1', contentType: 'image/png', sizeBytes: 1 });
+
+    const result = await boundBase(mock)
+      .watermark(new Recipe(fileInput.path('logo.png')), { anchor: 'center' })
+      .run({ maxWait: '30s' });
+
+    // Base + overlay both uploaded, in that order; the probe gate is consulted
+    // once per uploaded input with that input's id.
+    expect(mock.uploadFile).toHaveBeenCalledTimes(2);
+    expect(mock.maybeWaitForVideoProbe.mock.calls.map((c) => c[0])).toEqual(['base0', 'ovl1']);
+
+    // ONE workflow created from the lowered watermark DAG: src_0 base + src_1
+    // overlay passthrough jobs + the role-tagged watermark job.
+    expect(mock.createWorkflow).toHaveBeenCalledOnce();
+    const payload = mock.createWorkflow.mock.calls[0][0];
+    expect(payload.jobs.map((j: { id: string }) => j.id)).toEqual(['src_0', 'src_1', 'watermark']);
+    const wm = payload.jobs.find((j: { id: string }) => j.id === 'watermark');
+    expect(wm.operations[0].type).toBe('image_watermark');
+
+    // The RunResult projects ONLY the watermark output — the src_* passthrough
+    // downloads (raw base/overlay) are filtered out.
+    expect(result.state).toBe('completed');
+    expect(result.ok).toBe(true);
+    expect(result.artifacts.map((a) => a.filename)).toEqual(['photo_watermarked.jpg']);
+    expect(result.url).toBe('https://signed.example.com/photo_watermarked.jpg');
+  });
+});
+
+describe('WatermarkedRecipe.run — timeout label', () => {
+  // Pin the watermark label noun the shared helper threads into its timeout
+  // message. A mid-batch deadline (maxWait 1ms + a slow first upload over the
+  // base + overlay inputs) trips the `during ${uploadsLabel} uploads` throw —
+  // asserting the MESSAGE (not the racy upload call-count) locks the noun.
+  it('its mid-batch timeout message names the watermark label', async () => {
+    const mock = makeMockClient();
+    mock.uploadFile.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return { fileId: 'uploaded', contentType: 'image/jpeg', sizeBytes: 1 };
+    });
+
+    const err = await boundBase(mock)
+      .watermark(new Recipe(fileInput.path('logo.png')))
+      .run({ maxWait: 1 })
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(GislTimeoutError);
+    expect((err as Error).message).toContain('watermark');
+    expect(mock.createWorkflow).not.toHaveBeenCalled();
   });
 });

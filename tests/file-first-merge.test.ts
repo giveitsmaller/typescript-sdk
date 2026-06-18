@@ -5,7 +5,7 @@ import type { MergeOptions } from '../src/merge.js';
 import type { GislClient } from '../src/client.js';
 import type { WorkflowStatusResponse } from '@giveitsmaller/contracts/openapi';
 import { OptimizeFor } from '../src/generated/sdk_spec/enums.js';
-import { GislConfigError } from '../src/errors.js';
+import { GislConfigError, GislTimeoutError } from '../src/errors.js';
 
 /**
  * FF3b (IE29x9QL) — the fluent `files([...]).merge(...)` N→1 combine + the
@@ -161,5 +161,35 @@ describe('isMergeStatus — data-driven merge detection (for Handle projection)'
 
   it('is false for an empty job list', () => {
     expect(isMergeStatus(status([]))).toBe(false);
+  });
+});
+
+describe('MergedRecipe.run — timeout label', () => {
+  // xxy5Rlsy follow-up (Wi4OnaJE): pin the merge label noun the shared
+  // `_uploadInputsAndCreate` helper threads into its timeout message. A
+  // mid-batch deadline (maxWait 1ms + a slow first upload over two inputs)
+  // trips the `during ${uploadsLabel} uploads` throw — the message MUST carry
+  // the merge noun so a label swap can never pass CI. The MESSAGE is asserted
+  // (not the upload call-count, which races on a slow host).
+  it('its mid-batch timeout message names the merge label', async () => {
+    const uploadFile = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return { fileId: 'uploaded', contentType: 'video/mp4', sizeBytes: 1 };
+    });
+    const createWorkflow = vi.fn();
+    const merged = new MergedRecipe(
+      [fileInput.path('intro.mp4'), fileInput.path('outro.mp4')],
+      { mediaKind: 'video' },
+      [],
+      undefined,
+      undefined,
+      { uploadFile, createWorkflow, maybeWaitForVideoProbe: vi.fn(async () => undefined) } as unknown as GislClient,
+    );
+
+    const err = await merged.run({ maxWait: 1 }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(GislTimeoutError);
+    expect((err as Error).message).toContain('merge');
+    expect(createWorkflow).not.toHaveBeenCalled();
   });
 });

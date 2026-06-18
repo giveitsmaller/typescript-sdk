@@ -570,6 +570,36 @@ describe('FilesRecipe.run — timeout', () => {
     ).rejects.toBeInstanceOf(GislTimeoutError);
     expect(mock.getWorkflowDownloads).not.toHaveBeenCalled();
   });
+
+  // xxy5Rlsy follow-up (Wi4OnaJE): pin the per-recipe timeout-message label
+  // noun the shared `_uploadInputsAndCreate` helper threads in. A mid-batch
+  // deadline (maxWait 1ms + a slow first upload over two inputs) trips the
+  // helper's `during ${uploadsLabel} uploads` throw — the message MUST carry
+  // the fan-out noun, so a label regression (e.g. 'fan-out' -> 'workflow')
+  // can never pass CI. Asserting the MESSAGE (not the upload call-count, which
+  // races on a slow host) is what locks the distinguishing uploadsLabel.
+  it('its mid-batch timeout message names the fan-out label', async () => {
+    const mock = makeMockClient();
+    mock.uploadFile.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return { fileId: 'uploaded', contentType: 'image/jpeg', sizeBytes: 1 };
+    });
+    const err = await new FilesRecipe(
+      [fileInput.path('a.jpg'), fileInput.path('b.jpg')],
+      [],
+      undefined,
+      undefined,
+      mock.client,
+    )
+      .compress()
+      .run({ maxWait: 1 })
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(GislTimeoutError);
+    expect((err as Error).message).toContain('fan-out');
+    // create must NOT fire once the upload phase blew the deadline.
+    expect(mock.createWorkflow).not.toHaveBeenCalled();
+  });
 });
 
 // FilesRecipe extends the file-first surface; it composes Recipe internally.
