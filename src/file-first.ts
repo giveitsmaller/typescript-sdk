@@ -1354,6 +1354,112 @@ function _lowerWatermarkOp(wireOp: WatermarkWireOp, options: Readonly<Record<str
 }
 
 /**
+ * Shared multi-input upload-then-create tail for the multi-input recipes
+ * ({@link FilesRecipe}, {@link MergedRecipe}, {@link ArchivedRecipe},
+ * {@link WatermarkedRecipe}). Uploads each fresh input (passing through upload
+ * progress), tracks the multipart-video uploads for the best-effort
+ * probe-before-create, then builds the payload via `toPayload` and creates the
+ * workflow. Abort + deadline are re-checked between every phase, exactly as the
+ * per-recipe copies did before this was extracted (xxy5Rlsy).
+ *
+ * Recipe-specific behaviour stays with the caller: `validatePreUpload()` runs
+ * BEFORE this call (Merged/Archived/Watermarked), and the input source
+ * (`this.inputs` vs `this.inputsInOrder()`) plus the timeout-message nouns
+ * (`uploadsLabel`/`workflowLabel`) are passed in so the thrown messages are
+ * byte-identical to the originals.
+ */
+async function _uploadInputsAndCreate(
+  client: GislClient,
+  inputs: readonly FileInput[],
+  toPayload: (fileIds: readonly string[], callbackUrl?: string) => WorkflowCreatePayload,
+  opts: {
+    webhook: string | undefined;
+    deadline: number | undefined;
+    onProgress?: (event: ProgressEvent) => void;
+    signal?: AbortSignal;
+    probeBeforeCreate?: boolean;
+    probeTimeoutMs?: number;
+    uploadsLabel: string;
+    workflowLabel: string;
+  },
+): Promise<WorkflowCreateResponse> {
+  const { webhook, deadline, onProgress, signal, probeBeforeCreate, probeTimeoutMs, uploadsLabel, workflowLabel } =
+    opts;
+  const fileIds: string[] = [];
+  // Track each freshly-uploaded input's probe-gate inputs (a pre-uploaded id
+  // carries no local mime/size, so it is excluded — never probed).
+  const probeTargets: { fileId: string; isVideo: boolean; sizeBytes?: number }[] = [];
+  for (const input of inputs) {
+    // Fail fast between uploads — a deadline that elapses mid-batch should not
+    // force every remaining input to upload before throwing.
+    _checkAborted(signal);
+    if (deadline !== undefined && Date.now() >= deadline) {
+      throw new GislTimeoutError(
+        `maxWait elapsed during ${uploadsLabel} uploads before all inputs were uploaded`,
+      );
+    }
+    if (input.kind === 'uploadId') {
+      fileIds.push(input.fileId);
+    } else {
+      const source = input.kind === 'path' ? input.path : input.blob;
+      const up = await client.uploadFile(source, {
+        signal,
+        ...(onProgress !== undefined
+          ? {
+              onProgress: (uploadedBytes: number, totalBytes: number): void => {
+                onProgress({ phase: 'upload', uploadedBytes, totalBytes });
+              },
+            }
+          : {}),
+      });
+      fileIds.push(up.fileId);
+      probeTargets.push({
+        fileId: up.fileId,
+        isVideo: _detectCompressMedia(source) === 'video',
+        sizeBytes: up.sizeBytes,
+      });
+    }
+  }
+  _checkAborted(signal);
+  if (deadline !== undefined && Date.now() >= deadline) {
+    throw new GislTimeoutError(
+      `Uploads completed but maxWait elapsed before ${workflowLabel} could be created`,
+    );
+  }
+  // Best-effort probe-before-create for the multipart-video inputs. Run the
+  // waits CONCURRENTLY (Promise.all): each is bounded by the SAME capped
+  // timeout, so the aggregate wall-clock stays ~timeout rather than N×timeout.
+  // The cap is the remaining maxWait budget so the waits cannot push
+  // createWorkflow past the caller's deadline. Never-bounce, so a give-up just
+  // proceeds.
+  const cappedProbeTimeoutMs = _cappedProbeTimeoutMs(probeTimeoutMs, deadline);
+  await Promise.all(
+    probeTargets.map((t) =>
+      client.maybeWaitForVideoProbe(t.fileId, {
+        enabled: probeBeforeCreate ?? true,
+        isVideo: t.isVideo,
+        sizeBytes: t.sizeBytes,
+        timeoutMs: cappedProbeTimeoutMs,
+        signal,
+      }),
+    ),
+  );
+  // A cancel arriving during a FINAL successful probe request must not still
+  // create the workflow (the probe waits return landed without a final abort
+  // re-check), so check here BEFORE createWorkflow.
+  _checkAborted(signal);
+  // RE-CHECK the deadline AFTER the probe waits (they consume time).
+  if (deadline !== undefined && Date.now() >= deadline) {
+    throw new GislTimeoutError(
+      `Probe wait completed but maxWait elapsed before ${workflowLabel} could be created`,
+    );
+  }
+  const created = await client.createWorkflow(toPayload(fileIds, webhook));
+  _checkAborted(signal);
+  return created;
+}
+
+/**
  * The homogeneous fan-out builder value (FF3a). `client.files([a, b, c])`
  * returns a `FilesRecipe`; the op-chain methods (`compress`, `convert`,
  * `thumbnail`, `textWatermark`) build ONE shared recipe (chain) that is applied
@@ -1657,78 +1763,21 @@ export class FilesRecipe {
     probeBeforeCreate?: boolean,
     probeTimeoutMs?: number,
   ): Promise<WorkflowCreateResponse> {
-    const fileIds: string[] = [];
-    // Track each freshly-uploaded input's probe-gate inputs (a pre-uploaded id
-    // carries no local mime/size, so it is excluded — never probed).
-    const probeTargets: { fileId: string; isVideo: boolean; sizeBytes?: number }[] = [];
-    for (const input of this.inputs) {
-      // Fail fast between uploads — a deadline that elapses mid-batch should
-      // not force every remaining input to upload before throwing.
-      _checkAborted(signal);
-      if (deadline !== undefined && Date.now() >= deadline) {
-        throw new GislTimeoutError(
-          'maxWait elapsed during fan-out uploads before all inputs were uploaded',
-        );
-      }
-      if (input.kind === 'uploadId') {
-        fileIds.push(input.fileId);
-      } else {
-        const source = input.kind === 'path' ? input.path : input.blob;
-        const up = await this.client!.uploadFile(source, {
-          signal,
-          ...(onProgress !== undefined
-            ? {
-                onProgress: (uploadedBytes: number, totalBytes: number): void => {
-                  onProgress({ phase: 'upload', uploadedBytes, totalBytes });
-                },
-              }
-            : {}),
-        });
-        fileIds.push(up.fileId);
-        probeTargets.push({
-          fileId: up.fileId,
-          isVideo: _detectCompressMedia(source) === 'video',
-          sizeBytes: up.sizeBytes,
-        });
-      }
-    }
-    _checkAborted(signal);
-    if (deadline !== undefined && Date.now() >= deadline) {
-      throw new GislTimeoutError(
-        'Uploads completed but maxWait elapsed before workflow could be created',
-      );
-    }
-    // Best-effort probe-before-create for the multipart-video inputs. Run the
-    // waits CONCURRENTLY (Promise.all): each is bounded by the SAME capped
-    // timeout, so the aggregate wall-clock stays ~timeout rather than N×timeout.
-    // The cap is the remaining maxWait budget so the waits cannot push
-    // createWorkflow past the caller's deadline. Never-bounce, so a give-up
-    // just proceeds.
-    const cappedProbeTimeoutMs = _cappedProbeTimeoutMs(probeTimeoutMs, deadline);
-    await Promise.all(
-      probeTargets.map((t) =>
-        this.client!.maybeWaitForVideoProbe(t.fileId, {
-          enabled: probeBeforeCreate ?? true,
-          isVideo: t.isVideo,
-          sizeBytes: t.sizeBytes,
-          timeoutMs: cappedProbeTimeoutMs,
-          signal,
-        }),
-      ),
+    return _uploadInputsAndCreate(
+      this.client!,
+      this.inputs,
+      (fileIds, callbackUrl) => this.toWorkflowPayload(fileIds, callbackUrl),
+      {
+        webhook,
+        deadline,
+        onProgress,
+        signal,
+        probeBeforeCreate,
+        probeTimeoutMs,
+        uploadsLabel: 'fan-out',
+        workflowLabel: 'workflow',
+      },
     );
-    // A cancel arriving during a FINAL successful probe request must not still
-    // create the workflow (the probe waits return landed without a final abort
-    // re-check), so check here BEFORE createWorkflow.
-    _checkAborted(signal);
-    // RE-CHECK the deadline AFTER the probe waits (they consume time).
-    if (deadline !== undefined && Date.now() >= deadline) {
-      throw new GislTimeoutError(
-        'Probe wait completed but maxWait elapsed before workflow could be created',
-      );
-    }
-    const created = await this.client!.createWorkflow(this.toWorkflowPayload(fileIds, webhook));
-    _checkAborted(signal);
-    return created;
   }
 
   /**
@@ -2000,74 +2049,21 @@ export class MergedRecipe {
     probeTimeoutMs?: number,
   ): Promise<WorkflowCreateResponse> {
     this.validatePreUpload();
-    const fileIds: string[] = [];
-    // Per-input video detection: merge's inferMediaKind decides the OUTPUT
-    // media, not each input's, so detect per input via _detectCompressMedia.
-    // A pre-uploaded id carries no local mime/size, so it is never probed.
-    const probeTargets: { fileId: string; isVideo: boolean; sizeBytes?: number }[] = [];
-    for (const input of this.inputs) {
-      _checkAborted(signal);
-      if (deadline !== undefined && Date.now() >= deadline) {
-        throw new GislTimeoutError(
-          'maxWait elapsed during merge uploads before all inputs were uploaded',
-        );
-      }
-      if (input.kind === 'uploadId') {
-        fileIds.push(input.fileId);
-      } else {
-        const source = input.kind === 'path' ? input.path : input.blob;
-        const up = await this.client!.uploadFile(source, {
-          signal,
-          ...(onProgress !== undefined
-            ? {
-                onProgress: (uploadedBytes: number, totalBytes: number): void => {
-                  onProgress({ phase: 'upload', uploadedBytes, totalBytes });
-                },
-              }
-            : {}),
-        });
-        fileIds.push(up.fileId);
-        probeTargets.push({
-          fileId: up.fileId,
-          isVideo: _detectCompressMedia(source) === 'video',
-          sizeBytes: up.sizeBytes,
-        });
-      }
-    }
-    _checkAborted(signal);
-    if (deadline !== undefined && Date.now() >= deadline) {
-      throw new GislTimeoutError(
-        'Uploads completed but maxWait elapsed before the merge workflow could be created',
-      );
-    }
-    // Best-effort, concurrent probe-before-create for the multipart-video
-    // inputs (never-bounce; each capped to the remaining maxWait budget so the
-    // waits cannot push createWorkflow past the caller's deadline).
-    const cappedProbeTimeoutMs = _cappedProbeTimeoutMs(probeTimeoutMs, deadline);
-    await Promise.all(
-      probeTargets.map((t) =>
-        this.client!.maybeWaitForVideoProbe(t.fileId, {
-          enabled: probeBeforeCreate ?? true,
-          isVideo: t.isVideo,
-          sizeBytes: t.sizeBytes,
-          timeoutMs: cappedProbeTimeoutMs,
-          signal,
-        }),
-      ),
+    return _uploadInputsAndCreate(
+      this.client!,
+      this.inputs,
+      (fileIds, callbackUrl) => this.toWorkflowPayload(fileIds, callbackUrl),
+      {
+        webhook,
+        deadline,
+        onProgress,
+        signal,
+        probeBeforeCreate,
+        probeTimeoutMs,
+        uploadsLabel: 'merge',
+        workflowLabel: 'the merge workflow',
+      },
     );
-    // A cancel arriving during a FINAL successful probe request must not still
-    // create the workflow (the probe waits return landed without a final abort
-    // re-check), so check here BEFORE createWorkflow.
-    _checkAborted(signal);
-    // RE-CHECK the deadline AFTER the probe waits (they consume time).
-    if (deadline !== undefined && Date.now() >= deadline) {
-      throw new GislTimeoutError(
-        'Probe wait completed but maxWait elapsed before the merge workflow could be created',
-      );
-    }
-    const created = await this.client!.createWorkflow(this.toWorkflowPayload(fileIds, webhook));
-    _checkAborted(signal);
-    return created;
   }
 
   /**
@@ -2362,74 +2358,21 @@ export class ArchivedRecipe {
     probeTimeoutMs?: number,
   ): Promise<WorkflowCreateResponse> {
     this.validatePreUpload();
-    const fileIds: string[] = [];
-    // Archive is media-agnostic (no inference) — detect per input via
-    // _detectCompressMedia so only video uploads are probed. A pre-uploaded id
-    // carries no local mime/size, so it is never probed.
-    const probeTargets: { fileId: string; isVideo: boolean; sizeBytes?: number }[] = [];
-    for (const input of this.inputs) {
-      _checkAborted(signal);
-      if (deadline !== undefined && Date.now() >= deadline) {
-        throw new GislTimeoutError(
-          'maxWait elapsed during archive uploads before all inputs were uploaded',
-        );
-      }
-      if (input.kind === 'uploadId') {
-        fileIds.push(input.fileId);
-      } else {
-        const source = input.kind === 'path' ? input.path : input.blob;
-        const up = await this.client!.uploadFile(source, {
-          signal,
-          ...(onProgress !== undefined
-            ? {
-                onProgress: (uploadedBytes: number, totalBytes: number): void => {
-                  onProgress({ phase: 'upload', uploadedBytes, totalBytes });
-                },
-              }
-            : {}),
-        });
-        fileIds.push(up.fileId);
-        probeTargets.push({
-          fileId: up.fileId,
-          isVideo: _detectCompressMedia(source) === 'video',
-          sizeBytes: up.sizeBytes,
-        });
-      }
-    }
-    _checkAborted(signal);
-    if (deadline !== undefined && Date.now() >= deadline) {
-      throw new GislTimeoutError(
-        'Uploads completed but maxWait elapsed before the archive workflow could be created',
-      );
-    }
-    // Best-effort, concurrent probe-before-create for the multipart-video
-    // inputs (never-bounce; each capped to the remaining maxWait budget so the
-    // waits cannot push createWorkflow past the caller's deadline).
-    const cappedProbeTimeoutMs = _cappedProbeTimeoutMs(probeTimeoutMs, deadline);
-    await Promise.all(
-      probeTargets.map((t) =>
-        this.client!.maybeWaitForVideoProbe(t.fileId, {
-          enabled: probeBeforeCreate ?? true,
-          isVideo: t.isVideo,
-          sizeBytes: t.sizeBytes,
-          timeoutMs: cappedProbeTimeoutMs,
-          signal,
-        }),
-      ),
+    return _uploadInputsAndCreate(
+      this.client!,
+      this.inputs,
+      (fileIds, callbackUrl) => this.toWorkflowPayload(fileIds, callbackUrl),
+      {
+        webhook,
+        deadline,
+        onProgress,
+        signal,
+        probeBeforeCreate,
+        probeTimeoutMs,
+        uploadsLabel: 'archive',
+        workflowLabel: 'the archive workflow',
+      },
     );
-    // A cancel arriving during a FINAL successful probe request must not still
-    // create the workflow (the probe waits return landed without a final abort
-    // re-check), so check here BEFORE createWorkflow.
-    _checkAborted(signal);
-    // RE-CHECK the deadline AFTER the probe waits (they consume time).
-    if (deadline !== undefined && Date.now() >= deadline) {
-      throw new GislTimeoutError(
-        'Probe wait completed but maxWait elapsed before the archive workflow could be created',
-      );
-    }
-    const created = await this.client!.createWorkflow(this.toWorkflowPayload(fileIds, webhook));
-    _checkAborted(signal);
-    return created;
   }
 
   /**
@@ -2706,64 +2649,21 @@ export class WatermarkedRecipe {
     probeTimeoutMs?: number,
   ): Promise<WorkflowCreateResponse> {
     this.validatePreUpload();
-    const fileIds: string[] = [];
-    const probeTargets: { fileId: string; isVideo: boolean; sizeBytes?: number }[] = [];
-    for (const input of this.inputsInOrder()) {
-      _checkAborted(signal);
-      if (deadline !== undefined && Date.now() >= deadline) {
-        throw new GislTimeoutError(
-          'maxWait elapsed during watermark uploads before all inputs were uploaded',
-        );
-      }
-      if (input.kind === 'uploadId') {
-        fileIds.push(input.fileId);
-      } else {
-        const source = input.kind === 'path' ? input.path : input.blob;
-        const up = await this.client!.uploadFile(source, {
-          signal,
-          ...(onProgress !== undefined
-            ? {
-                onProgress: (uploadedBytes: number, totalBytes: number): void => {
-                  onProgress({ phase: 'upload', uploadedBytes, totalBytes });
-                },
-              }
-            : {}),
-        });
-        fileIds.push(up.fileId);
-        probeTargets.push({
-          fileId: up.fileId,
-          isVideo: _detectCompressMedia(source) === 'video',
-          sizeBytes: up.sizeBytes,
-        });
-      }
-    }
-    _checkAborted(signal);
-    if (deadline !== undefined && Date.now() >= deadline) {
-      throw new GislTimeoutError(
-        'Uploads completed but maxWait elapsed before the watermark workflow could be created',
-      );
-    }
-    const cappedProbeTimeoutMs = _cappedProbeTimeoutMs(probeTimeoutMs, deadline);
-    await Promise.all(
-      probeTargets.map((t) =>
-        this.client!.maybeWaitForVideoProbe(t.fileId, {
-          enabled: probeBeforeCreate ?? true,
-          isVideo: t.isVideo,
-          sizeBytes: t.sizeBytes,
-          timeoutMs: cappedProbeTimeoutMs,
-          signal,
-        }),
-      ),
+    return _uploadInputsAndCreate(
+      this.client!,
+      this.inputsInOrder(),
+      (fileIds, callbackUrl) => this.toWorkflowPayload(fileIds, callbackUrl),
+      {
+        webhook,
+        deadline,
+        onProgress,
+        signal,
+        probeBeforeCreate,
+        probeTimeoutMs,
+        uploadsLabel: 'watermark',
+        workflowLabel: 'the watermark workflow',
+      },
     );
-    _checkAborted(signal);
-    if (deadline !== undefined && Date.now() >= deadline) {
-      throw new GislTimeoutError(
-        'Probe wait completed but maxWait elapsed before the watermark workflow could be created',
-      );
-    }
-    const created = await this.client!.createWorkflow(this.toWorkflowPayload(fileIds, webhook));
-    _checkAborted(signal);
-    return created;
   }
 
   /**
