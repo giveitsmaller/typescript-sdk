@@ -515,6 +515,21 @@ export interface PreflightClipError {
 // Polling options
 // ---------------------------------------------------------------------------
 
+/**
+ * Read-time options for a single anonymous-readable workflow query.
+ *
+ * Carries the one-time capability token returned by an anonymous (null-owner)
+ * workflow create (`WorkflowCreateResponse.cap`). Pass it on status / downloads
+ * / events reads so a session-less caller can read its own workflow; the SDK
+ * sends it as the `X-Workflow-Capability` header. Omit it for authenticated
+ * reads — the session authorizes those. A wrong or missing token on a
+ * null-owner workflow returns 404 (deliberately no existence oracle).
+ */
+export interface ReadCapabilityOptions {
+  /** Anonymous-workflow capability token (the `cap` from workflow-create). */
+  capability?: string;
+}
+
 export interface WaitOptions {
   /** Poll interval in milliseconds (default: 2000) */
   intervalMs?: number;
@@ -522,6 +537,13 @@ export interface WaitOptions {
   timeoutMs?: number;
   /** Called after each poll with current status */
   onPoll?: (status: string) => void;
+  /**
+   * Anonymous-workflow capability token (the `cap` from workflow-create),
+   * forwarded to each underlying status poll as the `X-Workflow-Capability`
+   * header. Required to poll a null-owner workflow without a session; omit
+   * for authenticated polling.
+   */
+  capability?: string;
 }
 
 // ---------------------------------------------------------------------------

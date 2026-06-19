@@ -114,6 +114,7 @@ import type {
   PreflightClipsResult,
   ProbeWaitOptions,
   ProbeWaitResult,
+  ReadCapabilityOptions,
   UploadOptions,
   WaitOptions,
   WorkflowCreatePayload,
@@ -204,6 +205,19 @@ const RECOMMENDED_CHUNK_SIZE_MAX_BYTES = 104_857_600; // 100 MiB
 
 const DEFAULT_POLL_INTERVAL_MS = 2_000;
 const DEFAULT_POLL_TIMEOUT_MS = 300_000; // 5 min
+
+// Anonymous-read capability header. An anonymous (null-owner) workflow create
+// returns a one-time `cap` token (WorkflowCreateResponse.cap); the session-less
+// caller passes it back on status/downloads/events reads via this header so the
+// server can authorize the read. A wrong/missing cap on a null-owner workflow
+// returns 404 (no existence oracle), per contracts ticket YQt88cq2.
+const WORKFLOW_CAPABILITY_HEADER = 'X-Workflow-Capability';
+
+// Build the capability header set for a workflow read. Empty when no token is
+// supplied (authenticated reads — the session authorizes those).
+function workflowCapabilityHeaders(capability?: string): Record<string, string> {
+  return capability ? { [WORKFLOW_CAPABILITY_HEADER]: capability } : {};
+}
 
 // Statuses that waitForWorkflow() returns immediately on. Per ticket I24,
 // `cancelled` and `expired` are terminal (a workflow cannot leave either
@@ -2265,10 +2279,19 @@ export class GislClient {
 
   /**
    * Get current workflow status.
+   *
+   * For an anonymous (null-owner) workflow, pass `opts.capability` (the `cap`
+   * from the anonymous workflow-create response) so a session-less caller can
+   * read it — the SDK sends it as the `X-Workflow-Capability` header. Omit for
+   * authenticated reads. A wrong/missing cap on a null-owner workflow is a 404.
    */
-  async getWorkflowStatus(workflowId: string): Promise<WorkflowStatusResponse> {
+  async getWorkflowStatus(
+    workflowId: string,
+    opts: ReadCapabilityOptions = {},
+  ): Promise<WorkflowStatusResponse> {
     return this.request('GET', `/api/workflows/${encodeURIComponent(workflowId)}/status`, {
       deserialize: WorkflowStatusResponseFromJSON,
+      headers: workflowCapabilityHeaders(opts.capability),
     });
   }
 
@@ -2284,7 +2307,9 @@ export class GislClient {
     const deadline = Date.now() + timeoutMs;
 
     while (true) {
-      const status = await this.getWorkflowStatus(workflowId);
+      const status = await this.getWorkflowStatus(workflowId, {
+        capability: options?.capability,
+      });
       options?.onPoll?.(status.status);
 
       if (TERMINAL_STATUSES.has(status.status)) {
@@ -2348,19 +2373,33 @@ export class GislClient {
 
   /**
    * Get download URLs for a completed workflow.
+   *
+   * For an anonymous (null-owner) workflow, pass `opts.capability` (the `cap`
+   * from the anonymous workflow-create response) so a session-less caller can
+   * read it — the SDK sends it as the `X-Workflow-Capability` header. Omit for
+   * authenticated reads. A wrong/missing cap on a null-owner workflow is a 404.
    */
-  async getWorkflowDownloads(workflowId: string): Promise<WorkflowDownloadResponse> {
+  async getWorkflowDownloads(
+    workflowId: string,
+    opts: ReadCapabilityOptions = {},
+  ): Promise<WorkflowDownloadResponse> {
     return this.request('GET', `/api/workflows/${encodeURIComponent(workflowId)}/downloads`, {
       deserialize: WorkflowDownloadResponseFromJSON,
+      headers: workflowCapabilityHeaders(opts.capability),
     });
   }
 
   /**
    * Stream SSE events for a workflow. Returns an async iterable.
+   *
+   * For an anonymous (null-owner) workflow, pass `opts.capability` (the `cap`
+   * from the anonymous workflow-create response) so a session-less caller can
+   * read it — the SDK sends it as the `X-Workflow-Capability` header. Omit for
+   * authenticated reads. A wrong/missing cap on a null-owner workflow is a 404.
    */
   async streamEvents(
     workflowId: string,
-    opts: { signal?: AbortSignal } = {},
+    opts: { signal?: AbortSignal; capability?: string } = {},
   ): Promise<AsyncGenerator<GislSseEvent>> {
     const eventsPath = `/api/workflows/${encodeURIComponent(workflowId)}/events`;
 
@@ -2387,6 +2426,7 @@ export class GislClient {
       response = await this.request<Response>('GET', eventsPath, {
         rawResponse: true,
         signal: controller.signal,
+        headers: workflowCapabilityHeaders(opts.capability),
       });
     } catch (err) {
       releaseConsumerSignal();

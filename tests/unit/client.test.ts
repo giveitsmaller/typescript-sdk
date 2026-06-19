@@ -1736,6 +1736,119 @@ describe('GislClient', () => {
   });
 
   // -----------------------------------------------------------------------
+  // Anonymous-read capability header (X-Workflow-Capability)
+  //   Lets a session-less caller read its own null-owner workflow by passing
+  //   back the one-time `cap` from the anonymous workflow-create response.
+  // -----------------------------------------------------------------------
+
+  describe('X-Workflow-Capability header', () => {
+    const headerOf = (callIndex: number): Record<string, string> => {
+      const [, options] = fetchSpy.mock.calls[callIndex] as [string, RequestInit];
+      return options.headers as Record<string, string>;
+    };
+
+    it('getWorkflowStatus sends the capability header when provided', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: { workflow_id: 'wf-1', status: 'completed', jobs: [] },
+        }),
+      );
+
+      await client.getWorkflowStatus('wf-1', { capability: 'wcap_abc123' });
+
+      expect(headerOf(0)['X-Workflow-Capability']).toBe('wcap_abc123');
+    });
+
+    it('getWorkflowStatus omits the capability header when not provided', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: { workflow_id: 'wf-1', status: 'completed', jobs: [] },
+        }),
+      );
+
+      await client.getWorkflowStatus('wf-1');
+
+      expect(headerOf(0)['X-Workflow-Capability']).toBeUndefined();
+    });
+
+    it('getWorkflowStatus treats an empty capability as absent', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: { workflow_id: 'wf-1', status: 'completed', jobs: [] },
+        }),
+      );
+
+      await client.getWorkflowStatus('wf-1', { capability: '' });
+
+      expect(headerOf(0)['X-Workflow-Capability']).toBeUndefined();
+    });
+
+    it('getWorkflowDownloads sends the capability header when provided', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { downloads: [] } }),
+      );
+
+      await client.getWorkflowDownloads('wf-1', { capability: 'wcap_dl' });
+
+      expect(headerOf(0)['X-Workflow-Capability']).toBe('wcap_dl');
+    });
+
+    it('getWorkflowDownloads omits the capability header when not provided', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { downloads: [] } }),
+      );
+
+      await client.getWorkflowDownloads('wf-1');
+
+      expect(headerOf(0)['X-Workflow-Capability']).toBeUndefined();
+    });
+
+    it('streamEvents sends the capability header when provided', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        new Response('event: operation.progress\ndata: {"progress":1}\n\n', {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        }),
+      );
+
+      const gen = await client.streamEvents('wf-1', { capability: 'wcap_sse' });
+      // Drain so the generator's teardown runs cleanly.
+      for await (const _ of gen) { /* consume */ }
+
+      expect(headerOf(0)['X-Workflow-Capability']).toBe('wcap_sse');
+    });
+
+    it('waitForWorkflow forwards the capability to each underlying poll', async () => {
+      fetchSpy
+        .mockResolvedValueOnce(
+          jsonResponse({
+            success: true,
+            data: { workflow_id: 'wf-1', status: 'in_progress', jobs: [] },
+          }),
+        )
+        .mockResolvedValueOnce(
+          jsonResponse({
+            success: true,
+            data: { workflow_id: 'wf-1', status: 'completed', jobs: [] },
+          }),
+        );
+
+      await client.waitForWorkflow('wf-1', {
+        intervalMs: 0,
+        timeoutMs: 5000,
+        capability: 'wcap_poll',
+      });
+
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect(headerOf(0)['X-Workflow-Capability']).toBe('wcap_poll');
+      expect(headerOf(1)['X-Workflow-Capability']).toBe('wcap_poll');
+    });
+  });
+
+  // -----------------------------------------------------------------------
   // AbortSignal on uploadFile
   // -----------------------------------------------------------------------
 
