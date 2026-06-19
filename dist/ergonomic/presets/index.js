@@ -64,7 +64,7 @@ function cellKeyOf(media, op) {
  *
  * @internal
  */
-function definedFieldsOf(opts) {
+export function definedFieldsOf(opts) {
     const out = {};
     for (const key of Object.keys(opts)) {
         const value = opts[key];

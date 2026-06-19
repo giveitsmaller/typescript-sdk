@@ -644,14 +644,58 @@ describe('resolveCompressOptions — presetConfigHash', () => {
     );
   });
 
-  // NOTE: the clientDefault-layer hash is deliberately NOT cross-anchored.
-  // PHP and TS reconstruct a REGISTERED client-default cell into different
-  // record shapes (PHP a sparse {quality:75}; TS carries extra structure), so
-  // the same logical client config hashes differently across the two SDKs.
-  // The override-path anchors above prove the canonicalJson serialiser itself
-  // is byte-identical; the clientDefault representational divergence is tracked
-  // as a follow-up (cross-SDK presetConfigHash for client defaults). The PHP
-  // suite keeps a within-PHP determinism pin for the clientDefault path.
+  // CROSS-ANCHORED clientDefault path (SVQcoR1K). A REGISTERED client-default
+  // cell now hashes byte-identically to PHP: `presetDefaultsCellRecord`
+  // normalises the leaf DTO to a sparse camelCase record (dropping the
+  // undefined-valued keys that `useDefineForClassFields` declares), matching
+  // PHP's `leafToRecord`. These exact digests are ALSO pinned in the PHP suite
+  // (PresetResolverTest.php) for the SAME logical inputs.
+  it('exact hash — clientDefault {quality:75} at Size (cross-anchored with PHP)', () => {
+    const { resolvedOptions } = resolveCompressOptions({
+      media: 'image',
+      op: 'compress',
+      optimize: OptimizeFor.Size,
+      presetDefaults: presetDefaults().imageCompress(OptimizeFor.Size, { quality: 75 }),
+      explicitOptions: {},
+    });
+    expect(resolvedOptions.presetConfigHash).toBe(
+      'sha256:2d0bc3473e067653a67d92c0e03ff3666ff498f737b74b9550eb116e91bb2c96',
+    );
+  });
+
+  it('exact hash — clientDefault {outputFormat:Webp} enum→wire (cross-anchored with PHP)', () => {
+    // Guards enum→wire on the REGISTERED-cell path: canonical clientDefault
+    // record is {outputFormat:"webp"} (camelCase key, wire enum value). The
+    // override anchors only exercise enum parity on the override path.
+    const { resolvedOptions } = resolveCompressOptions({
+      media: 'image',
+      op: 'compress',
+      optimize: OptimizeFor.Size,
+      presetDefaults: presetDefaults().imageCompress(OptimizeFor.Size, { outputFormat: ImageFormat.Webp }),
+      explicitOptions: {},
+    });
+    expect(resolvedOptions.presetConfigHash).toBe(
+      'sha256:77af8c77695cc88aed893346ccb5e74b6a2c0df8596ce01854cd312578c69878',
+    );
+  });
+
+  it('exact hash — clientDefault {progressive:false} keeps falsy (cross-anchored with PHP)', () => {
+    // Guards the falsy-KEEP symmetry: TS `definedFieldsOf` drops only
+    // `undefined`, PHP `leafToRecord` drops only `null` — both KEEP `false`.
+    // Canonical clientDefault record is {progressive:false}. A regression
+    // where either SDK starts dropping `false` (e.g. a truthiness filter)
+    // would break exactly one pin.
+    const { resolvedOptions } = resolveCompressOptions({
+      media: 'image',
+      op: 'compress',
+      optimize: OptimizeFor.Size,
+      presetDefaults: presetDefaults().imageCompress(OptimizeFor.Size, { progressive: false }),
+      explicitOptions: {},
+    });
+    expect(resolvedOptions.presetConfigHash).toBe(
+      'sha256:bfb3f628b3f8aa42d05bde2afbc5a3fc88818da676a4bd7d47d2f93757be6976',
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------

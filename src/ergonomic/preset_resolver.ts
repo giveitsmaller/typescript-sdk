@@ -49,6 +49,7 @@ import {
   DocumentOfficeCompressPresetOptions,
   DocumentOdfCompressPresetOptions,
   DocumentEpubCompressPresetOptions,
+  definedFieldsOf,
   type PresetDefaults,
   type PresetMedia,
   type PresetOp,
@@ -306,10 +307,10 @@ function presetDefaultsCellRecord(
   if (defaults === undefined) return undefined;
   if (op !== 'compress') return undefined;
   // Each overload returns `<Specific>PresetOptions | undefined`. We
-  // erase the per-media type at runtime by spreading the instance
-  // into a plain Record. `cellFor` returns `undefined` when no delta
-  // was registered for the tuple — the resolver treats that the same
-  // as "this layer did not participate."
+  // erase the per-media type at runtime by reducing the instance to a
+  // plain Record. `cellFor` returns `undefined` when no delta was
+  // registered for the tuple — the resolver treats that the same as
+  // "this layer did not participate."
   let cell;
   switch (media) {
     case 'image':
@@ -335,7 +336,16 @@ function presetDefaultsCellRecord(
       break;
   }
   if (cell === undefined) return undefined;
-  return { ...cell };
+  // Reduce to a SPARSE camelCase record, dropping undefined-valued keys.
+  // The leaf DTO's field DECLARATIONS define every field as an
+  // own-enumerable `undefined` property under `useDefineForClassFields`
+  // (ES2022) even when the ctor skipped the assignment — a naive spread
+  // would carry those `undefined`s into the presetConfigHash input,
+  // diverging from PHP's sparse `leafToRecord` (SVQcoR1K). `mergeLayer`
+  // already ignores `undefined`, so this only affects the hash path.
+  // Reuses the same helper `PresetDefaults.merge` uses for this exact
+  // `useDefineForClassFields` problem.
+  return definedFieldsOf(cell);
 }
 
 // ---------------------------------------------------------------------------
@@ -555,7 +565,15 @@ function canonicalJson(value: unknown): string {
     return '[' + value.map(canonicalJson).join(',') + ']';
   }
   const record = value as Record<string, unknown>;
-  const keys = Object.keys(record).sort();
+  // Skip undefined-valued keys (mirror `JSON.stringify` object semantics,
+  // which omit undefined members). Without this, `canonicalJson(undefined)`
+  // would serialise the literal token `undefined` into the hash input — a
+  // latent foot-gun. The registered-cell records are already sparse (see
+  // `presetDefaultsCellRecord`), so this is defense-in-depth; the
+  // override-path anchors carry no undefined and are unaffected (SVQcoR1K).
+  const keys = Object.keys(record)
+    .filter((k) => record[k] !== undefined)
+    .sort();
   return (
     '{' +
     keys

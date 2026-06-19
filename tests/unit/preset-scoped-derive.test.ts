@@ -436,6 +436,23 @@ describe('resolveCompressOptions — presetConfigHash with scoped layer', () => 
     expect(resolvedOptions.presetConfigHash).toMatch(/^sha256:[0-9a-f]{64}$/);
   });
 
+  it('exact hash — scopedDefault {quality:88} only (cross-anchored with PHP)', () => {
+    // scopedDefault (P7) shares the same record-normalisation path as
+    // clientDefault, so its hash is byte-identical across SDKs. Canonical:
+    // {clientDefault:null, scopedDefault:{quality:88}, callPresetOverride:null}.
+    // This exact digest is ALSO pinned in the PHP suite (PresetResolverTest.php).
+    const { resolvedOptions } = resolveCompressOptions({
+      media: 'image',
+      op: 'compress',
+      optimize: OptimizeFor.Size,
+      scopedPresetDefaults: presetDefaults().imageCompress(OptimizeFor.Size, { quality: 88 }),
+      explicitOptions: {},
+    });
+    expect(resolvedOptions.presetConfigHash).toBe(
+      'sha256:4db0c1f71bf073f0031652da39ee1124a11793b8ff8aa26ea2c2af55a3e9272d',
+    );
+  });
+
   it('hash differs: same parent, with vs without scoped derive', () => {
     const parent = presetDefaults().imageCompress(OptimizeFor.Size, { quality: 75 });
     const withoutScoped = resolveCompressOptions({

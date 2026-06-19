@@ -23,6 +23,26 @@ export type PresetOp = 'compress';
  * narrows the return automatically via the overload set below.
  */
 export type AnyPresetOptions = ImageCompressPresetOptions | AudioCompressPresetOptions | VideoCompressPresetOptions | DocumentPdfCompressPresetOptions | DocumentOfficeCompressPresetOptions | DocumentOdfCompressPresetOptions | DocumentEpubCompressPresetOptions;
+/**
+ * Per-cell field-merge: parent fields ⊕ child fields where defined.
+ * Re-construct the leaf DTO via the matching `<LeafClass>.from(merged)`
+ * call so the result is a freshly-frozen `*PresetOptions` instance —
+ * NOT a mutated reference into either input. Used by
+ * {@link PresetDefaults.merge} when both parent and child registered
+ * the same `(cellKey, level)` tuple.
+ *
+ * `definedFieldsOf` filters undefined values out of each instance
+ * BEFORE the merge: with TS `useDefineForClassFields` (the ES2022
+ * default), `readonly mode?: ImageMode` declarations initialise the
+ * field as an enumerable own property with value `undefined` BEFORE
+ * the ctor body runs. A naive `Object.assign({}, parent, child)`
+ * therefore lets child's `undefined` overwrite parent's defined value
+ * — caught by CI on PR #125 first run. Filter-then-spread restores
+ * the documented merge-not-replace semantics.
+ *
+ * @internal
+ */
+export declare function definedFieldsOf<T extends object>(opts: T): Partial<Record<string, unknown>>;
 export declare class PresetDefaults {
     private readonly cells;
     private constructor();

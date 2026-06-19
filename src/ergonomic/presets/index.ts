@@ -172,7 +172,7 @@ function cellKeyOf(media: PresetMedia, op: PresetOp): CellKey {
  *
  * @internal
  */
-function definedFieldsOf<T extends object>(opts: T): Partial<Record<string, unknown>> {
+export function definedFieldsOf<T extends object>(opts: T): Partial<Record<string, unknown>> {
   const out: Record<string, unknown> = {};
   for (const key of Object.keys(opts)) {
     const value = (opts as unknown as Record<string, unknown>)[key];
