@@ -22,7 +22,7 @@ import {
   runFilesFixture,
   submitFilesFixture,
 } from './invoke.js';
-import { GislConfigError } from '../../src/errors.js';
+import { GislConfigError, GislApiError } from '../../src/errors.js';
 
 // ---------------------------------------------------------------------------
 // Regeneration mode. Run via `npm run parity:update`. Refuses to run in CI —
@@ -275,6 +275,28 @@ describe('cross-SDK parity', () => {
         throw new Error(
           `[${fixture.name}] request parity failure:\n  - ${requestDiff.issues.join('\n  - ')}`,
         );
+      }
+
+      // Vgg8yITh — cross-SDK error-message parity. Compare the RAW human
+      // message: TS exposes it as `GislApiError.errorMessage` (the `.message`
+      // field is prefixed `API error <status> at <path>:`), PHP as
+      // `getMessage()`. Require the throw to be a GislApiError — no fallback to
+      // `.message`, which would compare the wrong projection and mask a
+      // dispatch regression (e.g. a wrong/early throw).
+      if (fixture.expected_error_message !== undefined) {
+        if (!(thrown instanceof GislApiError)) {
+          throw new Error(
+            `[${fixture.name}] expected_error_message set but the throw was not a GislApiError ` +
+              `(got ${thrown instanceof Error ? thrown.constructor.name : typeof thrown})`,
+          );
+        }
+        if (thrown.errorMessage !== fixture.expected_error_message) {
+          throw new Error(
+            `[${fixture.name}] error-message parity failure:\n` +
+              `  - expected: ${JSON.stringify(fixture.expected_error_message)}\n` +
+              `  - actual (errorMessage): ${JSON.stringify(thrown.errorMessage)}`,
+          );
+        }
       }
 
       // Error fixtures skip the return comparison — no return value exists.

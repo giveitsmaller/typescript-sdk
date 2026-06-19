@@ -289,6 +289,13 @@ export interface Fixture {
   // value / thrown shape is not compared (captured but unchecked).
   expects_error?: boolean;
 
+  // Vgg8yITh — cross-SDK error-message parity. When set (only valid with
+  // `expects_error: true`), both harnesses assert the thrown GislApiError's
+  // RAW human message — TS `.errorMessage`, PHP `getMessage()` — equals this.
+  // NOT `.message`: TS prefixes `.message` with `API error <status> at <path>:`
+  // while PHP does not, so comparing `.message` would always diverge.
+  expected_error_message?: string;
+
   // F4-A (C45ogrGx) v2 fields — only valid when `fixtureSchemaVersion`
   // is '2.0.0'. Absent on v1 fixtures (the rejection set at line below
   // refuses them on v1 to keep the discriminated-variant intent).
@@ -432,6 +439,7 @@ const FIXTURE_KEYS_V1 = new Set([
   'expected_return',
   'webhook',
   'expects_error',
+  'expected_error_message',
   'fixtureSchemaVersion',
 ]);
 // v2 fixtures (`fixtureSchemaVersion: '2.0.0'`) accept the v1 keys plus
@@ -823,6 +831,18 @@ export function validateFixture(raw: unknown, file: string): Fixture {
     files = validateFiles(r.files, `${ctx} files`);
   }
 
+  // Vgg8yITh — cross-SDK error-message parity field. Must be a string, and is
+  // only meaningful with `expects_error: true`; reject a fixture that sets it
+  // otherwise so an author typo fails loud at load instead of silently no-opping.
+  if (r.expected_error_message !== undefined) {
+    if (typeof r.expected_error_message !== 'string') {
+      throw new Error(`${ctx} expected_error_message must be a string`);
+    }
+    if (r.expects_error !== true) {
+      throw new Error(`${ctx} expected_error_message requires expects_error: true`);
+    }
+  }
+
   return {
     name,
     description: r.description as string | undefined,
@@ -837,6 +857,9 @@ export function validateFixture(raw: unknown, file: string): Fixture {
     expected_return: r.expected_return as FixtureValue | undefined,
     webhook,
     expects_error: r.expects_error === true,
+    ...(r.expected_error_message !== undefined
+      ? { expected_error_message: r.expected_error_message as string }
+      : {}),
     ...(schemaVersion !== '1.0.0' ? { fixtureSchemaVersion: schemaVersion } : {}),
     ...(resolvedOptions !== undefined ? { resolvedOptions } : {}),
     ...(omittedFromWire !== undefined ? { omittedFromWire } : {}),
