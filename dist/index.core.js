@@ -1,0 +1,110 @@
+// Browser-safe shared surface. The Node-only entry (`index.ts`) re-exports
+// everything here PLUS the Node-only symbols (`verifyWebhook`, `HttpDownloader`)
+// that statically import node:crypto / node:fs; the browser entry
+// (`index.browser.ts`) re-exports ONLY this core, so it is a strict subset by
+// construction (no hand-maintained subset to drift). Keep this file free of any
+// static `node:` import — see the bundle-gate test.
+// SDK classes and functions
+export { GislClient, DEFAULT_MULTIPART_FIRST_CHUNK_SIZE } from './client.js';
+export { parseSseStream } from './sse.js';
+export { uploadSource, jobOutputSource, externalImportSource, connectionSource, } from './types.js';
+// Errors
+export { GislError, GislApiError, GislValidationError, GislBalanceExhaustedError, GislTierRestrictedError, GislFeatureTierRestrictedError, GislFeatureNotAvailableError, GislWorkflowExpiredError, GislProbePendingError, GislAuthError, GislUploadCapExceededError, GislMultipartPartError, GislMultipartPartCountError, 
+// SDK-3 (Wb6ebOMM) — typed errors for the 3 resume-support endpoints.
+GislMultipartSessionNotFoundError, GislMultipartSessionOwnershipError, GislMultipartSessionAuthRequiredError, GislTimeoutError, GislAbortError, 
+// FF2b / tywwynmN — transport-level failure (mirrors PHP GislNetworkError);
+// raised by the file-first HttpDownloader when an output URL cannot be read.
+GislNetworkError, 
+// T1 / wVU4xHx3 — local config-error tree (pre-I/O; sibling of GislApiError).
+GislConfigError, GislMissingCredentialsError, GislFeatureRequiresAuthError, 
+// T3 / cuecCmb5 — merge-compose local validation errors.
+GislUndeclaredAssetError, GislUnusedAssetError, GislPerInputOptionsNotSupportedError, 
+// T6 / aDR1jnyZ — chain-cardinality validation (dormant until chain
+// methods on OperationBuilder ship; type + audit registration land
+// here so the future chain-method PR is a pure addition).
+GislChainCardinalityMismatchError, 
+// P4d / hv3FpLjm — double-bundle prevention; raised by `.bundle()` (wpHoJhuo).
+// Dormant until `.bundle()` ships, so the type lands here as a pure addition.
+GislBundleAlreadyArchivedError, 
+// FF1 / 3BIxEnfR — file-first result sink errors.
+GislNoSuchKeyError, GislSinkError, 
+// FF5a / Ao8RPVxD — thrown by the file-first Handle.result() when the
+// workflow is not yet terminal (the non-blocking accessor).
+GislResultNotReadyError, } from './errors.js';
+// File-first result surface (FF1 / 3BIxEnfR) — coexists with the
+// operation-first `Result`/`Artifact` until FF6 removes the old layer.
+export { RunResult } from './file-first.js';
+// File-first builder (FF2a / MfV0PDok) — `client.file(path).op()...` lowering.
+export { Recipe, fileInput } from './file-first.js';
+// File-first homogeneous fan-out (FF3a / u0hBt6fl) — `client.files([...]).op()...`
+// applies one recipe to many inputs in one workflow; run() partitions per input.
+// `projectMultiJobToRunResult` is intentionally NOT re-exported — it is the
+// @internal per-job producer consumed only by FilesRecipe.run (codex).
+export { FilesRecipe } from './file-first.js';
+// File-first N→1 combine (FF3b / IE29x9QL) — `client.files([...]).merge(opts?)`
+// returns a single-output MergedRecipe you chain post-combine ops on, then
+// run()/submit(). Mirrors the operation-first `client.merge()` wire shape.
+export { MergedRecipe } from './file-first.js';
+// File-first N→1 bundle (FF3b) — `client.files([...]).archive(opts?)` returns a
+// terminal ArchivedRecipe (zip / tar.gz; no post-bundle chain), then run()/submit().
+export { ArchivedRecipe } from './file-first.js';
+// File-first multi-input watermark (FF4a / Z7zTr789) — `client.file(base)
+// .watermark(overlay, opts)` returns a single-output WatermarkedRecipe you chain
+// post-watermark ops on, then run()/submit(). Routes image_watermark / video_watermark
+// by base media; gates planned/unsupported bases locally pre-upload.
+export { WatermarkedRecipe } from './file-first.js';
+// `HttpDownloader` (Node streaming downloader) is re-exported from the Node-only
+// entry `index.ts`, NOT here — it statically imports node:fs/node:stream.
+// `projectDownloadsToRunResult` is intentionally NOT re-exported here — it is an
+// @internal helper shared between `file-first.ts` (Recipe.run) and `handle.ts`
+// (Handle.wait/result) via direct intra-package import, not public API (codex).
+// File-first Handle + StatusSnapshot (FF5a / Ao8RPVxD) — method-bearing,
+// client-bound value objects. `Handle` is the return of `submit()` (no client)
+// AND `client.workflow(id)` (client-bound, reattach). Exported as VALUES (the
+// prior `export type { Handle }` is replaced) because `Handle` is now a class.
+export { Handle, StatusSnapshot } from './handle.js';
+// Ergonomic-layer entrypoint (T1 / wVU4xHx3) — `gisl.create()` factory +
+// credential-chain types. `gisl.anonymous()` (public export) lands once
+// the anonymous-capable operation allowlist is non-empty (plan §12).
+export { gisl, create } from './gisl.js';
+// Ergonomic preset defaults (T4a / VhIj4S7T) — typed leaf DTOs + immutable
+// `PresetDefaults` builder + `presetDefaults()` factory + ergonomic enum
+// re-exports. Resolver wiring (T4b) consumes `PresetDefaults.cellFor()`.
+export { presetDefaults, PresetDefaults, ImageCompressPresetOptions, AudioCompressPresetOptions, VideoCompressPresetOptions, DocumentPdfCompressPresetOptions, DocumentOfficeCompressPresetOptions, DocumentOdfCompressPresetOptions, DocumentEpubCompressPresetOptions, OptimizeFor, ImageMode, ImageMetadataPolicy, IccProfilePolicy, ImageFormat, VideoCodec, VideoPreset, VideoFit, AudioBitrate, AudioCodec, AudioSampleRate, PdfProfile, PdfColorspace, } from './ergonomic/presets/index.js';
+// Operation-builder surface (T2 / xVDTIm8C) — `client.compress/convert/thumbnail`
+// returns an `OperationBuilder`; `.run()` projects to a flat `Result` /
+// `.submit({webhook})` returns a `Handle`. Progress events are the
+// SDK-synthesised `{phase:'upload'|'processing', ...}` discriminated union.
+export { OperationBuilder, MapEachBuilder } from './builder.js';
+export { MergeBuilder, asset, handle, clip } from './merge.js';
+// T4b — preset resolver public surface (PRESET_VERSION constant + types).
+export { PRESET_VERSION, resolveCompressOptions } from './ergonomic/preset_resolver.js';
+export { AudioWatermarkDecodeRequestMethodHintEnum, AudioWatermarkDecodeResponseMethodEnum, 
+// OperationInputModel — value-bearing enum (`single` | `multi`).
+// Surfaced on OperationSchemaDefinition.inputModel so form-renderers
+// can decide whether to render a single-file picker or a multi-file
+// input list.
+OperationInputModel, ExternalImportRequestProviderHintEnum, ContactSubject, CreditTransactionSourceBucket, UploadProbeStatus, UploadProbeProcessingClass, WorkflowCancelBillingEffect, WorkflowPauseRequiredAction, WorkflowStatus, WarningType, WorkflowWarningSeverity, OperationType, SseEventType, CallbackEventType, OperationStatus, JobStatus, JobInputV2RoleEnum, 
+// Error-payload discriminator enums — pair with the typed payload
+// types above for narrowing inside `error instanceof Gisl<X>Error`
+// branches.
+AuthErrorType, TierRestrictionKind, BalanceExhaustedResponseRequiredActionEnum, ProcessingClassReason, DeliveryPlanReason, 
+// UserTier + ProcessingClass — value-bearing forms (typeof const +
+// type alias). Sourced from openapi so consumers can do
+// `Object.values(UserTier)` for tier dropdowns or
+// `if (tier === UserTier.enterprise)` for narrowing typed error
+// payloads. The operations metadata-types versions are pure type
+// aliases (no runtime value); the openapi versions carry both the
+// string-union type and a const map. Per audit follow-up.
+UserTier, ProcessingClass, } from '@giveitsmaller/contracts/openapi';
+export { ImageWatermarkImageAnchor, ImageWatermarkImageGifAnchor, TextWatermarkImageAnchor, TextWatermarkImageFontFamily, TextWatermarkImageWatermarkMode, AudioOverlayAudioMode, AudioOverlayVideoMode, AudioOverlayVideoNoAudioTrackBehaviour, AudioWatermarkAudioMethod, AudioWatermarkAudioRobustness, AudioWatermarkAudioDensity, AudioWatermarkVideoMethod, AudioWatermarkVideoRobustness, AudioWatermarkVideoDensity, 
+// New planned operation enums — contracts v2.15 (AJCLLGaG).
+AudioToVideoAudioOutputResolution, AudioToVideoAudioImageFit, AudioToVideoAudioOutputFormat, VideoWatermarkVideoAnchor, VideoTextWatermarkVideoFontFamily, VideoTextWatermarkVideoWatermarkMode, VideoTextWatermarkVideoAnchor, SplitImageGifOutputFormat, SplitDocumentPdfMode, SplitAudioMode, SplitAudioPrecision, SplitVideoMode, SplitVideoPrecision, } from '@giveitsmaller/contracts/operations';
+// Per-operation metadata sidecars. Inspect `availability`,
+// `required_tier`, per-value gating, mime-group availability and
+// per-feature flags before submitting a workflow — the API will
+// otherwise reject planned ops with `feature_not_available` (422,
+// surfaces as `GislFeatureNotAvailableError`).
+export { archiveMetadata, audioOverlayMetadata, audioWatermarkMetadata, compressMetadata, convertMetadata, customLumaMetadata, imageWatermarkMetadata, mergeMetadata, textWatermarkMetadata, thumbnailMetadata, 
+// New planned operation metadata sidecars — contracts v2.15 (AJCLLGaG).
+audioToVideoMetadata, videoWatermarkMetadata, videoTextWatermarkMetadata, splitMetadata, } from '@giveitsmaller/contracts/operations';

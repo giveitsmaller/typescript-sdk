@@ -69,6 +69,27 @@ Docs are published in the [giveitsmaller-sdks](https://github.com/AntonioCS/give
 - **Troubleshooting** — [`docs/typescript/troubleshooting.md`](https://github.com/AntonioCS/giveitsmaller-sdks/blob/main/docs/typescript/troubleshooting.md)
 - **Examples** — compress, thumbnail, convert, merge, archive — [`docs/typescript/examples/`](https://github.com/AntonioCS/giveitsmaller-sdks/tree/main/docs/typescript/examples)
 
+## Contributing: the committed `dist/`
+
+Unlike most packages, `packages/typescript/dist/` is **committed**, not gitignored.
+This is deliberate: consumers that install the SDK via the `file:` protocol (the
+e2e canary, the frontend, the API repo, local dev) get whatever is on disk — npm
+does **not** run `prepare`/`prepack` for `file:` deps, so a `dist/` that lagged
+behind `src/` would silently ship stale exports.
+
+When you change anything under `src/`, rebuild and commit `dist/`:
+
+```bash
+npm run build   # tsc → dist/
+```
+
+CI enforces this with a freshness guard that rebuilds `dist/` and fails the PR on
+any `git diff` against the committed tree (mirroring the `git diff --exit-code
+generated/` drift rule). `typescript` is pinned to an exact version so the rebuild
+is reproducible. New hand-written SDK packages (PHP/Python) that grow a build step
+should follow the same commit-`dist`-and-guard convention to avoid reintroducing
+the `file:` gap.
+
 ## License
 
 MIT — see the [LICENSE](https://github.com/AntonioCS/giveitsmaller-sdks/blob/main/LICENSE) file.

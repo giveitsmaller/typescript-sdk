@@ -1,0 +1,2012 @@
+/**
+ * File-first result surface — the value the file-first layer's `run()` /
+ * `Handle.wait()` / `Handle.result()` return (producers land in FF2b/FF5).
+ *
+ * Coexists with the operation-first `Result`/`Artifact` (in `builder.ts`)
+ * until the operation-first layer is removed (FF6). The file-first shape is
+ * flatter and adds an always-present per-input partition (`succeeded` /
+ * `failed`) so one bad input in a multi-input run doesn't sink the rest.
+ *
+ * Mirrors `packages/php/src/FileFirst/*`.
+ */
+import { GislConfigError, GislNetworkError, GislNoSuchKeyError, GislSinkError, GislTimeoutError, SseEndedWithoutTerminal } from './errors.js';
+import { _detectCompressMedia, _detectAudioLossless, _consumeSseToTerminal, _pollToTerminal, _parseMaxWait, _checkAborted, _cappedProbeTimeoutMs, } from './builder.js';
+import { LazyHttpDownloader } from './lazy-downloader.js';
+import { resolveCompressOptions, } from './ergonomic/preset_resolver.js';
+import { OptimizeFor } from './generated/sdk_spec/enums.js';
+import { uploadSource, jobOutputSource } from './types.js';
+// Value import used only at call-time (inside MergedRecipe.toWorkflowPayload),
+// never at module-eval, so the file-first <-> merge <-> handle import cycle
+// resolves cleanly under ESM (same deferred-usage discipline as `Handle`).
+import { wireMergeOptions } from './merge.js';
+// Deferred-usage-only import: `Handle` is constructed inside `submit()` at call
+// time, never at module-eval, so the handle.ts <-> file-first.ts back-edge
+// (handle.ts imports RunResult/projectDownloadsToRunResult from here) resolves
+// cleanly under ESM. Mirrors builder.ts/merge.ts importing Handle the same way.
+import { Handle } from './handle.js';
+/**
+ * Result of a file-first run. Coexists with the operation-first `Result`
+ * (in `builder.ts`) until FF6.
+ *
+ * Mirrors the PHP `RunResult` class. A class (not a bare interface) because
+ * it carries the `byKey()`/`toFile()`/`downloadTo()` behaviour; the data
+ * fields stay public + readonly so `toArray()` round-trips.
+ *
+ * Field notes:
+ *  - `url`: single-output sugar — the lone artifact's URL when exactly one
+ *    output exists, else undefined.
+ *  - `ok`: true iff `failed` is empty. (A boolean — the partition lists are
+ *    `succeeded`/`failed`; resolves the design doc's `ok` bool-vs-list
+ *    contradiction.)
+ *  - `state`: lifecycle state (`completed` | `failed` | ...). Named `state`,
+ *    NOT `status`, matching the file-first `StatusSnapshot.state`.
+ *  - sinks fetch via the injected {@link Downloader}; a result with no
+ *    downloader throws {@link GislSinkError} (reason `downloader_unavailable`).
+ */
+export class RunResult {
+    workflowId;
+    state;
+    artifacts;
+    succeeded;
+    failed;
+    downloader;
+    /** Single-output sugar: the lone artifact's URL, or undefined for 0 / >1. */
+    url;
+    /** True iff {@link failed} is empty. */
+    ok;
+    constructor(workflowId, state, artifacts, succeeded, failed, downloader) {
+        this.workflowId = workflowId;
+        this.state = state;
+        this.artifacts = artifacts;
+        this.succeeded = succeeded;
+        this.failed = failed;
+        this.downloader = downloader;
+        this.url = artifacts.length === 1 ? artifacts[0].url : undefined;
+        this.ok = failed.length === 0;
+    }
+    /**
+     * Address a succeeded input by the `key:` given to `file()`. Duplicate keys
+     * are not valid input — the producer enforces key uniqueness (a later
+     * ticket); the first match is returned.
+     * @throws {GislNoSuchKeyError} when no succeeded entry has that key (a
+     *   keyless run always throws — it is positionally addressable only).
+     */
+    byKey(key) {
+        const item = this.succeeded.find((i) => i.key === key);
+        if (item === undefined) {
+            throw new GislNoSuchKeyError(`No result for key '${key}'.`);
+        }
+        return item;
+    }
+    /**
+     * Write the single output to `path`. Requires EXACTLY ONE artifact.
+     * @throws {GislSinkError} reason `not_single_output` for 0/>1 outputs;
+     *   reason `downloader_unavailable` when no downloader is bound.
+     */
+    async toFile(path) {
+        if (this.artifacts.length !== 1) {
+            throw new GislSinkError(`toFile() requires exactly one output; this run produced ${this.artifacts.length}. ` +
+                'Use downloadTo() for multi-output runs.', { reason: 'not_single_output' });
+        }
+        await this.requireDownloader().downloadTo(this.artifacts[0].url, path);
+    }
+    /**
+     * Download every output into `dir` (filename per output), in output order.
+     * Returns the {@link Manifest} of local paths written.
+     * @throws {GislSinkError} reason `partial_failure` when `failOnPartial` and
+     *   the run had failed inputs; reason `downloader_unavailable` when no
+     *   downloader is bound.
+     */
+    async downloadTo(dir, options) {
+        if (options?.failOnPartial && this.failed.length > 0) {
+            throw new GislSinkError(`downloadTo({ failOnPartial: true }) but the run had ${this.failed.length} failed input(s).`, { reason: 'partial_failure' });
+        }
+        if (dir === '') {
+            throw new GislSinkError("downloadTo(): the directory argument is empty. Pass a target directory (use '.' for the current directory).", { reason: 'invalid_directory' });
+        }
+        const downloader = this.requireDownloader();
+        const sep = dir.endsWith('/') || dir.endsWith('\\') ? '' : '/';
+        // Resolve destinations first so a basename collision fails loudly BEFORE any
+        // byte is written — silently overwriting an earlier output is data loss.
+        const names = this.artifacts.map(
+        // Strip any directory component from a server-supplied filename so a value
+        // like "../x" or "a/b" cannot escape `dir` (mirrors PHP basename()).
+        (a) => a.filename.split(/[/\\]/).pop() ?? a.filename);
+        // Collision key is case-folded: many destination filesystems (macOS, NTFS)
+        // are case-insensitive, so `a.jpg` and `A.jpg` would target the same file.
+        const seen = new Set();
+        for (const name of names) {
+            const key = name.toLowerCase();
+            if (seen.has(key)) {
+                throw new GislSinkError(`downloadTo(): two outputs resolve to the same filename '${name}' in '${dir}' ` +
+                    '(case-insensitively). Download them to separate directories.', { reason: 'duplicate_filename' });
+            }
+            seen.add(key);
+        }
+        const paths = [];
+        for (let i = 0; i < this.artifacts.length; i++) {
+            const dest = `${dir}${sep}${names[i]}`;
+            await downloader.downloadTo(this.artifacts[i].url, dest);
+            paths.push(dest);
+        }
+        return { paths };
+    }
+    /**
+     * Plain-object projection. Field ORDER (workflowId, state, ok, url?,
+     * artifacts, succeeded, failed) is fixed to match the PHP `toArray()`
+     * reference so JSON-string parity holds (FF1 shape assertion + FF2b harness
+     * fixture). `url` is omitted entirely when undefined — `JSON.stringify`
+     * then produces the identical shape to PHP's omit-when-null `toArray()`.
+     */
+    toJSON() {
+        // Re-project each OutputFile to exactly its four fields so structurally
+        // compatible inputs carrying extra properties can't leak into the JSON.
+        const file = (o) => ({
+            url: o.url,
+            filename: o.filename,
+            sizeBytes: o.sizeBytes,
+            operation: o.operation,
+        });
+        const rest = {
+            artifacts: this.artifacts.map(file),
+            succeeded: this.succeeded.map((i) => ({ key: i.key, outputs: i.outputs.map(file) })),
+            failed: this.failed.map((f) => ({
+                key: f.key,
+                error: f.error instanceof Error ? f.error.message : String(f.error),
+            })),
+        };
+        const head = { workflowId: this.workflowId, state: this.state, ok: this.ok };
+        // Insert `url` BETWEEN ok and artifacts when present, matching the PHP
+        // toArray() field order (workflowId, state, ok, url?, artifacts, ...) so
+        // JSON-string parity holds. Omitted entirely when undefined (PHP omits
+        // null), so `JSON.stringify` produces the identical shape.
+        return this.url === undefined
+            ? { ...head, ...rest }
+            : { ...head, url: this.url, ...rest };
+    }
+    requireDownloader() {
+        if (this.downloader === undefined) {
+            throw new GislSinkError('This result has no downloader bound, so its outputs cannot be written to disk here ' +
+                '(e.g. a browser / no-I/O context). Fetch each output from its URL instead.', { reason: 'downloader_unavailable' });
+        }
+        return this.downloader;
+    }
+}
+/**
+ * Flatten the terminal workflow status + its downloads into a {@link RunResult}.
+ *
+ * Shared by {@link Recipe.run} (passes its recipe key) and the file-first
+ * {@link Handle} reattach surface (`Handle.wait()`/`Handle.result()`, FF5a —
+ * passes `null` because a reattached handle carries no recipe key).
+ *
+ * **Partition invariant (carries a prior codex-review fix — do NOT let it
+ * drift):** success is ONLY `state === 'completed'`. Every other terminal
+ * state — `failed`, `partially_failed`, `cancelled`, `expired`,
+ * `paused_insufficient_credits` — partitions into `failed[]` so a caller's
+ * `ok`/`succeeded` check can never treat a cancelled/expired/paused run as a
+ * clean result.
+ *
+ * @internal Exported for reuse by the file-first `Handle`; not part of the
+ *   caller-facing fluent surface.
+ */
+export function projectDownloadsToRunResult(workflowId, finalStatus, jobDownloads, key, downloader) {
+    // Flatten to the lean OutputFile[] (the four file-first fields only).
+    const artifacts = [];
+    for (const job of jobDownloads) {
+        for (const f of job.files) {
+            artifacts.push({
+                url: f.downloadUrl,
+                filename: f.filename,
+                sizeBytes: f.sizeBytes,
+                operation: f.operation,
+            });
+        }
+    }
+    const state = finalStatus.status;
+    let succeeded;
+    let failed;
+    if (state === 'completed') {
+        succeeded = [{ key, outputs: artifacts }];
+        failed = [];
+    }
+    else {
+        const firstError = (finalStatus.jobs ?? [])
+            .flatMap((j) => j.operations ?? [])
+            .map((op) => op.errorMessage)
+            .find((m) => m !== undefined);
+        succeeded = [];
+        failed = [
+            { key, error: new Error(firstError !== undefined ? `${state}: ${firstError}` : state) },
+        ];
+    }
+    return new RunResult(workflowId, state, artifacts, succeeded, failed, downloader);
+}
+/**
+ * Flatten a terminal multi-job workflow (the `client.files([...])` fan-out)
+ * into a partitioned {@link RunResult}. One job per input file, keyed by the
+ * `file-{i}` job ref the {@link FilesRecipe} lowering assigns; the result's
+ * `succeeded` / `failed` partition is PER JOB, so one bad input does not sink
+ * the rest.
+ *
+ * Join model: `finalStatus.jobs[]` carries the per-job {@link JobStatus} +
+ * `operations[]` (for the error message); `jobDownloads[]` carries the per-job
+ * output files. Both are joined on the job `ref` ("file-{i}"); the partition
+ * key is the index `"{i}"` parsed out of that ref. The flat `artifacts[]` is
+ * every job's outputs in job order (the order `finalStatus.jobs[]` lists them).
+ *
+ * **Partition invariant (mirrors {@link projectDownloadsToRunResult} PER JOB —
+ * do NOT let it drift):** a job is a SUCCESS only when its
+ * {@link JobResponse.status} `=== 'completed'`. Any other per-job status —
+ * `failed`, `pending`, `waiting`, `blocked_insufficient_credits`,
+ * `in_progress` — partitions that job into `failed[]` (with that job's first
+ * operation error message, scoped to THAT job only).
+ *
+ * @internal Exported for the file-first `client.files([...]).run()` producer;
+ *   not part of the caller-facing fluent surface.
+ */
+export function projectMultiJobToRunResult(workflowId, finalStatus, jobDownloads, keyByRef, downloader) {
+    // Group downloads by job ref so a job's outputs can be flattened AFTER the
+    // per-job partition is decided (grouping is unrecoverable post-flatten).
+    const filesByRef = new Map();
+    for (const job of jobDownloads) {
+        filesByRef.set(job.ref, job.files);
+    }
+    const artifacts = [];
+    const succeeded = [];
+    const failed = [];
+    const jobs = finalStatus.jobs ?? [];
+    for (const job of jobs) {
+        const key = keyByRef.get(job.ref) ?? jobIndexFromRef(job.ref);
+        const outputs = (filesByRef.get(job.ref) ?? []).map((f) => ({
+            url: f.downloadUrl,
+            filename: f.filename,
+            sizeBytes: f.sizeBytes,
+            operation: f.operation,
+        }));
+        // The flat artifacts[] keeps every job's outputs in job order.
+        artifacts.push(...outputs);
+        if (job.status === 'completed') {
+            succeeded.push({ key, outputs });
+        }
+        else {
+            const firstError = (job.operations ?? [])
+                .map((op) => op.errorMessage)
+                .find((m) => m !== undefined);
+            failed.push({
+                key,
+                error: new Error(firstError !== undefined ? `${job.status}: ${firstError}` : String(job.status)),
+            });
+        }
+    }
+    return new RunResult(workflowId, finalStatus.status, artifacts, succeeded, failed, downloader);
+}
+/** Derive the partition key `"{i}"` from a `file-{i}` job ref; the ref verbatim otherwise. */
+function jobIndexFromRef(ref) {
+    return ref.startsWith('file-') ? ref.slice('file-'.length) : ref;
+}
+const _FANOUT_REF = /^file-\d+$/;
+/**
+ * True when a terminal status describes a homogeneous `files([...])` fan-out —
+ * i.e. it has at least one job and EVERY job ref is `file-{i}` (the ids the
+ * {@link FilesRecipe} lowering assigns). A single-file {@link Recipe} omits the
+ * job id, so its job carries a non-`file-N` ref (e.g. `op`) and this is false.
+ *
+ * This is the data-driven seam that lets {@link Handle.wait}/{@link Handle.result}
+ * pick the per-job producer ({@link projectMultiJobToRunResult}) over the
+ * single-output one for a fan-out — WITHOUT a construction-time marker, so a
+ * fan-out **reattached** via `client.workflow(id)` (which carries no marker)
+ * still partitions per job. Keys are recovered from the `file-{i}` refs.
+ *
+ * @internal Exported for the file-first `Handle`; not part of the public API.
+ */
+export function isFanoutStatus(finalStatus) {
+    const jobs = finalStatus.jobs ?? [];
+    return jobs.length > 0 && jobs.every((job) => _FANOUT_REF.test(job.ref));
+}
+const _MERGE_SRC_REF = /^src_\d+$/;
+/**
+ * True when a terminal status describes a fluent `files([...]).merge(...)`
+ * combine — at least one job ref `merge` and every OTHER job ref is `src_{i}`
+ * (the ids the {@link MergedRecipe} lowering assigns). The data-driven seam that
+ * lets {@link Handle.wait}/{@link Handle.result} project ONLY the merged output
+ * — filtering the `src_*` passthrough plumbing — even after a
+ * `client.workflow(id)` reattach (no construction-time marker), matching
+ * {@link MergedRecipe.run}'s `ref === 'merge'` filter. Mutually exclusive with
+ * {@link isFanoutStatus} (a fan-out's refs are all `file-{i}`).
+ *
+ * @internal Exported for the file-first `Handle`; not part of the public API.
+ */
+export function isMergeStatus(finalStatus) {
+    const jobs = finalStatus.jobs ?? [];
+    if (jobs.length === 0)
+        return false;
+    let hasMerge = false;
+    for (const job of jobs) {
+        if (job.ref === 'merge') {
+            hasMerge = true;
+            continue;
+        }
+        if (!_MERGE_SRC_REF.test(job.ref))
+            return false;
+    }
+    return hasMerge;
+}
+/**
+ * True when a terminal status describes a fluent `files([...]).archive(...)`
+ * bundle — at least one job ref `archive` and every OTHER job ref is `src_{i}`
+ * (the ids the {@link ArchivedRecipe} lowering assigns). Lets
+ * {@link Handle.wait}/{@link Handle.result} project ONLY the archive output —
+ * filtering the `src_*` passthrough plumbing — even after a `client.workflow(id)`
+ * reattach. Mutually exclusive with {@link isFanoutStatus} / {@link isMergeStatus}.
+ *
+ * @internal Exported for the file-first `Handle`; not part of the public API.
+ */
+export function isArchiveStatus(finalStatus) {
+    const jobs = finalStatus.jobs ?? [];
+    if (jobs.length === 0)
+        return false;
+    let hasArchive = false;
+    for (const job of jobs) {
+        if (job.ref === 'archive') {
+            hasArchive = true;
+            continue;
+        }
+        if (!_MERGE_SRC_REF.test(job.ref))
+            return false;
+    }
+    return hasArchive;
+}
+/**
+ * True when a terminal status describes a fluent `file(...).watermark(overlay)`
+ * — at least one job ref `watermark` and every OTHER job ref is `src_{i}` (the
+ * ids the {@link WatermarkedRecipe} lowering assigns: `src_0` base, `src_1`
+ * overlay). Lets {@link Handle.wait}/{@link Handle.result} AND
+ * {@link WatermarkedRecipe.run} project ONLY the watermark output — filtering
+ * the `src_*` passthrough plumbing — even after a `client.workflow(id)` reattach.
+ * Mutually exclusive with {@link isFanoutStatus} / {@link isMergeStatus} /
+ * {@link isArchiveStatus}.
+ *
+ * @internal Exported for the file-first `Handle`; not part of the public API.
+ */
+export function isWatermarkStatus(finalStatus) {
+    const jobs = finalStatus.jobs ?? [];
+    if (jobs.length === 0)
+        return false;
+    let hasWatermark = false;
+    for (const job of jobs) {
+        if (job.ref === 'watermark') {
+            hasWatermark = true;
+            continue;
+        }
+        if (!_MERGE_SRC_REF.test(job.ref))
+            return false;
+    }
+    return hasWatermark;
+}
+/** Named constructors for {@link FileInput} — mirror the PHP static factories. */
+export const fileInput = {
+    path(path) {
+        return { kind: 'path', path };
+    },
+    blob(blob) {
+        return { kind: 'blob', blob };
+    },
+    /**
+     * Reference an already-uploaded file by its upload id, instead of
+     * re-uploading bytes.
+     *
+     * Auth-ownership: an upload created by an **authenticated** caller is owned
+     * by that caller. If you reuse the id from a client configured with a
+     * *different* auth context (a different `apiKey` / session), workflow-create
+     * returns `404 upload_not_found` — the server enforces ownership (api
+     * PqpD9ySv). Reference an upload id only under the SAME auth that created it.
+     * The normal upload-then-create-in-one-client flow is consistent by
+     * construction (the same `Authorization` rides every request). Ownerless
+     * (anonymous-intake) uploads are unaffected.
+     */
+    uploadId(fileId) {
+        return { kind: 'uploadId', fileId };
+    },
+};
+/**
+ * The file-first builder value. `client.file(path)` returns a `Recipe`;
+ * single-input operations called on it (`compress`, `convert`, `thumbnail`,
+ * `textWatermark`) chain SEQUENTIALLY — each op feeds the next, and the chain
+ * lowers to ONE workflow job with an ordered `operations[]` (per ADR-0004:
+ * operations execute sequentially, each consuming the previous output). A
+ * chain yields the TERMINAL output only; intermediates are consumed (surfaced
+ * by FF2b's `run()`/{@link RunResult}).
+ *
+ * **Immutable / clone-on-write.** Every op returns a NEW `Recipe` carrying the
+ * appended step — `this` is never mutated. A Recipe is therefore a reusable
+ * value: branching the same base recipe two different ways cannot let one
+ * branch observe the other's steps (the aliasing trap mutable builders fall
+ * into).
+ *
+ * FF2a is network-free: there is NO `run()` here (that is FF2b). The lowering
+ * seam {@link toWorkflowPayload} takes the resolved upload id as a parameter
+ * so it stays pure — FF2b's `run()` calls the SAME method after uploading, and
+ * the parity harness calls it with a fixed id to assert the lowered shape.
+ *
+ * Mirrors the PHP `Recipe`.
+ */
+export class Recipe {
+    input;
+    recipeKey;
+    steps;
+    presetDefaults;
+    scopedPresetDefaults;
+    client;
+    constructor(input, recipeKey = undefined, steps = [], presetDefaults, scopedPresetDefaults, client) {
+        this.input = input;
+        this.recipeKey = recipeKey;
+        this.steps = steps;
+        this.presetDefaults = presetDefaults;
+        this.scopedPresetDefaults = scopedPresetDefaults;
+        this.client = client;
+    }
+    /**
+     * Reduce file size. `optimize` selects a per-media preset (resolved to
+     * concrete wire fields at lower-time, exactly as `client.compress()` does).
+     * `options` carries the full per-op options bag (mirrors
+     * `client.compress(input, options)`); the explicit `optimize` param wins
+     * over any `optimize` key in the bag.
+     */
+    compress(optimize, options = {}) {
+        if (optimize !== undefined && !Object.values(OptimizeFor).includes(optimize)) {
+            const allowed = Object.values(OptimizeFor).join(', ');
+            throw new GislConfigError(`compress 'optimize' must be one of ${allowed}; got '${String(optimize)}'.`, { reason: 'invalid_optimize', conflictingFields: ['optimize'] });
+        }
+        return this.withStep({
+            opType: 'compress',
+            options: { ...options, ...(optimize !== undefined ? { optimize } : {}) },
+        });
+    }
+    /**
+     * Change format. The `format` shorthand lowers to the `output_format` wire
+     * option (the convert op's wire key per the contract); `options` carries any
+     * additional per-op convert options.
+     */
+    convert(format, options = {}) {
+        // The convert op's wire key is `output_format` (contract: convert.yaml,
+        // required, all media), NOT `format`. Spread options FIRST so the explicit
+        // shorthand wins over an `output_format` key in the bag.
+        // The shorthand owns the format → a stray legacy `format` key in the bag is
+        // not a valid convert option; drop it so the wire never carries both keys.
+        const rest = { ...options };
+        delete rest.format;
+        return this.withStep({ opType: 'convert', options: { ...rest, output_format: format } });
+    }
+    /**
+     * Generate a preview. Width and/or height in pixels; any additional per-op
+     * thumbnail options pass through. An omitted (`undefined`) value is dropped
+     * from the wire options (not sent as `undefined`).
+     */
+    thumbnail(options = {}) {
+        const wire = {};
+        for (const [key, value] of Object.entries(options)) {
+            if (value !== undefined)
+                wire[key] = value;
+        }
+        return this.withStep({ opType: 'thumbnail', options: wire });
+    }
+    /**
+     * Apply a text watermark. Single-input (the text is an option, not a
+     * secondary file) — lowers to the `text_watermark` op with a `text` option;
+     * `options` carries any additional per-op watermark options.
+     */
+    textWatermark(text, options = {}) {
+        // Spread options FIRST so the explicit `text` argument is authoritative.
+        return this.withStep({ opType: 'text_watermark', options: { ...options, text } });
+    }
+    /**
+     * Composite an image OVERLAY onto this file (a multi-input op). `overlay` is a
+     * secondary file-NODE (a {@link Recipe} — e.g. `client.file('logo.png')`),
+     * itself optionally processed first. Routes by THIS file's effective media:
+     * image base → `image_watermark` (stable), video base → `video_watermark`
+     * (beta). Audio/document/animated-GIF/unsupported-subtype/undetectable bases
+     * throw locally BEFORE any upload (the planned-op gate). `options` carries the
+     * wire watermark options (`anchor`, `opacity`, `margin_x`, `margin_y`,
+     * `overlay_width`). Returns a {@link WatermarkedRecipe} (chain post-watermark
+     * `compress`/`convert`/`thumbnail`, then `run`/`submit`). Distinct from
+     * {@link textWatermark} (single-input text overlay).
+     */
+    watermark(overlay, options = {}) {
+        // Eager gate when the base media is KNOWN (unit-testable pre-upload); an
+        // undetectable base is DEFERRED — re-checked pre-upload in run()/submit().
+        const base = _watermarkEffectiveBase(this.input, this.steps);
+        if (base.media !== undefined)
+            _resolveWatermarkWireOp(base);
+        _validateWatermarkOverlay(overlay);
+        return new WatermarkedRecipe(this.input, this.steps, overlay, options, [], this.presetDefaults, this.scopedPresetDefaults, this.client);
+    }
+    /**
+     * Lower this recipe to a workflow-create payload against a resolved upload
+     * id. Single-input chain → ONE job, `source: upload(fileId)`, ordered
+     * `operations[]`; the job `id` is omitted (a single job referenced by
+     * nothing — the server auto-assigns `job_N`).
+     *
+     * When `callbackUrl` is given (the file-first `submit()` path), it is built
+     * INTO the payload at construction (`callback_url`) rather than spread onto an
+     * already-built readonly payload. `run()` passes no `callbackUrl`.
+     *
+     * @internal Consumed by FF2b's `run()` (after a real upload), FF5b's
+     *   `submit()` (with a webhook), and the cross-language parity harness (with a
+     *   fixed id). Not part of the caller-facing fluent surface.
+     */
+    toWorkflowPayload(fileId, callbackUrl) {
+        const operations = this.steps.map((step, i) => this.lowerStep(step, i));
+        // Key order (source, operations) matches the PHP `toWire()` so the
+        // JSON-string serialisation is byte-identical across languages.
+        const job = { source: uploadSource(fileId), operations };
+        return callbackUrl === undefined ? { jobs: [job] } : { jobs: [job], callback_url: callbackUrl };
+    }
+    /** The result-addressing key passed to `file()`, or undefined. */
+    key() {
+        return this.recipeKey;
+    }
+    /** The number of operations chained so far (introspection / tests). */
+    get stepCount() {
+        return this.steps.length;
+    }
+    /**
+     * The captured op chain. Read by {@link FilesRecipe} to compose a shared
+     * chain across many inputs without duplicating the chain-method validation.
+     * @internal
+     */
+    get recipeSteps() {
+        return this.steps;
+    }
+    /**
+     * The primary input this recipe operates on. Read by {@link WatermarkedRecipe}
+     * to lift an overlay Recipe's input (for upload + media inference + src-job
+     * lowering) without making the ctor field public.
+     * @internal
+     */
+    get recipeInput() {
+        return this.input;
+    }
+    /**
+     * Execute the recipe end-to-end: upload the input (when required), create
+     * the workflow, await a terminal state (SSE with poll fallback), then
+     * resolve the produced downloads into a flat {@link RunResult}. Throws
+     * {@link GislTimeoutError} if `maxWait` elapses before terminal status.
+     *
+     * Mirrors the operation-first `OperationBuilder.run` (in `builder.ts`).
+     * Requires a client bound at construction time — `gisl().file(...)` wires
+     * it; a directly-constructed `Recipe` (e.g. in a lowering-only test) has no
+     * client and throws {@link GislConfigError}.
+     */
+    async run(options = {}) {
+        const signal = options.signal;
+        const onProgress = options.onProgress;
+        if (this.client === undefined) {
+            throw new GislConfigError('Recipe.run() requires a client; build the recipe via gisl().file(...) rather than constructing Recipe directly.', { reason: 'no_client' });
+        }
+        const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 300_000);
+        // 1+2. Upload (when required) + create the workflow. Shared with submit()
+        // (which passes a webhook → callback_url). run() passes no webhook.
+        const created = await this._uploadAndCreate(undefined, deadline, onProgress, signal, options.probeBeforeCreate, options.probeTimeoutMs);
+        // 3. Wait to terminal status — SSE first, poll on a genuine SSE error.
+        // Caller-aborted + deadline-elapsed errors MUST propagate (not transient).
+        let finalStatus;
+        try {
+            finalStatus = await _consumeSseToTerminal(this.client, {
+                workflowId: created.workflowId,
+                deadline,
+                signal,
+                onProgress,
+            });
+        }
+        catch (err) {
+            // TDqmkWpX: poll-fallback ONLY on a clean SSE stream-end
+            // (SseEndedWithoutTerminal) or a typed transport error (GislNetworkError).
+            // Everything else — caller-deadline, abort, an API error from /events, an
+            // onProgress callback throw (propagates as-is, NOT wrapped), anything
+            // unexpected — MUST propagate; re-issuing the same doomed request via poll
+            // would mask it. Mirrors the PHP BuilderInternals::awaitTerminal sealed-
+            // marker discipline.
+            if (!(err instanceof SseEndedWithoutTerminal || err instanceof GislNetworkError)) {
+                throw err;
+            }
+            finalStatus = await _pollToTerminal(this.client, {
+                workflowId: created.workflowId,
+                deadline,
+                signal,
+                pollIntervalMs: options.pollIntervalMs,
+            });
+        }
+        // 4. Fetch downloads. The maxWait deadline covers upload + create + wait +
+        // downloads, so check before issuing the request (mirrors builder.ts).
+        if (Date.now() >= deadline) {
+            throw new GislTimeoutError(`Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`);
+        }
+        const downloads = await this.client.getWorkflowDownloads(created.workflowId);
+        // TDqmkWpX: re-check AFTER the downloads fetch so a slow getWorkflowDownloads
+        // cannot return a success past the advertised maxWait deadline.
+        if (Date.now() >= deadline) {
+            throw new GislTimeoutError(`Workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`);
+        }
+        // Download URLs from getWorkflowDownloads are pre-signed and require no SDK
+        // auth, so the downloader issues a plain unauthenticated fetch.
+        const downloader = new LazyHttpDownloader();
+        return projectDownloadsToRunResult(created.workflowId, finalStatus, downloads.downloads, this.recipeKey ?? null, downloader);
+    }
+    /**
+     * Fire-and-forget the recipe: upload the input (when required), create the
+     * workflow (wiring `webhook` into `callback_url` when given), and return a
+     * client-bound {@link Handle} carrying the workflow id + webhook secret + the
+     * recipe key. Does NOT wait for terminal status — call `handle.wait()` /
+     * `handle.result()` later to collect the {@link RunResult}.
+     *
+     * Requires a client bound at construction time (same `no_client` guard as
+     * {@link run}). `webhook` is OPTIONAL: when omitted, no `callback_url` is
+     * sent. Mirrors the PHP `Recipe.submit()`.
+     *
+     * @param webhook Absolute callback URL the server POSTs lifecycle events to.
+     * @param options Opt-out (`probeBeforeCreate: false`) / tune (`probeTimeoutMs`)
+     *   the best-effort video probe-before-create. Kept as a 2nd optional param so
+     *   the existing positional `webhook` arg stays backward compatible.
+     */
+    async submit(webhook, options) {
+        if (this.client === undefined) {
+            throw new GislConfigError('Recipe.submit() requires a client; build the recipe via gisl().file(...) rather than constructing Recipe directly.', { reason: 'no_client' });
+        }
+        // submit() is fire-and-forget — NO whole-run deadline. The upload may be
+        // large (a multi-GB master, example 12) and is bounded by the HTTP client's
+        // own request timeout, not an arbitrary submit-side cap. Pass `undefined`
+        // so the post-upload deadline check is skipped: a 300s cap here would throw
+        // on a slow-but-successful big upload before createWorkflow (codex).
+        const created = await this._uploadAndCreate(webhook, undefined, undefined, undefined, options?.probeBeforeCreate, options?.probeTimeoutMs);
+        return new Handle(created.workflowId, created.webhookSecret != null ? created.webhookSecret : undefined, this.client, this.recipeKey ?? null);
+    }
+    /**
+     * Resolve the upload id (verbatim for a pre-uploaded id; uploading a path /
+     * blob otherwise, emitting `{phase:'upload'}` progress), check the post-upload
+     * deadline, lower to the workflow-create payload (wiring `webhook` into
+     * `callback_url`), and create the workflow. Shared first half of
+     * {@link run} + {@link submit}.
+     *
+     * The post-upload deadline check carries a prior codex fix (9a117f04eb59): a
+     * slow upload must not proceed to createWorkflow past the deadline.
+     */
+    async _uploadAndCreate(webhook, deadline, onProgress, signal, probeBeforeCreate, probeTimeoutMs) {
+        // 1. Resolve the upload id. A pre-uploaded id skips the upload entirely;
+        // a path / blob is uploaded now, emitting {phase:'upload'} progress.
+        let fileId;
+        // A pre-uploaded id carries no local mime/size, so the video probe-gate is
+        // skipped for it (no `up` to read sizeBytes from).
+        let uploadSizeBytes;
+        if (this.input.kind === 'uploadId') {
+            fileId = this.input.fileId;
+        }
+        else {
+            const source = this.input.kind === 'path' ? this.input.path : this.input.blob;
+            const up = await this.client.uploadFile(source, {
+                signal,
+                ...(onProgress !== undefined
+                    ? {
+                        onProgress: (uploadedBytes, totalBytes) => {
+                            onProgress({ phase: 'upload', uploadedBytes, totalBytes });
+                        },
+                    }
+                    : {}),
+            });
+            fileId = up.fileId;
+            uploadSizeBytes = up.sizeBytes;
+        }
+        _checkAborted(signal);
+        // run() passes a whole-run deadline (the codex 9a117f04eb59 fix: a slow
+        // upload must not proceed to createWorkflow past maxWait); submit() passes
+        // `undefined` (fire-and-forget, no upload cap), so the check is skipped.
+        if (deadline !== undefined && Date.now() >= deadline) {
+            throw new GislTimeoutError('Upload completed but maxWait elapsed before workflow could be created');
+        }
+        // Best-effort probe-before-create: for a VIDEO upload that went multipart,
+        // let the server see the codec + duration before createWorkflow so it
+        // admits the ~3× parallel split. Never-bounce — a give-up just proceeds.
+        // The probe wait is CAPPED to the remaining maxWait budget so a slow probe
+        // cannot push createWorkflow past the caller's deadline (an unset
+        // probeTimeoutMs under a deadline becomes the remaining budget, never the
+        // 30s default).
+        // Skip a pre-uploaded (`uploadId`) input entirely — no local mime/size to
+        // gate on (mirrors the multi-input seams, which omit uploadId inputs from
+        // their probe targets).
+        if (this.input.kind !== 'uploadId') {
+            await this.client.maybeWaitForVideoProbe(fileId, {
+                enabled: probeBeforeCreate ?? true,
+                isVideo: this.compressMediaHint() === 'video',
+                sizeBytes: uploadSizeBytes,
+                timeoutMs: _cappedProbeTimeoutMs(probeTimeoutMs, deadline),
+                signal,
+            });
+        }
+        // A cancel arriving during the FINAL successful probe request must not still
+        // create the workflow (maybeWaitForVideoProbe returns landed without a final
+        // abort re-check), so check here BEFORE createWorkflow.
+        _checkAborted(signal);
+        // RE-CHECK the deadline AFTER the probe wait: the wait itself consumes time,
+        // so a workflow must not be created past maxWait even when the wait was
+        // capped (mirrors the post-upload check above).
+        if (deadline !== undefined && Date.now() >= deadline) {
+            throw new GislTimeoutError('Probe wait completed but maxWait elapsed before workflow could be created');
+        }
+        // 2. Create the workflow from the lowered payload (callback_url built into
+        // the payload at construction when a webhook is given).
+        const payload = this.toWorkflowPayload(fileId, webhook);
+        const created = await this.client.createWorkflow(payload);
+        _checkAborted(signal);
+        return created;
+    }
+    withStep(step) {
+        return new Recipe(this.input, this.recipeKey, [...this.steps, step], this.presetDefaults, this.scopedPresetDefaults, this.client);
+    }
+    lowerStep(step, stepIndex) {
+        const options = step.opType === 'compress'
+            ? this.lowerCompressOptions(step.options, stepIndex)
+            : { ...step.options };
+        // Empty options omit the `options` wire key entirely, so TS (undefined →
+        // absent) and PHP (null → absent) serialise byte-identically.
+        return Object.keys(options).length === 0
+            ? { type: step.opType }
+            : { type: step.opType, options };
+    }
+    lowerCompressOptions(stepOptions, uptoIndex) {
+        // Mirror the op-first resolver precedence (OperationBuilder._resolve in
+        // builder.ts): optimize = preset layer, presetOverrides = callPresetOverride
+        // layer, the rest = explicit layer.
+        const { optimize, presetOverrides, ...explicitOptions } = stepOptions;
+        // Validate the special bag keys at this chokepoint (every compress lowers
+        // through here). The chain methods' shorthand-param guard only covers a
+        // PARAM-supplied optimize; a bag-supplied optimize / presetOverrides must be
+        // validated too, so a bad value raises the typed SDK error rather than
+        // surfacing as a raw preset-lookup error or TypeError downstream. Mirrors
+        // PHP coerceOptimize + OperationBuilder::normalisePresetOverrides.
+        if (optimize !== undefined && !Object.values(OptimizeFor).includes(optimize)) {
+            const allowed = Object.values(OptimizeFor).join(', ');
+            throw new GislConfigError(`compress 'optimize' must be one of ${allowed}; got '${String(optimize)}'.`, { reason: 'invalid_optimize', conflictingFields: ['optimize'] });
+        }
+        if (presetOverrides !== undefined &&
+            (presetOverrides === null || typeof presetOverrides !== 'object' || Array.isArray(presetOverrides))) {
+            const got = Array.isArray(presetOverrides)
+                ? 'array'
+                : presetOverrides === null
+                    ? 'null'
+                    : typeof presetOverrides;
+            throw new GislConfigError(`compress 'presetOverrides' must be a *CompressPresetOptions object; got ${got}.`, { reason: 'invalid_preset_overrides', conflictingFields: ['presetOverrides'] });
+        }
+        const media = this.compressMediaHint(uptoIndex);
+        if (media === undefined) {
+            // Cannot infer a media class (a Blob without a recognised name, or a
+            // bare upload id) → preset resolution is impossible. Fail FAST rather
+            // than silently dropping an explicit `optimize`; bare compress() is fine.
+            // When no optimize is set, pass any explicit options through verbatim
+            // (exactly as op-first `_resolve` does when media is undefined).
+            if (optimize !== undefined) {
+                throw new GislConfigError(`compress(optimize: ${String(optimize)}) needs a media type to resolve the preset, but the ` +
+                    'input has no inferable media (a pre-uploaded file id or unnamed Blob carries no extension). ' +
+                    'Use a path with a file extension, or call compress() without optimize.', { reason: 'media_unknown', conflictingFields: ['optimize'] });
+            }
+            // presetOverrides override a resolved preset; with no media there is no
+            // preset to override, so fail fast rather than silently dropping them.
+            if (presetOverrides !== undefined) {
+                throw new GislConfigError('compress(presetOverrides) needs a media type to resolve the preset to override, but the ' +
+                    'input has no inferable media (a pre-uploaded file id or unnamed Blob carries no extension). ' +
+                    'Use a path with a file extension.', { reason: 'media_unknown', conflictingFields: ['presetOverrides'] });
+            }
+            return { ...explicitOptions };
+        }
+        const input = { media, op: 'compress', explicitOptions };
+        if (media === 'audio') {
+            input.audioLossless = this.compressAudioLossless(uptoIndex);
+        }
+        if (this.presetDefaults !== undefined) {
+            input.presetDefaults = this.presetDefaults;
+        }
+        if (this.scopedPresetDefaults !== undefined) {
+            input.scopedPresetDefaults =
+                this.scopedPresetDefaults;
+        }
+        if (presetOverrides !== undefined) {
+            // Validated above to be a non-null, non-array object.
+            input.presetOverrides =
+                presetOverrides;
+        }
+        if (optimize !== undefined) {
+            input.optimize = optimize;
+        }
+        return { ...resolveCompressOptions(input).wireOptions };
+    }
+    /** Media of the original input (no chain context) — used by the probe gate. */
+    inputMedia() {
+        if (this.input.kind === 'path')
+            return _detectCompressMedia(this.input.path);
+        if (this.input.kind === 'blob')
+            return _detectCompressMedia(this.input.blob);
+        return undefined;
+    }
+    /**
+     * The media class a `compress` step at `uptoIndex` actually operates on. With no
+     * chain context (`uptoIndex` undefined) this is the original input's media. With
+     * context, FOLD the preceding `convert` steps: each `convert(output_format)` changes
+     * the media the next step sees (56N4chXY / N8eESzQN — a chain like
+     * `mp3 -> convert(flac) -> compress` must resolve against flac, not mp3). Reuses the
+     * synthetic-filename detection precedent from {@link MergedRecipe} (`merged.<ext>`).
+     */
+    compressMediaHint(uptoIndex) {
+        let media = this.inputMedia();
+        if (uptoIndex === undefined)
+            return media;
+        for (let i = 0; i < uptoIndex; i++) {
+            const step = this.steps[i];
+            if (step.opType === 'convert') {
+                const fmt = step.options.output_format;
+                if (typeof fmt === 'string')
+                    media = _resolveConvertOutputMedia(media, fmt);
+            }
+        }
+        return media;
+    }
+    /**
+     * Whether the media a `compress` step at `uptoIndex` operates on is lossless audio.
+     * Determined by the most recent preceding `convert` target (`flac`/`wav` -> lossless)
+     * when there is one, else by the original input. Lossless is unaffected by the
+     * video/ogg guard (ogg is never lossless either way).
+     */
+    compressAudioLossless(uptoIndex) {
+        if (uptoIndex !== undefined) {
+            for (let i = uptoIndex - 1; i >= 0; i--) {
+                const step = this.steps[i];
+                if (step.opType === 'convert') {
+                    const fmt = step.options.output_format;
+                    return typeof fmt === 'string' ? _detectAudioLossless(`f.${fmt}`) : false;
+                }
+            }
+        }
+        if (this.input.kind === 'path')
+            return _detectAudioLossless(this.input.path);
+        if (this.input.kind === 'blob')
+            return _detectAudioLossless(this.input.blob);
+        return false;
+    }
+}
+/**
+ * Media of a `convert` step's output, given the media of its source. Reuses the
+ * extension classifier on a synthetic `f.<format>`, with ONE guard: a video source
+ * converted to `ogg` stays video (an OGG *video* container — `ogg` otherwise lands in
+ * the audio extension list, which would mis-resolve a video output to audio). A video
+ * source to `gif` is left as the classifier's `image` result (animated-GIF compress is
+ * image-class). Per the 56N4chXY plan review (architect + karen).
+ */
+function _resolveConvertOutputMedia(source, outputFormat) {
+    if (source === 'video' && outputFormat.toLowerCase() === 'ogg')
+        return 'video';
+    return _detectCompressMedia(`f.${outputFormat}`);
+}
+// ── Watermark routing + planned-op gating (FF4a) ────────────────────────────
+/**
+ * The single SDK-side source of truth for which `(wire op, base mime)`
+ * combinations the file-first `watermark()` verb may emit, and their
+ * availability. The generated typed metadata sidecar does NOT carry the
+ * supported-mime allowlist (`MimeGroupMetadata` has no `mimes` field and
+ * `per_mime_availability` is empty for these ops), so this hand table is the
+ * gate's source — PINNED to the generated `availability.json` by a conformance
+ * test (mirrors the wire-key-conformance pattern): a contract regen that
+ * changes the supported mimes or availability of `image_watermark` /
+ * `video_watermark` fails that test. The gate reads ONLY this table.
+ * @internal
+ */
+export const WATERMARK_CAPABILITY = {
+    image_watermark: {
+        image: { mimes: ['image/jpeg', 'image/png', 'image/webp'], availability: 'stable' },
+        image_gif: { mimes: ['image/gif'], availability: 'planned' },
+    },
+    video_watermark: {
+        video: { mimes: ['video/mp4', 'video/webm'], availability: 'beta' },
+    },
+};
+const _WATERMARK_SHIPPABLE = new Set(['stable', 'beta']);
+// extension → canonical MIME for the watermark gate. Covers the supported
+// formats PLUS common known-but-unsupported ones so the gate throws an
+// actionable "unsupported subtype" rather than silently routing a format the
+// server will reject.
+const _WATERMARK_EXT_MIME = {
+    jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif',
+    avif: 'image/avif', heic: 'image/heic', heif: 'image/heif', tiff: 'image/tiff', tif: 'image/tiff', bmp: 'image/bmp',
+    mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime', mkv: 'video/x-matroska',
+    avi: 'video/x-msvideo', wmv: 'video/x-ms-wmv', flv: 'video/x-flv', m4v: 'video/x-m4v',
+};
+function _watermarkPathMime(path) {
+    const ext = path.toLowerCase().split('.').pop();
+    return ext !== undefined ? _WATERMARK_EXT_MIME[ext] : undefined;
+}
+/**
+ * The watermark MIME of a base/overlay Blob. Mirrors `_detectCompressMedia`'s
+ * mime-first-else-filename precedence: a declared `Blob.type` is used ONLY when
+ * it is media-bearing (image/ video/ audio/ — params stripped, lowercased); a
+ * generic/unknown type (e.g. `application/octet-stream`) falls back to the
+ * `File.name` extension, so a filename-hinted in-memory base routes like a path.
+ */
+function _watermarkBlobMime(blob) {
+    const raw = blob.type ? blob.type.split(';')[0].trim().toLowerCase() : '';
+    if (raw.startsWith('image/') || raw.startsWith('video/') || raw.startsWith('audio/')) {
+        return raw;
+    }
+    return _watermarkPathMime(blob.name ?? '');
+}
+/**
+ * Resolve the effective `(media, mime)` a watermark op operates on, folding the
+ * preceding `convert` (output media + format) AND `thumbnail` (always an image
+ * output) steps — mirrors {@link Recipe.compressMediaHint}'s convert fold, plus
+ * the thumbnail→image rule (codex review). Reused for the base and the overlay.
+ */
+function _watermarkEffectiveBase(input, steps) {
+    let media = input.kind === 'path'
+        ? _detectCompressMedia(input.path)
+        : input.kind === 'blob'
+            ? _detectCompressMedia(input.blob)
+            : undefined;
+    let mime = input.kind === 'path'
+        ? _watermarkPathMime(input.path)
+        : input.kind === 'blob'
+            ? _watermarkBlobMime(input.blob)
+            : undefined;
+    for (const step of steps) {
+        if (step.opType === 'convert') {
+            const fmt = step.options.output_format;
+            if (typeof fmt === 'string') {
+                media = _resolveConvertOutputMedia(media, fmt);
+                mime = _WATERMARK_EXT_MIME[fmt.toLowerCase()];
+            }
+        }
+        else if (step.opType === 'thumbnail') {
+            // A thumbnail of a video/PDF/image is always an image output.
+            media = 'image';
+            mime = 'image/png';
+        }
+    }
+    // Recover the coarse media from a usable (already-normalised) mime when the
+    // case-sensitive media classifier could not (e.g. an oddly-cased `Image/PNG`
+    // content-type) — keeps the gate self-consistent: a usable mime implies media.
+    if (media === undefined && mime !== undefined) {
+        if (mime.startsWith('image/'))
+            media = 'image';
+        else if (mime.startsWith('video/'))
+            media = 'video';
+        else if (mime.startsWith('audio/'))
+            media = 'audio';
+    }
+    return { media, mime };
+}
+/**
+ * Resolve the wire op (`image_watermark` / `video_watermark`) for a watermark
+ * base, or THROW {@link GislConfigError} pre-upload — the planned-op gate. The
+ * capability is read from {@link WATERMARK_CAPABILITY} (data-driven, contract-
+ * pinned): a base mime in a `{stable,beta}` group routes; a `planned` group
+ * (animated GIF base) throws; a known image/video subtype outside the allowlist
+ * (AVIF/HEIC/MOV/…) throws "unsupported"; audio/document throw "not supported".
+ * An undetectable base media throws an actionable error (the caller defers the
+ * eager check at `.watermark()` time and re-runs this pre-upload).
+ */
+function _resolveWatermarkWireOp(base) {
+    const { media, mime } = base;
+    if (media === undefined) {
+        throw new GislConfigError("watermark needs a detectable base media to route to image_watermark / video_watermark, " +
+            'but the input has no inferable type (a pre-uploaded file id or unnamed/typeless Blob carries ' +
+            'no extension or MIME). Use a path with a file extension, a Blob with a type, or a named resource.', { reason: 'media_unknown' });
+    }
+    if (mime !== undefined) {
+        for (const wireOp of Object.keys(WATERMARK_CAPABILITY)) {
+            const groups = WATERMARK_CAPABILITY[wireOp];
+            for (const group of Object.values(groups)) {
+                if (group.mimes.includes(mime)) {
+                    if (_WATERMARK_SHIPPABLE.has(group.availability))
+                        return wireOp;
+                    throw new GislConfigError(`watermark for ${mime} bases is not yet available (${wireOp} is '${group.availability}'). ` +
+                        'The contract schema is defined but the server returns feature_not_available until it ships.', { reason: 'feature_not_available' });
+                }
+            }
+        }
+    }
+    if (media === 'image' || media === 'video') {
+        throw new GislConfigError(`watermark does not support ${mime ?? media} base files. image_watermark accepts ` +
+            'image/jpeg, image/png, image/webp; video_watermark accepts video/mp4, video/webm. ' +
+            'Convert the base to a supported format first.', { reason: 'unsupported_media' });
+    }
+    throw new GislConfigError(`watermark does not support ${media} base files — overlay watermarking targets image or video bases ` +
+        '(audio overlay and luma matte are planned operations). Use textWatermark() for document/text watermarks.', { reason: 'unsupported_media' });
+}
+/**
+ * Validate a watermark overlay locally: the overlay role is always an IMAGE.
+ * A KNOWN non-image overlay (audio/video/document) throws pre-upload; an
+ * undetectable overlay media is ALLOWED (it doesn't affect routing, so the
+ * server enforces it). The overlay's effective media folds its own steps.
+ */
+function _validateWatermarkOverlay(overlay) {
+    const { media } = _watermarkEffectiveBase(overlay.recipeInput, overlay.recipeSteps);
+    if (media !== undefined && media !== 'image') {
+        throw new GislConfigError(`watermark overlay must be an image; got a ${media} overlay. The overlay is the watermark image ` +
+            'composited onto the base — pass an image file (or a recipe whose output is an image).', { reason: 'invalid_overlay_media', conflictingFields: ['overlay'] });
+    }
+}
+function _lowerWatermarkOp(wireOp, options) {
+    // Watermark options (anchor/opacity/margin_x/margin_y/overlay_width) are
+    // already wire keys; empty options omit the `options` key (byte-identical to PHP).
+    const wire = { ...options };
+    return Object.keys(wire).length === 0 ? { type: wireOp } : { type: wireOp, options: wire };
+}
+/**
+ * Shared multi-input upload-then-create tail for the multi-input recipes
+ * ({@link FilesRecipe}, {@link MergedRecipe}, {@link ArchivedRecipe},
+ * {@link WatermarkedRecipe}). Uploads each fresh input (passing through upload
+ * progress), tracks the multipart-video uploads for the best-effort
+ * probe-before-create, then builds the payload via `toPayload` and creates the
+ * workflow. Abort + deadline are re-checked between every phase, exactly as the
+ * per-recipe copies did before this was extracted (xxy5Rlsy).
+ *
+ * Recipe-specific behaviour stays with the caller: `validatePreUpload()` runs
+ * BEFORE this call (Merged/Archived/Watermarked), and the input source
+ * (`this.inputs` vs `this.inputsInOrder()`) plus the timeout-message nouns
+ * (`uploadsLabel`/`workflowLabel`) are passed in so the thrown messages are
+ * byte-identical to the originals.
+ */
+async function _uploadInputsAndCreate(client, inputs, toPayload, opts) {
+    const { webhook, deadline, onProgress, signal, probeBeforeCreate, probeTimeoutMs, uploadsLabel, workflowLabel } = opts;
+    const fileIds = [];
+    // Track each freshly-uploaded input's probe-gate inputs (a pre-uploaded id
+    // carries no local mime/size, so it is excluded — never probed).
+    const probeTargets = [];
+    for (const input of inputs) {
+        // Fail fast between uploads — a deadline that elapses mid-batch should not
+        // force every remaining input to upload before throwing.
+        _checkAborted(signal);
+        if (deadline !== undefined && Date.now() >= deadline) {
+            throw new GislTimeoutError(`maxWait elapsed during ${uploadsLabel} uploads before all inputs were uploaded`);
+        }
+        if (input.kind === 'uploadId') {
+            fileIds.push(input.fileId);
+        }
+        else {
+            const source = input.kind === 'path' ? input.path : input.blob;
+            const up = await client.uploadFile(source, {
+                signal,
+                ...(onProgress !== undefined
+                    ? {
+                        onProgress: (uploadedBytes, totalBytes) => {
+                            onProgress({ phase: 'upload', uploadedBytes, totalBytes });
+                        },
+                    }
+                    : {}),
+            });
+            fileIds.push(up.fileId);
+            probeTargets.push({
+                fileId: up.fileId,
+                isVideo: _detectCompressMedia(source) === 'video',
+                sizeBytes: up.sizeBytes,
+            });
+        }
+    }
+    _checkAborted(signal);
+    if (deadline !== undefined && Date.now() >= deadline) {
+        throw new GislTimeoutError(`Uploads completed but maxWait elapsed before ${workflowLabel} could be created`);
+    }
+    // Best-effort probe-before-create for the multipart-video inputs. Run the
+    // waits CONCURRENTLY (Promise.all): each is bounded by the SAME capped
+    // timeout, so the aggregate wall-clock stays ~timeout rather than N×timeout.
+    // The cap is the remaining maxWait budget so the waits cannot push
+    // createWorkflow past the caller's deadline. Never-bounce, so a give-up just
+    // proceeds.
+    const cappedProbeTimeoutMs = _cappedProbeTimeoutMs(probeTimeoutMs, deadline);
+    await Promise.all(probeTargets.map((t) => client.maybeWaitForVideoProbe(t.fileId, {
+        enabled: probeBeforeCreate ?? true,
+        isVideo: t.isVideo,
+        sizeBytes: t.sizeBytes,
+        timeoutMs: cappedProbeTimeoutMs,
+        signal,
+    })));
+    // A cancel arriving during a FINAL successful probe request must not still
+    // create the workflow (the probe waits return landed without a final abort
+    // re-check), so check here BEFORE createWorkflow.
+    _checkAborted(signal);
+    // RE-CHECK the deadline AFTER the probe waits (they consume time).
+    if (deadline !== undefined && Date.now() >= deadline) {
+        throw new GislTimeoutError(`Probe wait completed but maxWait elapsed before ${workflowLabel} could be created`);
+    }
+    const created = await client.createWorkflow(toPayload(fileIds, webhook));
+    _checkAborted(signal);
+    return created;
+}
+/**
+ * The homogeneous fan-out builder value (FF3a). `client.files([a, b, c])`
+ * returns a `FilesRecipe`; the op-chain methods (`compress`, `convert`,
+ * `thumbnail`, `textWatermark`) build ONE shared recipe (chain) that is applied
+ * to EVERY input file in ONE workflow. `run()` returns a partitioned
+ * {@link RunResult} — one `succeeded`/`failed` entry per input, keyed by its
+ * 0-based index ("0", "1", …) so one bad input does not sink the rest.
+ *
+ * **Immutable / clone-on-write**, exactly like {@link Recipe}: every op returns
+ * a NEW `FilesRecipe` carrying the appended step. The inputs are held as an
+ * ORDERED list (NOT a map) so the per-file index is the partition key.
+ *
+ * **Lowering composes {@link Recipe} per file** rather than duplicating
+ * `lowerStep`/`lowerCompressOptions`: for each input `i` it builds an internal
+ * single-file `Recipe(input_i, …, steps)`, calls its `toWorkflowPayload` to get
+ * that file's one-job payload, then merges all jobs into ONE
+ * {@link WorkflowCreatePayload} with `jobs[i].id = "file-{i}"`. This preserves
+ * each file's media-hint (different extensions per input resolve compress
+ * presets independently).
+ *
+ * Exposes both `run()` (blocking, returns a partitioned {@link RunResult}) and
+ * `submit(webhook?)` (fire-and-forget, returns a {@link Handle}). Mirrors the
+ * PHP `FilesRecipe`.
+ */
+export class FilesRecipe {
+    inputs;
+    steps;
+    presetDefaults;
+    scopedPresetDefaults;
+    client;
+    constructor(inputs, steps = [], presetDefaults, scopedPresetDefaults, client) {
+        this.inputs = inputs;
+        this.steps = steps;
+        this.presetDefaults = presetDefaults;
+        this.scopedPresetDefaults = scopedPresetDefaults;
+        this.client = client;
+    }
+    /**
+     * Reduce file size on every input. `optimize` selects a per-media preset
+     * (resolved per file at lower-time, so each input's extension picks its own
+     * preset). Reuses {@link Recipe}'s validation — a directly-constructed
+     * lowering builds an internal Recipe that throws the same `GislConfigError`.
+     */
+    compress(optimize, options = {}) {
+        return this.withStep(this.baseRecipe().compress(optimize, options));
+    }
+    /** Change every input's format. `format` lowers to the contract `output_format` wire key (via {@link Recipe.convert}), NOT `format`. */
+    convert(format, options = {}) {
+        return this.withStep(this.baseRecipe().convert(format, options));
+    }
+    /** Generate a preview of every input. Omitted dimensions are dropped from the wire options. */
+    thumbnail(options = {}) {
+        return this.withStep(this.baseRecipe().thumbnail(options));
+    }
+    /** Apply the same text watermark to every input. */
+    textWatermark(text, options = {}) {
+        return this.withStep(this.baseRecipe().textWatermark(text, options));
+    }
+    /**
+     * Combine the inputs into ONE output (N→1), in array order (FF3b). Returns a
+     * single-output {@link MergedRecipe} you chain further ops on
+     * (`files([...]).merge().compress()`). Reuses the operation-first
+     * {@link MergeOptions} for the merge-level options, so the wire shape matches
+     * `client.merge([...], options)`.
+     *
+     * `merge()` must be the FIRST op on `files([...])` — per-file ops before a
+     * combine (compress-each-then-merge) are a separate follow-up, rejected here
+     * with `GislConfigError` reason `pre_merge_ops_unsupported`.
+     */
+    merge(options = {}) {
+        if (this.steps.length !== 0) {
+            throw new GislConfigError('merge() must be the first operation on files([...]); applying per-file ops before a combine ' +
+                '(compress-each-then-merge) is not yet supported — call merge() directly, then chain ops on the merged output.', { reason: 'pre_merge_ops_unsupported' });
+        }
+        return new MergedRecipe(this.inputs, options, [], this.presetDefaults, this.scopedPresetDefaults, this.client);
+    }
+    /**
+     * Bundle the inputs into ONE archive (N→1, zip / tar.gz) — media-agnostic,
+     * inputs may mix types. Returns a terminal {@link ArchivedRecipe} (a zip is
+     * the final artefact — no post-bundle chain). `format` / `folderStructure` are
+     * optional; the server defaults to zip + flat.
+     *
+     * `archive()` must be the FIRST op on `files([...])` → `GislConfigError` reason
+     * `pre_archive_ops_unsupported` otherwise.
+     */
+    archive(options = {}) {
+        if (this.steps.length !== 0) {
+            throw new GislConfigError('archive() must be the first operation on files([...]); applying per-file ops before a bundle ' +
+                'is not yet supported — call archive() directly on the files you want to bundle.', { reason: 'pre_archive_ops_unsupported' });
+        }
+        return new ArchivedRecipe(this.inputs, options, this.client);
+    }
+    /** The number of inputs in this fan-out (introspection / tests). */
+    get inputCount() {
+        return this.inputs.length;
+    }
+    /** The number of operations chained so far (introspection / tests). */
+    get stepCount() {
+        return this.steps.length;
+    }
+    /**
+     * Lower this fan-out to a single multi-job workflow-create payload against a
+     * list of resolved upload ids (one per input, in input order). Each input `i`
+     * becomes ONE job with `id = "file-{i}"`, its `source: upload(fileIds[i])`,
+     * and the SHARED lowered `operations[]`. Composes the single-file
+     * {@link Recipe.toWorkflowPayload} per file so per-file media-hints resolve
+     * independently and lowering logic is not duplicated.
+     *
+     * @internal Consumed by {@link run} (after uploading all inputs) and the
+     *   cross-language parity harness (with fixed ids). Not caller-facing.
+     */
+    toWorkflowPayload(fileIds, callbackUrl) {
+        const jobs = this.inputs.map((input, i) => {
+            const single = new Recipe(input, undefined, this.steps, this.presetDefaults, this.scopedPresetDefaults);
+            const oneJob = single.toWorkflowPayload(fileIds[i]).jobs[0];
+            // Key order (id, source, operations) matches the PHP `toWire()` so the
+            // JSON-string serialisation is byte-identical across languages.
+            return { id: `file-${i}`, source: oneJob.source, operations: oneJob.operations };
+        });
+        // When `callbackUrl` is given (the file-first `submit()` path) it is built
+        // INTO the payload (`callback_url`) — mirrors Recipe.toWorkflowPayload.
+        // `run()` passes no callbackUrl.
+        return callbackUrl === undefined ? { jobs } : { jobs, callback_url: callbackUrl };
+    }
+    /**
+     * Execute the fan-out end-to-end: upload EVERY input, create ONE workflow
+     * with one job per input, await a terminal state (SSE with poll fallback),
+     * then resolve the per-job downloads into a partitioned {@link RunResult}.
+     * `partially_failed` is a NORMAL terminal state here — its successful jobs
+     * land in `succeeded`, its failed jobs in `failed`.
+     *
+     * Requires a client bound at construction time — `gisl().files(...)` wires
+     * it; a directly-constructed `FilesRecipe` throws {@link GislConfigError}.
+     * Mirrors the single-file {@link Recipe.run}; see {@link submit} for the
+     * fire-and-forget arm.
+     */
+    async run(options = {}) {
+        const signal = options.signal;
+        const onProgress = options.onProgress;
+        if (this.client === undefined) {
+            throw new GislConfigError('FilesRecipe.run() requires a client; build the fan-out via gisl().files(...) rather than constructing FilesRecipe directly.', { reason: 'no_client' });
+        }
+        const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 300_000);
+        // 1+2. Upload EVERY input + create ONE multi-job workflow. Shared with
+        // submit() (which passes a webhook → callback_url and no deadline).
+        const created = await this._uploadAllAndCreate(undefined, deadline, onProgress, signal, options.probeBeforeCreate, options.probeTimeoutMs);
+        // 3. Wait to terminal status — SSE first, poll on a genuine SSE error.
+        // `partially_failed` is a normal terminal state here (the helper treats it
+        // as terminal); only caller-aborted / deadline / API errors propagate.
+        let finalStatus;
+        try {
+            finalStatus = await _consumeSseToTerminal(this.client, {
+                workflowId: created.workflowId,
+                deadline,
+                signal,
+                onProgress,
+            });
+        }
+        catch (err) {
+            if (!(err instanceof SseEndedWithoutTerminal || err instanceof GislNetworkError)) {
+                throw err;
+            }
+            finalStatus = await _pollToTerminal(this.client, {
+                workflowId: created.workflowId,
+                deadline,
+                signal,
+                pollIntervalMs: options.pollIntervalMs,
+            });
+        }
+        // 4. Fetch downloads + project per-job into the partitioned RunResult.
+        if (Date.now() >= deadline) {
+            throw new GislTimeoutError(`Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`);
+        }
+        const downloads = await this.client.getWorkflowDownloads(created.workflowId);
+        // TDqmkWpX: re-check AFTER the downloads fetch so a slow getWorkflowDownloads
+        // cannot return a success past the advertised maxWait deadline.
+        if (Date.now() >= deadline) {
+            throw new GislTimeoutError(`Workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`);
+        }
+        // keyByRef maps each job ref ("file-{i}") to the partition key. Today the
+        // key is just the index string; the Map seam leaves room for the FF3b
+        // keyed-fan-out card to map refs to caller-supplied keys without changing
+        // the producer's signature.
+        const keyByRef = new Map(this.inputs.map((_, i) => [`file-${i}`, String(i)]));
+        const downloader = new LazyHttpDownloader();
+        return projectMultiJobToRunResult(created.workflowId, finalStatus, downloads.downloads, keyByRef, downloader);
+    }
+    /**
+     * Fire-and-forget the fan-out: upload every input, create ONE multi-job
+     * workflow (wiring `webhook` into `callback_url` when given), and return a
+     * client-bound {@link Handle}. Does NOT wait for terminal status — call
+     * `handle.wait()` / `handle.result()` later to collect the partitioned
+     * {@link RunResult}. The Handle detects the fan-out from the wire `file-{i}`
+     * job refs, so per-file `byKey()` works even after a `client.workflow(id)`
+     * reattach (the keys are the input indices `"0"`, `"1"`, …).
+     *
+     * Requires a client bound at construction time (same `no_client` guard as
+     * {@link run}). `webhook` is OPTIONAL. Fire-and-forget, so NO whole-run
+     * deadline (a multi-GB upload is bounded by the HTTP client's own timeout).
+     * Mirrors the single-file {@link Recipe.submit}.
+     *
+     * @param webhook Absolute callback URL the server POSTs lifecycle events to.
+     * @param options Opt-out / tune the best-effort video probe-before-create
+     *   (2nd optional param so the positional `webhook` arg stays compatible).
+     */
+    async submit(webhook, options) {
+        if (this.client === undefined) {
+            throw new GislConfigError('FilesRecipe.submit() requires a client; build the fan-out via gisl().files(...) rather than constructing FilesRecipe directly.', { reason: 'no_client' });
+        }
+        const created = await this._uploadAllAndCreate(webhook, undefined, undefined, undefined, options?.probeBeforeCreate, options?.probeTimeoutMs);
+        return new Handle(created.workflowId, created.webhookSecret != null ? created.webhookSecret : undefined, this.client, null);
+    }
+    /**
+     * Upload every input (verbatim for a pre-uploaded id; uploading a path /
+     * blob otherwise, emitting `{phase:'upload'}` progress) then create ONE
+     * multi-job workflow (one job per input, `callback_url` built in when
+     * `webhook` is given). Shared first half of {@link run} + {@link submit}.
+     *
+     * Uploads are sequential so progress events stay ordered and the abort
+     * signal is honoured promptly; a resource arm is impossible in TS (Blob).
+     * `run()` passes a whole-run deadline (a slow upload must not proceed to
+     * createWorkflow past maxWait); `submit()` passes `undefined`, so the
+     * deadline checks are skipped.
+     */
+    async _uploadAllAndCreate(webhook, deadline, onProgress, signal, probeBeforeCreate, probeTimeoutMs) {
+        return _uploadInputsAndCreate(this.client, this.inputs, (fileIds, callbackUrl) => this.toWorkflowPayload(fileIds, callbackUrl), {
+            webhook,
+            deadline,
+            onProgress,
+            signal,
+            probeBeforeCreate,
+            probeTimeoutMs,
+            uploadsLabel: 'fan-out',
+            workflowLabel: 'workflow',
+        });
+    }
+    /**
+     * The shared single-file {@link Recipe} that captures the op chain (input is
+     * a placeholder — only the steps are read). Reuses Recipe's op-chain
+     * validation + coercion so a `FilesRecipe.compress(bad)` throws the identical
+     * `GislConfigError` as `Recipe.compress(bad)`.
+     */
+    baseRecipe() {
+        // The placeholder input never reaches the wire (only `steps` are read off
+        // the returned Recipe). A path placeholder gives compress() a media hint so
+        // optimize validation matches the single-file path; per-file lowering in
+        // toWorkflowPayload() rebuilds a Recipe with the REAL input.
+        return new Recipe(this.inputs[0] ?? fileInput.path('placeholder'), undefined, this.steps, this.presetDefaults, this.scopedPresetDefaults);
+    }
+    withStep(recipeWithStep) {
+        return new FilesRecipe(this.inputs, recipeWithStep.recipeSteps, this.presetDefaults, this.scopedPresetDefaults, this.client);
+    }
+}
+/**
+ * The single-output recipe you're in AFTER a fluent `files([...]).merge(...)`
+ * (FF3b). Merge collapses the N inputs into ONE output, so the per-file ops
+ * ({@link FilesRecipe.compress} etc.) no longer apply — instead this exposes the
+ * SAME chain ops as the single-file {@link Recipe}, applied to the merged
+ * result. `files([...]).merge().compress()` is the flagship case (example 14).
+ *
+ * **Lowering (one workflow):** each input is uploaded once and wrapped in its
+ * own single-input `passthrough` source job (`src_N`); the `merge` job consumes
+ * those via `job_output` inputs (array order = play order) and carries the merge
+ * op FIRST in its `operations[]`, followed by any post-combine ops (compress /
+ * convert / thumbnail) so they run on the merged output in the same job. The
+ * merge-level wire options reuse {@link wireMergeOptions} so a fluent merge
+ * lowers identically to the operation-first `client.merge()`.
+ *
+ * Immutable / clone-on-write like {@link Recipe} / {@link FilesRecipe}. Mirrors
+ * the PHP `MergedRecipe` in `packages/php/src/FileFirst/MergedRecipe.php`.
+ */
+export class MergedRecipe {
+    inputs;
+    mergeOptions;
+    postSteps;
+    presetDefaults;
+    scopedPresetDefaults;
+    client;
+    constructor(inputs, mergeOptions, postSteps = [], presetDefaults, scopedPresetDefaults, client) {
+        this.inputs = inputs;
+        this.mergeOptions = mergeOptions;
+        this.postSteps = postSteps;
+        this.presetDefaults = presetDefaults;
+        this.scopedPresetDefaults = scopedPresetDefaults;
+        this.client = client;
+    }
+    /** Reduce the merged output's size. See {@link Recipe.compress}. */
+    compress(optimize, options = {}) {
+        if (optimize !== undefined && !Object.values(OptimizeFor).includes(optimize)) {
+            const allowed = Object.values(OptimizeFor).join(', ');
+            throw new GislConfigError(`compress 'optimize' must be one of ${allowed}; got '${String(optimize)}'.`, { reason: 'invalid_optimize', conflictingFields: ['optimize'] });
+        }
+        return this.withStep({
+            opType: 'compress',
+            options: { ...options, ...(optimize !== undefined ? { optimize } : {}) },
+        });
+    }
+    /** Change the merged output's format. See {@link Recipe.convert}. */
+    convert(format, options = {}) {
+        // The convert op's wire key is `output_format` (contract: convert.yaml,
+        // required, all media), NOT `format`. Spread options FIRST so the explicit
+        // shorthand wins over an `output_format` key in the bag.
+        // The shorthand owns the format → a stray legacy `format` key in the bag is
+        // not a valid convert option; drop it so the wire never carries both keys.
+        const rest = { ...options };
+        delete rest.format;
+        return this.withStep({ opType: 'convert', options: { ...rest, output_format: format } });
+    }
+    /** Thumbnail the merged output. Omitted dimensions are dropped from the wire options. */
+    thumbnail(options = {}) {
+        const wire = {};
+        for (const [key, value] of Object.entries(options)) {
+            if (value !== undefined)
+                wire[key] = value;
+        }
+        return this.withStep({ opType: 'thumbnail', options: wire });
+    }
+    /**
+     * Lower to the merge DAG: one `passthrough` source job per input + one
+     * `merge` job whose `operations[]` is `[merge, ...post-combine ops]`. The
+     * merge job's `inputs[]` consume the source jobs via `job_output` in input
+     * (play) order.
+     *
+     * @internal Consumed by {@link run} (after uploading all inputs), {@link submit}
+     *   (with a webhook), and the cross-language parity harness (with fixed ids).
+     */
+    toWorkflowPayload(fileIds, callbackUrl) {
+        const mediaKind = this.inferMediaKind();
+        const sourceJobs = [];
+        const inputs = [];
+        fileIds.forEach((fileId, i) => {
+            const srcId = `src_${i}`;
+            // Key order (id, source, operations) matches the PHP `toWire()` so the
+            // JSON-string serialisation is byte-identical across languages.
+            sourceJobs.push({ id: srcId, source: uploadSource(fileId), operations: [{ type: 'passthrough' }] });
+            inputs.push({ source: jobOutputSource(srcId) });
+        });
+        const operations = [
+            { type: 'merge', options: wireMergeOptions(this.mergeOptions, mediaKind) },
+            ...this.lowerPostSteps(mediaKind),
+        ];
+        const mergeJob = { id: 'merge', inputs, operations };
+        const jobs = [...sourceJobs, mergeJob];
+        return callbackUrl === undefined ? { jobs } : { jobs, callback_url: callbackUrl };
+    }
+    /** The number of inputs being combined (introspection / tests). */
+    get inputCount() {
+        return this.inputs.length;
+    }
+    /** The number of post-combine ops chained so far (introspection / tests). */
+    get stepCount() {
+        return this.postSteps.length;
+    }
+    /**
+     * Execute end-to-end: upload every input, create the merge workflow, await a
+     * terminal state (SSE with poll fallback), then resolve ONLY the merged output
+     * into a {@link RunResult}. Throws {@link GislTimeoutError} on `maxWait`.
+     *
+     * Requires a client bound at construction time — `gisl().files(...).merge(...)`
+     * wires it; a directly-constructed `MergedRecipe` throws {@link GislConfigError}.
+     * Mirrors the single-file {@link Recipe.run}.
+     */
+    async run(options = {}) {
+        const signal = options.signal;
+        const onProgress = options.onProgress;
+        if (this.client === undefined) {
+            throw new GislConfigError('MergedRecipe.run() requires a client; build the merge via gisl().files(...).merge(...) rather than constructing MergedRecipe directly.', { reason: 'no_client' });
+        }
+        const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 300_000);
+        const created = await this._uploadAllAndCreate(undefined, deadline, onProgress, signal, options.probeBeforeCreate, options.probeTimeoutMs);
+        let finalStatus;
+        try {
+            finalStatus = await _consumeSseToTerminal(this.client, {
+                workflowId: created.workflowId,
+                deadline,
+                signal,
+                onProgress,
+            });
+        }
+        catch (err) {
+            if (!(err instanceof SseEndedWithoutTerminal || err instanceof GislNetworkError)) {
+                throw err;
+            }
+            finalStatus = await _pollToTerminal(this.client, {
+                workflowId: created.workflowId,
+                deadline,
+                signal,
+                pollIntervalMs: options.pollIntervalMs,
+            });
+        }
+        if (Date.now() >= deadline) {
+            throw new GislTimeoutError(`Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`);
+        }
+        const downloads = await this.client.getWorkflowDownloads(created.workflowId);
+        // TDqmkWpX: re-check AFTER the downloads fetch so a slow getWorkflowDownloads
+        // cannot return a success past the advertised maxWait deadline.
+        if (Date.now() >= deadline) {
+            throw new GislTimeoutError(`Workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`);
+        }
+        // Project ONLY the merge job's output — the `src_*` passthrough jobs
+        // re-expose the raw uploads, which are plumbing, not the deliverable
+        // (mirrors the operation-first merge.ts `ref === 'merge'` filter + PHP).
+        const mergeDownloads = downloads.downloads.filter((d) => d.ref === 'merge');
+        const downloader = new LazyHttpDownloader();
+        return projectDownloadsToRunResult(created.workflowId, finalStatus, mergeDownloads, null, downloader);
+    }
+    /**
+     * Fire-and-forget: upload + create the merge workflow (wiring `webhook` into
+     * `callback_url` when given), return a client-bound {@link Handle}. Does NOT
+     * wait for terminal status. Mirrors {@link Recipe.submit}.
+     *
+     * @param webhook Absolute callback URL the server POSTs lifecycle events to.
+     * @param options Opt-out / tune the best-effort video probe-before-create
+     *   (2nd optional param so the positional `webhook` arg stays compatible).
+     */
+    async submit(webhook, options) {
+        if (this.client === undefined) {
+            throw new GislConfigError('MergedRecipe.submit() requires a client; build the merge via gisl().files(...).merge(...) rather than constructing MergedRecipe directly.', { reason: 'no_client' });
+        }
+        const created = await this._uploadAllAndCreate(webhook, undefined, undefined, undefined, options?.probeBeforeCreate, options?.probeTimeoutMs);
+        return new Handle(created.workflowId, created.webhookSecret != null ? created.webhookSecret : undefined, this.client, null);
+    }
+    // ---------------------------------------------------------------------------
+    /**
+     * Upload every input (verbatim for a pre-uploaded id; uploading a path / blob
+     * otherwise, emitting `{phase:'upload'}` progress) then create ONE merge
+     * workflow. Rejects fewer than 2 inputs BEFORE any upload fires. Shared first
+     * half of {@link run} + {@link submit}.
+     */
+    async _uploadAllAndCreate(webhook, deadline, onProgress, signal, probeBeforeCreate, probeTimeoutMs) {
+        this.validatePreUpload();
+        return _uploadInputsAndCreate(this.client, this.inputs, (fileIds, callbackUrl) => this.toWorkflowPayload(fileIds, callbackUrl), {
+            webhook,
+            deadline,
+            onProgress,
+            signal,
+            probeBeforeCreate,
+            probeTimeoutMs,
+            uploadsLabel: 'merge',
+            workflowLabel: 'the merge workflow',
+        });
+    }
+    /**
+     * Reject an invalid combine BEFORE any upload fires — mirrors the operation-
+     * first `MergeBuilder.planSequence()` bounds so a typo'd merge costs no
+     * bandwidth: 2–10 inputs (merge schema `min/max_inputs`), and an image merge
+     * must carry an explicit `output_type` (the server rejects image merges
+     * without one). Shared by {@link run} + {@link submit} via
+     * {@link _uploadAllAndCreate}.
+     */
+    validatePreUpload() {
+        if (this.inputs.length < 2) {
+            throw new GislConfigError(`merge requires at least 2 inputs to combine (got ${this.inputs.length}).`, { reason: 'too_few_inputs' });
+        }
+        if (this.inputs.length > 10) {
+            throw new GislConfigError(`merge accepts at most 10 inputs (got ${this.inputs.length}). Split the merge or reduce the input list.`, { reason: 'too_many_inputs' });
+        }
+        if (this.inferMediaKind() === 'image' &&
+            this.mergeOptions.output === undefined &&
+            this.mergeOptions.outputType === undefined) {
+            throw new GislConfigError('image merges require an explicit output_type — set MergeOptions output: "video" | "gif" (or outputType). ' +
+                'The server rejects image merge requests with no output_type.', { reason: 'image_merge_requires_output_type' });
+        }
+    }
+    /**
+     * Lower the post-combine chain by composing a single-file {@link Recipe} over a
+     * synthetic input whose extension matches the merged OUTPUT media — so
+     * `compress(optimize)` resolves the correct preset for the merged result (it
+     * needs a media hint, which a merge output carries no filename for). Reuses
+     * Recipe's `lowerStep` rather than duplicating it.
+     */
+    lowerPostSteps(mediaKind) {
+        if (this.postSteps.length === 0) {
+            return [];
+        }
+        const synthetic = fileInput.path(`merged.${this.outputExtensionFor(mediaKind)}`);
+        const recipe = new Recipe(synthetic, undefined, this.postSteps, this.presetDefaults, this.scopedPresetDefaults);
+        return recipe.toWorkflowPayload('merged').jobs[0].operations;
+    }
+    /**
+     * The merged-output media. Honours an explicit {@link MergeOptions.mediaKind};
+     * otherwise infers from the first PATH input's extension (mirrors
+     * {@link MergeBuilder}); defaults to video.
+     */
+    inferMediaKind() {
+        if (this.mergeOptions.mediaKind !== undefined) {
+            return this.mergeOptions.mediaKind;
+        }
+        // Sniff the first input carrying a media signal — a path extension or a
+        // Blob MIME type (mirrors the operation-first MergeBuilder.inferMediaKind,
+        // codex c2). Pre-uploaded ids carry no signal, so they are skipped.
+        for (const input of this.inputs) {
+            if (input.kind === 'path') {
+                const lower = input.path.toLowerCase();
+                if (/\.(jpe?g|png|webp|avif|gif|heic|tiff?)$/.test(lower))
+                    return 'image';
+                if (/\.(mp3|wav|flac|aac|ogg|m4a)$/.test(lower))
+                    return 'audio';
+                return 'video';
+            }
+            if (input.kind === 'blob') {
+                if (input.blob.type.startsWith('image/'))
+                    return 'image';
+                if (input.blob.type.startsWith('audio/'))
+                    return 'audio';
+                return 'video';
+            }
+        }
+        return 'video';
+    }
+    outputExtensionFor(mediaKind) {
+        // An image merge produces a video/gif output (output_type), so the
+        // post-combine media follows the output type when set.
+        const output = this.mergeOptions.output ?? this.mergeOptions.outputType;
+        if (mediaKind === 'image' && typeof output === 'string') {
+            return output === 'gif' ? 'gif' : 'mp4';
+        }
+        switch (mediaKind) {
+            case 'audio':
+                return 'mp3';
+            case 'image':
+                return 'png';
+            default:
+                return 'mp4';
+        }
+    }
+    withStep(step) {
+        return new MergedRecipe(this.inputs, this.mergeOptions, [...this.postSteps, step], this.presetDefaults, this.scopedPresetDefaults, this.client);
+    }
+}
+/**
+ * The single-output recipe you're in AFTER a fluent `files([...]).archive(...)`
+ * (FF3b). Archive bundles the N inputs into ONE downloadable archive (zip /
+ * tar.gz) — media-agnostic, inputs may mix types. Unlike {@link MergedRecipe},
+ * archive is TERMINAL: a zip is the final artefact, so there is no post-bundle
+ * chain — this exposes only `run()` / `submit()`.
+ *
+ * **Lowering (one workflow):** each input is uploaded once and wrapped in its
+ * own single-input `passthrough` source job (`src_N`); the `archive` job
+ * consumes those via `job_output` inputs (array order = entry order) and carries
+ * the single `archive` op. The archive job's id is `archive`, so {@link RunResult}
+ * projects ONLY its output. Mirrors the PHP `ArchivedRecipe`.
+ */
+export class ArchivedRecipe {
+    inputs;
+    options;
+    client;
+    constructor(inputs, options = {}, client) {
+        this.inputs = inputs;
+        this.options = options;
+        this.client = client;
+    }
+    /** The number of inputs being bundled (introspection / tests). */
+    get inputCount() {
+        return this.inputs.length;
+    }
+    /**
+     * Lower to the archive DAG: one `passthrough` source job per input + one
+     * `archive` job consuming them via `job_output`.
+     *
+     * @internal Consumed by {@link run} / {@link submit} (after uploading) and the
+     *   cross-language parity harness (with fixed ids).
+     */
+    toWorkflowPayload(fileIds, callbackUrl) {
+        const sourceJobs = [];
+        const inputs = [];
+        fileIds.forEach((fileId, i) => {
+            const srcId = `src_${i}`;
+            sourceJobs.push({ id: srcId, source: uploadSource(fileId), operations: [{ type: 'passthrough' }] });
+            inputs.push({ source: jobOutputSource(srcId) });
+        });
+        const archiveJob = {
+            id: 'archive',
+            inputs,
+            operations: [{ type: 'archive', options: this.wireArchiveOptions() }],
+        };
+        const jobs = [...sourceJobs, archiveJob];
+        return callbackUrl === undefined ? { jobs } : { jobs, callback_url: callbackUrl };
+    }
+    /**
+     * Execute end-to-end: upload every input, create the archive workflow, await a
+     * terminal state (SSE with poll fallback), then resolve ONLY the archive output
+     * into a {@link RunResult}. Throws {@link GislTimeoutError} on `maxWait`.
+     * Requires a client bound via `gisl().files(...).archive(...)`.
+     */
+    async run(options = {}) {
+        const signal = options.signal;
+        const onProgress = options.onProgress;
+        if (this.client === undefined) {
+            throw new GislConfigError('ArchivedRecipe.run() requires a client; build the bundle via gisl().files(...).archive(...) rather than constructing ArchivedRecipe directly.', { reason: 'no_client' });
+        }
+        const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 300_000);
+        const created = await this._uploadAllAndCreate(undefined, deadline, onProgress, signal, options.probeBeforeCreate, options.probeTimeoutMs);
+        let finalStatus;
+        try {
+            finalStatus = await _consumeSseToTerminal(this.client, {
+                workflowId: created.workflowId,
+                deadline,
+                signal,
+                onProgress,
+            });
+        }
+        catch (err) {
+            if (!(err instanceof SseEndedWithoutTerminal || err instanceof GislNetworkError)) {
+                throw err;
+            }
+            finalStatus = await _pollToTerminal(this.client, {
+                workflowId: created.workflowId,
+                deadline,
+                signal,
+                pollIntervalMs: options.pollIntervalMs,
+            });
+        }
+        if (Date.now() >= deadline) {
+            throw new GislTimeoutError(`Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`);
+        }
+        const downloads = await this.client.getWorkflowDownloads(created.workflowId);
+        // TDqmkWpX: re-check AFTER the downloads fetch so a slow getWorkflowDownloads
+        // cannot return a success past the advertised maxWait deadline.
+        if (Date.now() >= deadline) {
+            throw new GislTimeoutError(`Workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`);
+        }
+        // Project ONLY the archive job's output — the `src_*` passthrough jobs
+        // re-expose the raw uploads, which are plumbing, not the deliverable.
+        const archiveDownloads = downloads.downloads.filter((d) => d.ref === 'archive');
+        const downloader = new LazyHttpDownloader();
+        return projectDownloadsToRunResult(created.workflowId, finalStatus, archiveDownloads, null, downloader);
+    }
+    /**
+     * Fire-and-forget: upload + create the archive workflow (wiring `webhook` into
+     * `callback_url` when given), return a client-bound {@link Handle}. Mirrors
+     * {@link MergedRecipe.submit}.
+     *
+     * @param webhook Absolute callback URL the server POSTs lifecycle events to.
+     * @param options Opt-out / tune the best-effort video probe-before-create
+     *   (2nd optional param so the positional `webhook` arg stays compatible).
+     */
+    async submit(webhook, options) {
+        if (this.client === undefined) {
+            throw new GislConfigError('ArchivedRecipe.submit() requires a client; build the bundle via gisl().files(...).archive(...) rather than constructing ArchivedRecipe directly.', { reason: 'no_client' });
+        }
+        const created = await this._uploadAllAndCreate(webhook, undefined, undefined, undefined, options?.probeBeforeCreate, options?.probeTimeoutMs);
+        return new Handle(created.workflowId, created.webhookSecret != null ? created.webhookSecret : undefined, this.client, null);
+    }
+    // ---------------------------------------------------------------------------
+    async _uploadAllAndCreate(webhook, deadline, onProgress, signal, probeBeforeCreate, probeTimeoutMs) {
+        this.validatePreUpload();
+        return _uploadInputsAndCreate(this.client, this.inputs, (fileIds, callbackUrl) => this.toWorkflowPayload(fileIds, callbackUrl), {
+            webhook,
+            deadline,
+            onProgress,
+            signal,
+            probeBeforeCreate,
+            probeTimeoutMs,
+            uploadsLabel: 'archive',
+            workflowLabel: 'the archive workflow',
+        });
+    }
+    /**
+     * Reject an invalid bundle BEFORE any upload fires — the archive schema allows
+     * 2–50 inputs (`min/max_inputs`), so a typo'd bundle costs no bandwidth.
+     */
+    validatePreUpload() {
+        if (this.inputs.length < 2) {
+            throw new GislConfigError(`archive requires at least 2 inputs to bundle (got ${this.inputs.length}).`, { reason: 'too_few_inputs' });
+        }
+        if (this.inputs.length > 50) {
+            throw new GislConfigError(`archive accepts at most 50 inputs (got ${this.inputs.length}). Split the bundle or reduce the input list.`, { reason: 'too_many_inputs' });
+        }
+    }
+    /**
+     * Project the archive options into the wire shape. Both fields are optional
+     * (the server defaults `format` to zip and `folder_structure` to flat), so an
+     * omitted option is dropped rather than sent.
+     */
+    wireArchiveOptions() {
+        const out = {};
+        if (this.options.format !== undefined)
+            out.format = this.options.format;
+        if (this.options.folderStructure !== undefined)
+            out.folder_structure = this.options.folderStructure;
+        return out;
+    }
+}
+/**
+ * The single-output recipe you're in AFTER `file(base).watermark(overlay, …)`
+ * (FF4a). Composites an image OVERLAY onto the base (image_watermark for image
+ * bases, video_watermark for video bases — routed at lowering by the base's
+ * effective media). A multi-input op: base + overlay each enter via their own
+ * `passthrough` source job (`src_0` base, `src_1` overlay; their own preceding
+ * steps lower into those jobs), and the `watermark` job consumes them via
+ * `job_output` inputs tagged `role: base` / `role: overlay`. Post-watermark
+ * `compress`/`convert`/`thumbnail` chain onto the watermark output. Mirrors
+ * {@link MergedRecipe}. `textWatermark` is intentionally NOT a post-verb here.
+ */
+export class WatermarkedRecipe {
+    baseInput;
+    baseSteps;
+    overlay;
+    watermarkOptions;
+    postSteps;
+    presetDefaults;
+    scopedPresetDefaults;
+    client;
+    constructor(baseInput, baseSteps, overlay, watermarkOptions, postSteps = [], presetDefaults, scopedPresetDefaults, client) {
+        this.baseInput = baseInput;
+        this.baseSteps = baseSteps;
+        this.overlay = overlay;
+        this.watermarkOptions = watermarkOptions;
+        this.postSteps = postSteps;
+        this.presetDefaults = presetDefaults;
+        this.scopedPresetDefaults = scopedPresetDefaults;
+        this.client = client;
+    }
+    /** Reduce the watermarked output's size. See {@link Recipe.compress}. */
+    compress(optimize, options = {}) {
+        if (optimize !== undefined && !Object.values(OptimizeFor).includes(optimize)) {
+            const allowed = Object.values(OptimizeFor).join(', ');
+            throw new GislConfigError(`compress 'optimize' must be one of ${allowed}; got '${String(optimize)}'.`, { reason: 'invalid_optimize', conflictingFields: ['optimize'] });
+        }
+        return this.withStep({
+            opType: 'compress',
+            options: { ...options, ...(optimize !== undefined ? { optimize } : {}) },
+        });
+    }
+    /** Change the watermarked output's format. See {@link Recipe.convert}. */
+    convert(format, options = {}) {
+        const rest = { ...options };
+        delete rest.format;
+        return this.withStep({ opType: 'convert', options: { ...rest, output_format: format } });
+    }
+    /** Thumbnail the watermarked output. Omitted dimensions are dropped from the wire options. */
+    thumbnail(options = {}) {
+        const wire = {};
+        for (const [key, value] of Object.entries(options)) {
+            if (value !== undefined)
+                wire[key] = value;
+        }
+        return this.withStep({ opType: 'thumbnail', options: wire });
+    }
+    /**
+     * Lower to the watermark DAG: a `src_0` passthrough/base-steps job + a `src_1`
+     * passthrough/overlay-steps job + one `watermark` job whose `inputs[]` consume
+     * them via `job_output` (role base/overlay) and whose `operations[]` is
+     * `[image_watermark|video_watermark, ...post-watermark ops]`. `fileIds` is
+     * `[baseId, overlayId]` (upload order). Throws pre-lowering if the base media
+     * is undetectable/unsupported (the planned-op gate).
+     *
+     * @internal Consumed by {@link run}/{@link submit} (after upload) + the parity harness.
+     */
+    toWorkflowPayload(fileIds, callbackUrl) {
+        const wireOp = _resolveWatermarkWireOp(_watermarkEffectiveBase(this.baseInput, this.baseSteps));
+        const baseId = fileIds[0];
+        const overlayId = fileIds[1];
+        // src_0: the base (its preceding steps, else a lossless passthrough).
+        const baseOps = this.baseSteps.length > 0
+            ? new Recipe(this.baseInput, undefined, this.baseSteps, this.presetDefaults, this.scopedPresetDefaults)
+                .toWorkflowPayload(baseId).jobs[0].operations
+            : [{ type: 'passthrough' }];
+        // src_1: the overlay recipe (its own steps, else a lossless passthrough).
+        const overlayOps = this.overlay.recipeSteps.length > 0
+            ? this.overlay.toWorkflowPayload(overlayId).jobs[0].operations
+            : [{ type: 'passthrough' }];
+        // Key order (id, source, operations) matches PHP toWire() — byte-identical JSON.
+        const srcBase = { id: 'src_0', source: uploadSource(baseId), operations: baseOps };
+        const srcOverlay = { id: 'src_1', source: uploadSource(overlayId), operations: overlayOps };
+        const inputs = [
+            { source: jobOutputSource('src_0'), role: 'base' },
+            { source: jobOutputSource('src_1'), role: 'overlay' },
+        ];
+        const operations = [
+            _lowerWatermarkOp(wireOp, this.watermarkOptions),
+            ...this.lowerPostSteps(wireOp),
+        ];
+        const watermarkJob = { id: 'watermark', inputs, operations };
+        const jobs = [srcBase, srcOverlay, watermarkJob];
+        return callbackUrl === undefined ? { jobs } : { jobs, callback_url: callbackUrl };
+    }
+    /** The number of post-watermark ops chained so far (introspection / tests). */
+    get stepCount() {
+        return this.postSteps.length;
+    }
+    /**
+     * Execute end-to-end: upload base + overlay, create the watermark workflow,
+     * await terminal (SSE with poll fallback), then resolve ONLY the watermark
+     * output into a {@link RunResult}. Requires a client bound at construction.
+     * Mirrors {@link MergedRecipe.run}.
+     */
+    async run(options = {}) {
+        const signal = options.signal;
+        const onProgress = options.onProgress;
+        if (this.client === undefined) {
+            throw new GislConfigError('WatermarkedRecipe.run() requires a client; build the watermark via gisl().file(...).watermark(...) rather than constructing WatermarkedRecipe directly.', { reason: 'no_client' });
+        }
+        const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 300_000);
+        const created = await this._uploadAllAndCreate(undefined, deadline, onProgress, signal, options.probeBeforeCreate, options.probeTimeoutMs);
+        let finalStatus;
+        try {
+            finalStatus = await _consumeSseToTerminal(this.client, {
+                workflowId: created.workflowId,
+                deadline,
+                signal,
+                onProgress,
+            });
+        }
+        catch (err) {
+            if (!(err instanceof SseEndedWithoutTerminal || err instanceof GislNetworkError)) {
+                throw err;
+            }
+            finalStatus = await _pollToTerminal(this.client, {
+                workflowId: created.workflowId,
+                deadline,
+                signal,
+                pollIntervalMs: options.pollIntervalMs,
+            });
+        }
+        if (Date.now() >= deadline) {
+            throw new GislTimeoutError(`Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`);
+        }
+        const downloads = await this.client.getWorkflowDownloads(created.workflowId);
+        if (Date.now() >= deadline) {
+            throw new GislTimeoutError(`Workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`);
+        }
+        // Project ONLY the watermark job's output — the `src_*` passthrough jobs
+        // re-expose the raw base/overlay uploads, which are plumbing.
+        const watermarkDownloads = downloads.downloads.filter((d) => d.ref === 'watermark');
+        const downloader = new LazyHttpDownloader();
+        return projectDownloadsToRunResult(created.workflowId, finalStatus, watermarkDownloads, null, downloader);
+    }
+    /**
+     * Fire-and-forget: upload base + overlay + create the watermark workflow
+     * (wiring `webhook` into `callback_url` when given), return a client-bound
+     * {@link Handle}. Does NOT wait for terminal status. Mirrors {@link MergedRecipe.submit}.
+     */
+    async submit(webhook, options) {
+        if (this.client === undefined) {
+            throw new GislConfigError('WatermarkedRecipe.submit() requires a client; build the watermark via gisl().file(...).watermark(...) rather than constructing WatermarkedRecipe directly.', { reason: 'no_client' });
+        }
+        const created = await this._uploadAllAndCreate(webhook, undefined, undefined, undefined, options?.probeBeforeCreate, options?.probeTimeoutMs);
+        return new Handle(created.workflowId, created.webhookSecret != null ? created.webhookSecret : undefined, this.client, null);
+    }
+    // ---------------------------------------------------------------------------
+    /** Base + overlay inputs, in upload/lowering order (`[base, overlay]`). */
+    inputsInOrder() {
+        return [this.baseInput, this.overlay.recipeInput];
+    }
+    /**
+     * Validate the watermark BEFORE any upload: the base must route to a shippable
+     * wire op (throws for undetectable/unsupported/planned bases), and the overlay
+     * must be an image. Shared by {@link run}/{@link submit}. Mirrors
+     * {@link MergedRecipe.validatePreUpload}.
+     */
+    validatePreUpload() {
+        _resolveWatermarkWireOp(_watermarkEffectiveBase(this.baseInput, this.baseSteps));
+        _validateWatermarkOverlay(this.overlay);
+    }
+    /**
+     * Upload base + overlay (verbatim for a pre-uploaded id; uploading a path /
+     * blob otherwise) then create ONE watermark workflow. Validates pre-upload.
+     * Shared first half of {@link run} + {@link submit}; mirrors
+     * {@link MergedRecipe._uploadAllAndCreate}.
+     */
+    async _uploadAllAndCreate(webhook, deadline, onProgress, signal, probeBeforeCreate, probeTimeoutMs) {
+        this.validatePreUpload();
+        return _uploadInputsAndCreate(this.client, this.inputsInOrder(), (fileIds, callbackUrl) => this.toWorkflowPayload(fileIds, callbackUrl), {
+            webhook,
+            deadline,
+            onProgress,
+            signal,
+            probeBeforeCreate,
+            probeTimeoutMs,
+            uploadsLabel: 'watermark',
+            workflowLabel: 'the watermark workflow',
+        });
+    }
+    /**
+     * Lower the post-watermark chain over a synthetic input whose extension
+     * matches the watermark OUTPUT media (image→png, video→mp4) so
+     * `compress(optimize)` resolves the correct preset — mirrors
+     * {@link MergedRecipe.lowerPostSteps}.
+     */
+    lowerPostSteps(wireOp) {
+        if (this.postSteps.length === 0) {
+            return [];
+        }
+        const ext = wireOp === 'video_watermark' ? 'mp4' : 'png';
+        const synthetic = fileInput.path(`watermarked.${ext}`);
+        const recipe = new Recipe(synthetic, undefined, this.postSteps, this.presetDefaults, this.scopedPresetDefaults);
+        return recipe.toWorkflowPayload('watermarked').jobs[0].operations;
+    }
+    withStep(step) {
+        return new WatermarkedRecipe(this.baseInput, this.baseSteps, this.overlay, this.watermarkOptions, [...this.postSteps, step], this.presetDefaults, this.scopedPresetDefaults, this.client);
+    }
+}

@@ -1,0 +1,505 @@
+export class GislError extends Error {
+    constructor(message) {
+        super(message);
+        this.name = 'GislError';
+    }
+}
+export class GislApiError extends GislError {
+    statusCode;
+    errorMessage;
+    path;
+    details;
+    messageKey;
+    locale;
+    messageParams;
+    payload;
+    /**
+     * Response headers from the HTTP response that produced this error, with
+     * LOWERCASED keys (RFC 9110 case-insensitive). Multi-value headers such as
+     * `set-cookie` are collapsed into a single comma-joined string — don't rely
+     * on this map for cookies.
+     */
+    responseHeaders;
+    /**
+     * The `Content-Language` response header value (the language the server
+     * actually resolved). DISTINCT from `locale`, which is the body-envelope
+     * localisation tag.
+     */
+    contentLanguage;
+    constructor(statusCode, errorMessage, path, details, options) {
+        const prefix = path
+            ? `API error ${statusCode} at ${path}`
+            : `API error ${statusCode}`;
+        super(`${prefix}: ${errorMessage}`);
+        this.name = 'GislApiError';
+        this.statusCode = statusCode;
+        this.errorMessage = errorMessage;
+        this.path = path;
+        this.details = details;
+        if (options) {
+            this.messageKey = options.messageKey;
+            this.locale = options.locale;
+            this.messageParams = options.messageParams;
+            this.payload = options.payload;
+            this.responseHeaders = options.responseHeaders;
+            this.contentLanguage = options.contentLanguage;
+        }
+    }
+}
+export class GislValidationError extends GislApiError {
+    constructor(statusCode, errorMessage, details, path, options) {
+        super(statusCode, errorMessage, path, details, options);
+        this.name = 'GislValidationError';
+    }
+}
+// Shared constructor body for the structured-payload subclasses. Five of the
+// six subclasses below differ only in their typed `payload` and `name` —
+// factor the common construction here so each subclass remains a one-liner.
+function buildOptionsWithPayload(payload, extra) {
+    return { ...extra, payload };
+}
+export class GislBalanceExhaustedError extends GislApiError {
+    constructor(statusCode, errorMessage, payload, path, extra) {
+        super(statusCode, errorMessage, path, undefined, buildOptionsWithPayload(payload, extra));
+        this.name = 'GislBalanceExhaustedError';
+    }
+}
+export class GislTierRestrictedError extends GislApiError {
+    constructor(statusCode, errorMessage, payload, path, extra) {
+        super(statusCode, errorMessage, path, undefined, buildOptionsWithPayload(payload, extra));
+        this.name = 'GislTierRestrictedError';
+    }
+}
+export class GislFeatureTierRestrictedError extends GislApiError {
+    constructor(statusCode, errorMessage, payload, path, extra) {
+        super(statusCode, errorMessage, path, undefined, buildOptionsWithPayload(payload, extra));
+        this.name = 'GislFeatureTierRestrictedError';
+    }
+}
+export class GislFeatureNotAvailableError extends GislApiError {
+    constructor(statusCode, errorMessage, payload, path, extra) {
+        super(statusCode, errorMessage, path, undefined, buildOptionsWithPayload(payload, extra));
+        this.name = 'GislFeatureNotAvailableError';
+    }
+}
+/**
+ * 422 response on `POST /api/workflows` when a job references an upload
+ * whose server-side probe hasn't completed at workflow-create time. The
+ * server rejects rather than silently routing as `short_form` (which
+ * hard-fails long video clips).
+ *
+ * **Recovery contract** (per contracts ProbePendingResponse docblock):
+ * poll `POST /api/uploads/{id}/probe` for the pending upload until
+ * `probe_status` is terminal (`ok` → re-`POST /api/workflows` the same
+ * request; `corrupt` / `unsupported_codec` → surface the probe error).
+ * The `Retry-After` response header (when present) suggests a delay
+ * in seconds before the next poll/retry.
+ *
+ * `payload.jobRef` identifies which job in the multi-job request triggered
+ * the probe-pending rejection.
+ *
+ * @example
+ * try {
+ *   await client.createWorkflow({ jobs });
+ * } catch (e) {
+ *   if (e instanceof GislProbePendingError) {
+ *     await waitForProbe(e.payload.jobRef);
+ *     // retry...
+ *   }
+ *   throw e;
+ * }
+ */
+export class GislProbePendingError extends GislApiError {
+    constructor(statusCode, errorMessage, payload, path, extra) {
+        super(statusCode, errorMessage, path, undefined, buildOptionsWithPayload(payload, extra));
+        this.name = 'GislProbePendingError';
+    }
+}
+export class GislWorkflowExpiredError extends GislApiError {
+    constructor(statusCode, errorMessage, payload, path, extra) {
+        super(statusCode, errorMessage, path, undefined, buildOptionsWithPayload(payload, extra));
+        this.name = 'GislWorkflowExpiredError';
+    }
+}
+export class GislAuthError extends GislApiError {
+    constructor(statusCode, errorMessage, payload, path, extra) {
+        super(statusCode, errorMessage, path, undefined, buildOptionsWithPayload(payload, extra));
+        this.name = 'GislAuthError';
+    }
+}
+/**
+ * 422 Unprocessable Entity — domain rejection on auth side-effect endpoints
+ * (register / verify-email / api-keys duplicate-or-invalid; profile PATCH email
+ * unchanged). Flat `AuthRejectionEnvelope`, no `details[]`. Mirrors the PHP
+ * `Gisl\Sdk\Errors\GislAuthRejectionError`.
+ *
+ * `payload.errorType` is the auth-422 `oneOf` discriminator
+ * (`unprocessable_entity` or `email_same`); `errorType` re-exposes it directly
+ * for caller-side narrowing without unwrapping the typed payload. Distinct from
+ * `GislValidationError` (the `validation_error` branch of the same `oneOf`,
+ * which carries `details[]`).
+ */
+export class GislAuthRejectionError extends GislApiError {
+    errorType;
+    constructor(statusCode, errorMessage, payload, path, extra) {
+        super(statusCode, errorMessage, path, undefined, buildOptionsWithPayload(payload, extra));
+        this.name = 'GislAuthRejectionError';
+        this.errorType = payload.errorType;
+    }
+}
+/**
+ * A single class covering all three "upload exceeds a size/duration cap"
+ * responses (422 size-tier, 422 duration-tier, 413 absolute).
+ *
+ * CONSCIOUS DEVIATION from the one-typed-payload-per-class invariant that the
+ * other structured subclasses follow (`GislBalanceExhaustedError`,
+ * `GislWorkflowExpiredError`, …). Justification: the card mandates this single
+ * `GislUploadCapExceededError` name and SDK-3 / E2E-1 are blocked-on it, so
+ * splitting into size/duration subclasses would break a cross-ticket naming
+ * contract; and 413 carries no typed envelope at all (plain `ErrorEnvelope`),
+ * so a one-payload-per-class split could not cover it uniformly anyway. The
+ * `kind` discriminant + a union-typed (possibly absent) `payload` is the
+ * deliberate trade-off. This is the only structured error in the tree that
+ * does not bind exactly one payload type — documented here in the same spirit
+ * as the inline PHP↔TS divergence notes.
+ *
+ * The two multipart-part errors below are deliberately NOT folded in with a
+ * `kind`: they carry different fields (`partNumber`/`uploadId` for an instance
+ * PUT failure vs `requiredParts`/`maxParts` for the count-ceiling guard) and
+ * are thrown from the multipart path, not the response handler.
+ */
+export class GislUploadCapExceededError extends GislApiError {
+    kind;
+    constructor(statusCode, errorMessage, kind, payload, path, extra) {
+        super(statusCode, errorMessage, path, undefined, buildOptionsWithPayload(payload, extra));
+        this.name = 'GislUploadCapExceededError';
+        this.kind = kind;
+    }
+}
+/**
+ * 404 `MULTIPART_SESSION_NOT_FOUND` — the durable multipart session referenced
+ * by a resume / status / presign / keepalive call cannot be located (expired
+ * past its 48h manifest TTL, deleted, or never existed). Thrown by the SDK-3
+ * resume-support endpoints (`getUploadStatus`, `presignParts`,
+ * `keepaliveUpload`, and the resume branch of `uploadFile`).
+ *
+ * Carries no typed structured payload — the contract for the 3 resume-support
+ * endpoints models this code as a plain `ErrorEnvelope`. Consumers should
+ * detect via `instanceof` and abandon the resume; a fresh `uploadFile()` call
+ * (without `resumeUploadId`) will start a new session.
+ */
+export class GislMultipartSessionNotFoundError extends GislApiError {
+    constructor(statusCode, errorMessage, path, options) {
+        super(statusCode, errorMessage, path, undefined, options);
+        this.name = 'GislMultipartSessionNotFoundError';
+    }
+}
+/**
+ * 403 `MULTIPART_SESSION_OWNERSHIP` — the caller is authenticated but the
+ * multipart session belongs to a different user. Thrown by the SDK-3
+ * resume-support endpoints. The session itself exists (otherwise the server
+ * would return 404 NOT_FOUND); the caller's identity simply doesn't match
+ * `manifest.userId`. Consumers should abandon the resume.
+ */
+export class GislMultipartSessionOwnershipError extends GislApiError {
+    constructor(statusCode, errorMessage, path, options) {
+        super(statusCode, errorMessage, path, undefined, options);
+        this.name = 'GislMultipartSessionOwnershipError';
+    }
+}
+/**
+ * 403 `MULTIPART_SESSION_AUTH_REQUIRED` — the multipart session was initiated
+ * anonymously (no `manifest.userId`) and the SDK-3 resume-support endpoints
+ * refuse to serve it on an authed caller. There is no "claim" workflow today
+ * to bind an authed identity to an anonymously-started session; that is the
+ * future flip tracked at upstream ticket 8LABloaz. Consumers hitting this on
+ * resume should abandon and re-upload from scratch under the authed identity.
+ */
+export class GislMultipartSessionAuthRequiredError extends GislApiError {
+    constructor(statusCode, errorMessage, path, options) {
+        super(statusCode, errorMessage, path, undefined, options);
+        this.name = 'GislMultipartSessionAuthRequiredError';
+    }
+}
+/**
+ * Root of the LOCAL config-error tree — thrown before any HTTP/file I/O.
+ * Sibling of `GislApiError` (which represents server-side error envelopes).
+ * Reserve for fail-early errors raised by the ergonomic-layer factory or
+ * credential-chain resolver when the caller hasn't supplied something the
+ * SDK needs to make a request. Never carries an HTTP status code.
+ *
+ * Optional `metadata` (T4b — `27rE1fZn`) carries structured fields used
+ * by the preset resolver and other ergonomic-layer validators. Existing
+ * call sites that pass `(message)` keep working — metadata is purely
+ * additive and defaults to `undefined`.
+ */
+export class GislConfigError extends GislError {
+    reason;
+    conflictingFields;
+    resolvedSnapshot;
+    suggestion;
+    constructor(message, metadata) {
+        super(message);
+        this.name = 'GislConfigError';
+        if (metadata !== undefined) {
+            if (metadata.reason !== undefined)
+                this.reason = metadata.reason;
+            if (metadata.conflictingFields !== undefined) {
+                this.conflictingFields = metadata.conflictingFields;
+            }
+            if (metadata.resolvedSnapshot !== undefined) {
+                this.resolvedSnapshot = metadata.resolvedSnapshot;
+            }
+            if (metadata.suggestion !== undefined)
+                this.suggestion = metadata.suggestion;
+        }
+    }
+}
+/**
+ * The ergonomic-layer factory `gisl.create()` could not resolve an API key
+ * from any of explicit arg, `GISL_API_KEY` env, or shared-config profile,
+ * AND the caller did not opt into anonymous or cookie-mode. Thrown BEFORE
+ * any file read or HTTP request — calls to `client.compress(...)`, `.run()`,
+ * etc., synchronously fail with this error.
+ */
+export class GislMissingCredentialsError extends GislConfigError {
+    constructor(message) {
+        super(message);
+        this.name = 'GislMissingCredentialsError';
+    }
+}
+/**
+ * The caller used `gisl.anonymous()` and then invoked an operation that is
+ * not in the anonymous-capable allowlist. Local-only — thrown before any I/O.
+ * Distinct from server-side `GislAuthError` (401/403 on the wire).
+ */
+export class GislFeatureRequiresAuthError extends GislConfigError {
+    operation;
+    constructor(operation, message) {
+        super(message);
+        this.name = 'GislFeatureRequiresAuthError';
+        this.operation = operation;
+    }
+}
+/**
+ * `MergeBuilder.sequence(...)` referenced an asset that wasn't declared in
+ * the prior `client.merge(...)` call. Local validation runs BEFORE upload
+ * so the caller fails fast on the typo without burning bandwidth.
+ */
+export class GislUndeclaredAssetError extends GislConfigError {
+    assetId;
+    declaredAssets;
+    constructor(assetId, declaredAssets) {
+        super(`Sequence references asset '${assetId}' but it wasn't declared in merge(...). ` +
+            `Declared assets: [${declaredAssets.join(', ')}]. ` +
+            `Either pass it to merge(...) before sequencing, or remove the reference.`);
+        this.name = 'GislUndeclaredAssetError';
+        this.assetId = assetId;
+        this.declaredAssets = declaredAssets;
+    }
+}
+/**
+ * `MergeBuilder.sequence(...)` was called but at least one declared asset
+ * wasn't referenced. Almost always a bug (wasted upload). Escape via
+ * `allowUnusedAssets: true` on the merge options.
+ */
+export class GislUnusedAssetError extends GislConfigError {
+    unusedAssets;
+    constructor(unusedAssets) {
+        super(`Assets [${unusedAssets.join(', ')}] were declared in merge(...) but never sequenced. ` +
+            `Reference them in .sequence(...), remove them from the declaration, ` +
+            `or pass {allowUnusedAssets: true} to opt out of this check.`);
+        this.name = 'GislUnusedAssetError';
+        this.unusedAssets = unusedAssets;
+    }
+}
+/**
+ * `MergeBuilder.sequence(...)` on an image merge was given a `clip(ref, opts)`
+ * entry. Image merges have NO per-input options in the wire today — `transition`
+ * applies at the merge level and is uniform across all joins.
+ */
+export class GislPerInputOptionsNotSupportedError extends GislConfigError {
+    mediaKind;
+    constructor(mediaKind) {
+        super(`${mediaKind} merge has no per-input options today; set 'transition' at the ` +
+            `.merge(...) level instead — it applies to every join.`);
+        this.name = 'GislPerInputOptionsNotSupportedError';
+        this.mediaKind = mediaKind;
+    }
+}
+/**
+ * Thrown by future chain methods (`.compress()` / `.thumbnail()` /
+ * `.convert()` on an `OperationBuilder`) when the previous step produces
+ * MULTIPLE artifacts and the caller didn't explicitly call `.mapEach(...)`
+ * to opt into per-artifact fan-out. T6 ships the error class + the
+ * `.mapEach(...)` method; the chain methods themselves are a separate
+ * follow-up card, so this error is currently dormant — but the type +
+ * audit-gate registration land here so the future chain-method PR is a
+ * pure addition with no public-API churn.
+ */
+export class GislChainCardinalityMismatchError extends GislConfigError {
+    previousOperation;
+    attemptedOperation;
+    constructor(previousOperation, attemptedOperation) {
+        super(`Previous step (${previousOperation}) produces multiple artifacts; ` +
+            `use .mapEach(art => art.${attemptedOperation}(...)) to apply the chain per-artifact, ` +
+            `or branch to a single artifact first.`);
+        this.name = 'GislChainCardinalityMismatchError';
+        this.previousOperation = previousOperation;
+        this.attemptedOperation = attemptedOperation;
+    }
+}
+/**
+ * Thrown by `.bundle(...)` when the target builder's terminal job is already an
+ * `archive` op — double-bundle prevention (a builder that already produces an
+ * archive cannot be bundled again). No HTTP: raised during lowering, before any
+ * upload. Per the lowering spec
+ * (`docs/plans/sdk-ergonomics/lowering.md:484`, id `bundle_already_archived_error`).
+ * Dormant until `.bundle()` ships (wpHoJhuo) — the type lands here so that PR is
+ * a pure addition.
+ */
+export class GislBundleAlreadyArchivedError extends GislConfigError {
+    constructor() {
+        super('This builder already produces an archive (bundle); .bundle() cannot be ' +
+            'applied to an already-bundled builder.');
+        this.name = 'GislBundleAlreadyArchivedError';
+    }
+}
+export class GislTimeoutError extends GislError {
+    constructor(message) {
+        super(message);
+        this.name = 'GislTimeoutError';
+    }
+}
+/**
+ * Transport-level failure: the underlying `fetch` (or other transport) could
+ * not produce a usable response — DNS, TCP, TLS, a mid-stream disconnect, or a
+ * non-ok status / empty body when fetching a result download. Mirrors the PHP
+ * `Gisl\Sdk\Errors\GislNetworkError`. Subclasses `GislError` (not
+ * `GislApiError`) because it carries no contract error envelope. The concrete
+ * file-first {@link Downloader} raises this when the output URL cannot be read
+ * (a destination-WRITE failure is `GislSinkError` reason `write_failed`).
+ */
+export class GislNetworkError extends GislError {
+    constructor(message) {
+        super(message);
+        this.name = 'GislNetworkError';
+    }
+}
+/**
+ * Internal control-flow marker (TDqmkWpX): the SSE event stream closed cleanly
+ * WITHOUT a terminal (`workflow_completed`/`failed`/`partially_failed`) event.
+ * Raised by {@link _consumeSseToTerminal} so the await-terminal callers can
+ * distinguish a benign server-side stream close (→ fall back to polling) from a
+ * genuine failure that must propagate (an `onProgress` callback throw, an API
+ * error, a caller abort). Mirrors the PHP `SseStreamEndedWithoutTerminal`
+ * sealed marker. Not part of the public error contract — never surfaced to a
+ * caller (the await-terminal path catches it internally and polls).
+ */
+export class SseEndedWithoutTerminal extends GislError {
+    constructor(message = 'SSE stream ended without a terminal event') {
+        super(message);
+        this.name = 'SseEndedWithoutTerminal';
+    }
+}
+export class GislAbortError extends GislError {
+    constructor(message) {
+        super(message);
+        this.name = 'GislAbortError';
+    }
+}
+/**
+ * A single S3 multipart part PUT failed terminally (after the configured
+ * retry attempts) or could not be read. Subclasses `GislError` — NOT
+ * `GislApiError` — because it carries no contract error envelope and is
+ * thrown from the multipart upload path, never from the response handler.
+ * Mirrors the `GislAbortError` shape, plus the failing part's identifiers.
+ */
+export class GislMultipartPartError extends GislError {
+    partNumber;
+    uploadId;
+    constructor(message, partNumber, uploadId) {
+        super(message);
+        this.name = 'GislMultipartPartError';
+        this.partNumber = partNumber;
+        this.uploadId = uploadId;
+    }
+}
+/**
+ * The upload would require more than the S3 hard limit of 10 000 multipart
+ * parts at the server-provided chunk size. Client-side guard (Model A: the
+ * server computes the part plan; the SDK asserts the ceiling). Subclasses
+ * `GislError` for the same reason as `GislMultipartPartError`.
+ */
+export class GislMultipartPartCountError extends GislError {
+    requiredParts;
+    maxParts;
+    constructor(message, requiredParts, maxParts) {
+        super(message);
+        this.name = 'GislMultipartPartCountError';
+        this.requiredParts = requiredParts;
+        this.maxParts = maxParts;
+    }
+}
+/**
+ * Thrown by the file-first `RunResult.byKey()` (FF1) when no result entry
+ * matches the requested key. A keyless run (no `key:` supplied to `file()`)
+ * is addressable positionally only — `byKey()` always throws.
+ *
+ * Mirrors the PHP `Gisl\Sdk\Errors\GislNoSuchKeyError`.
+ */
+export class GislNoSuchKeyError extends GislError {
+    constructor(message) {
+        super(message);
+        this.name = 'GislNoSuchKeyError';
+    }
+}
+/**
+ * Thrown by the file-first `Handle.result()` (FF5a) when the workflow has not
+ * yet reached a terminal state. `result()` is the NON-blocking accessor: it
+ * fetches the current status once and, if the workflow is still
+ * `pending`/`in_progress`, throws this rather than waiting. Use `Handle.wait()`
+ * to block until terminal instead.
+ *
+ * Carries the `workflowId` and the current (non-terminal) `state`.
+ *
+ * Mirrors the PHP `Gisl\Sdk\Errors\GislResultNotReadyError`.
+ */
+export class GislResultNotReadyError extends GislError {
+    workflowId;
+    state;
+    constructor(workflowId, state) {
+        super(`Workflow ${workflowId} is not ready (state '${state}'); its result is not available yet. ` +
+            'Call wait() to block until it reaches a terminal state, or poll result() again later.');
+        this.name = 'GislResultNotReadyError';
+        this.workflowId = workflowId;
+        this.state = state;
+    }
+}
+/**
+ * Thrown by the file-first `RunResult` sinks (`toFile()` / `downloadTo()`,
+ * FF1) when they cannot deliver. The machine-readable `reason` discriminates
+ * the three cases, mirroring the `reason`-bag convention on
+ * {@link GislConfigError}:
+ *
+ *  - `not_single_output`      — `toFile()` requires exactly one output but the
+ *                               run produced zero or more than one.
+ *  - `downloader_unavailable` — the `RunResult` has no downloader bound (e.g. a
+ *                               browser / no-I/O context).
+ *  - `partial_failure`        — `downloadTo({ failOnPartial: true })` and the
+ *                               run had at least one failed input.
+ *  - `duplicate_filename`     — two outputs share a destination filename in one
+ *                               `downloadTo(dir)`, which would silently overwrite.
+ *  - `write_failed`           — a concrete {@link Downloader} could not open or
+ *                               stream to the destination path.
+ *
+ * Mirrors the PHP `Gisl\Sdk\Errors\GislSinkError`.
+ */
+export class GislSinkError extends GislError {
+    reason;
+    constructor(message, options) {
+        super(message);
+        this.name = 'GislSinkError';
+        this.reason = options.reason;
+    }
+}
