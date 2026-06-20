@@ -13,7 +13,7 @@ export { DocumentPdfCompressPresetOptions, type DocumentPdfCompressPresetOptions
 export { DocumentOfficeCompressPresetOptions, type DocumentOfficeCompressPresetOptionsInput, } from './document_office_compress.js';
 export { DocumentOdfCompressPresetOptions, type DocumentOdfCompressPresetOptionsInput, } from './document_odf_compress.js';
 export { DocumentEpubCompressPresetOptions, type DocumentEpubCompressPresetOptionsInput, } from './document_epub_compress.js';
-export { OptimizeFor, ImageMode, ImageMetadataPolicy, IccProfilePolicy, ImageFormat, VideoCodec, VideoPreset, VideoFit, AudioBitrate, AudioCodec, AudioSampleRate, PdfProfile, PdfColorspace, } from '../../generated/sdk_spec/enums.js';
+export { OptimizeFor, ImageMetadataPolicy, ImageFormat, VideoCodec, VideoPreset, VideoFit, AudioBitrate, AudioCodec, AudioSampleRate, PdfProfile, PdfColorspace, } from '../../generated/sdk_spec/enums.js';
 /** Supported media×op pairs for preset cells in T4a. Compress-only. */
 export type PresetMedia = 'image' | 'audio' | 'video' | 'document_pdf' | 'document_office' | 'document_odf' | 'document_epub';
 export type PresetOp = 'compress';
@@ -33,8 +33,8 @@ export type AnyPresetOptions = ImageCompressPresetOptions | AudioCompressPresetO
  *
  * `definedFieldsOf` filters undefined values out of each instance
  * BEFORE the merge: with TS `useDefineForClassFields` (the ES2022
- * default), `readonly mode?: ImageMode` declarations initialise the
- * field as an enumerable own property with value `undefined` BEFORE
+ * default), `readonly outputFormat?: ImageFormat` declarations initialise
+ * the field as an enumerable own property with value `undefined` BEFORE
  * the ctor body runs. A naive `Object.assign({}, parent, child)`
  * therefore lets child's `undefined` overwrite parent's defined value
  * — caught by CI on PR #125 first run. Filter-then-spread restores

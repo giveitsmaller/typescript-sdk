@@ -190,9 +190,7 @@ export {
   DocumentEpubCompressPresetOptions,
   type DocumentEpubCompressPresetOptionsInput,
   OptimizeFor,
-  ImageMode,
   ImageMetadataPolicy,
-  IccProfilePolicy,
   ImageFormat,
   VideoCodec,
   VideoPreset,
@@ -496,6 +494,13 @@ type _OutputFileDriftAssertion = [
 // Re-export all operation option types
 export type {
   CompressImageOptions,
+  // Per-input-format image-compress option types (contracts v2.80.0): the
+  // aggregate CompressImageOptions carries the common {quality, metadata,
+  // output_format}; these add the format-specific knobs — JPEG `progressive`,
+  // PNG `optimization_level`, AVIF `avif_speed`.
+  CompressImageJpegOptions,
+  CompressImagePngOptions,
+  CompressImageAvifOptions,
   CompressVideoOptions,
   CompressAudioOptions,
   CompressDocumentPdfOptions,

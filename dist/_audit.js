@@ -113,8 +113,6 @@ export function _runAudit() {
     accept();
     accept();
     accept();
-    accept();
-    accept();
     // T4b / 27rE1fZn — preset resolver public types.
     accept();
     accept();

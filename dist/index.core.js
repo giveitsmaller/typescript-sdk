@@ -70,7 +70,7 @@ export { gisl, create } from './gisl.js';
 // Ergonomic preset defaults (T4a / VhIj4S7T) — typed leaf DTOs + immutable
 // `PresetDefaults` builder + `presetDefaults()` factory + ergonomic enum
 // re-exports. Resolver wiring (T4b) consumes `PresetDefaults.cellFor()`.
-export { presetDefaults, PresetDefaults, ImageCompressPresetOptions, AudioCompressPresetOptions, VideoCompressPresetOptions, DocumentPdfCompressPresetOptions, DocumentOfficeCompressPresetOptions, DocumentOdfCompressPresetOptions, DocumentEpubCompressPresetOptions, OptimizeFor, ImageMode, ImageMetadataPolicy, IccProfilePolicy, ImageFormat, VideoCodec, VideoPreset, VideoFit, AudioBitrate, AudioCodec, AudioSampleRate, PdfProfile, PdfColorspace, } from './ergonomic/presets/index.js';
+export { presetDefaults, PresetDefaults, ImageCompressPresetOptions, AudioCompressPresetOptions, VideoCompressPresetOptions, DocumentPdfCompressPresetOptions, DocumentOfficeCompressPresetOptions, DocumentOdfCompressPresetOptions, DocumentEpubCompressPresetOptions, OptimizeFor, ImageMetadataPolicy, ImageFormat, VideoCodec, VideoPreset, VideoFit, AudioBitrate, AudioCodec, AudioSampleRate, PdfProfile, PdfColorspace, } from './ergonomic/presets/index.js';
 // Operation-builder surface (T2 / xVDTIm8C) — `client.compress/convert/thumbnail`
 // returns an `OperationBuilder`; `.run()` projects to a flat `Result` /
 // `.submit({webhook})` returns a `Handle`. Progress events are the

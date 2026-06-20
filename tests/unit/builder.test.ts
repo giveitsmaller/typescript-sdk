@@ -722,14 +722,15 @@ describe('OperationBuilder.submit', () => {
 describe('T4b — OperationBuilder fail-early on GislConfigError (before any I/O)', () => {
   it('run() throws GislConfigError BEFORE client.uploadFile is called', async () => {
     const mock = makeMockClient();
-    // mode=Lossless + quality is a post-merge missing_dependency.
-    const builder = new OperationBuilder(mock.client, 'compress', 'p.jpg', {
-      mode: 'lossless',
-      quality: 90,
+    // v2.80.0 removed the image lossless+quality error; the surviving pre-I/O
+    // trigger is video codec=h265 + targetSize → invalid_combination.
+    const builder = new OperationBuilder(mock.client, 'compress', 'v.mp4', {
+      codec: 'h265',
+      targetSize: '50MB',
     });
     await expect(builder.run({ maxWait: '30s' })).rejects.toMatchObject({
       name: 'GislConfigError',
-      reason: 'missing_dependency',
+      reason: 'invalid_combination',
     });
     expect(mock.uploadFile).not.toHaveBeenCalled();
     expect(mock.createWorkflow).not.toHaveBeenCalled();
@@ -737,13 +738,13 @@ describe('T4b — OperationBuilder fail-early on GislConfigError (before any I/O
 
   it('submit() throws GislConfigError BEFORE client.uploadFile is called', async () => {
     const mock = makeMockClient();
-    const builder = new OperationBuilder(mock.client, 'compress', 'p.jpg', {
-      mode: 'lossless',
-      quality: 90,
+    const builder = new OperationBuilder(mock.client, 'compress', 'v.mp4', {
+      codec: 'h265',
+      targetSize: '50MB',
     });
     await expect(builder.submit({ webhook: 'https://x/cb' })).rejects.toMatchObject({
       name: 'GislConfigError',
-      reason: 'missing_dependency',
+      reason: 'invalid_combination',
     });
     expect(mock.uploadFile).not.toHaveBeenCalled();
     expect(mock.createWorkflow).not.toHaveBeenCalled();

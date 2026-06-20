@@ -21,8 +21,8 @@
 //      `quality: 100`, `codec: 'h264'`, …).
 //
 // Validation runs AFTER merge so post-merge-only invariants
-// (targetSize + codec, Lossless + quality) catch combinations where
-// e.g. the explicit knob and a layered default disagree. Resolver
+// (e.g. targetSize + codec on video) catch combinations where
+// the explicit knob and a layered default disagree. Resolver
 // throws `GislConfigError` BEFORE any network round-trip, with a
 // `resolvedSnapshot` showing the would-have-been-sent payload.
 //
@@ -53,13 +53,12 @@ export const PRESET_VERSION = GENERATED_PRESET_VERSION;
 //
 // Lifted from docs/plans/sdk-ergonomics/plan.md §11a. Maps camelCase
 // ergonomic-DTO field names to their snake_case wire counterparts.
-// Fields whose ergonomic name IS the wire name (`mode`, `quality`,
-// `codec`, …) are NOT in this map — `applyAlias` returns them
-// unchanged. A generic snake-case regex would mistranslate names like
-// `iccProfile` to `i_c_c_profile`; the declarative map is the only
-// safe path.
+// Fields whose ergonomic name IS the wire name (`quality`, `codec`,
+// …) are NOT in this map — `applyAlias` returns them unchanged. A
+// generic snake-case regex would mistranslate acronym/camel names
+// (e.g. an `outputFormat` → `output_format` rename or an acronym like
+// the former `iccProfile`); the declarative map is the only safe path.
 const WIRE_ALIASES = Object.freeze({
-    iccProfile: 'icc_profile',
     outputFormat: 'output_format',
     sampleRate: 'sample_rate',
     audioCodec: 'audio_codec',
@@ -252,7 +251,7 @@ function presetDefaultsCellRecord(defaults, media, op, optimize) {
 // for clearly-typed plain objects whose key set only intersects with a
 // non-matching media.
 const MEDIA_FIELDS = Object.freeze({
-    image: new Set(['mode', 'quality', 'metadata', 'iccProfile', 'progressive', 'outputFormat']),
+    image: new Set(['quality', 'metadata', 'outputFormat']),
     audio: new Set(['bitrate', 'channels', 'sampleRate', 'normalize']),
     video: new Set(['codec', 'targetSize', 'crf', 'preset', 'width', 'height', 'fit', 'fps', 'faststart', 'audioCodec', 'audioBitrate']),
     document_pdf: new Set(['profile', 'colorspace', 'flattenForms']),
@@ -321,7 +320,7 @@ function mergeLayer(acc, layer, source) {
 // can pin this hand-maintained allowlist to the generated contract metadata: every
 // field the resolver may emit MUST be a real contract option key for `compress`.
 export const KNOWN_WIRE_FIELDS = Object.freeze({
-    image: new Set(['mode', 'quality', 'metadata', 'icc_profile', 'progressive', 'output_format']),
+    image: new Set(['quality', 'metadata', 'output_format']),
     audio: new Set(['bitrate', 'channels', 'sample_rate', 'normalize', 'trim_start', 'trim_end']),
     video: new Set(['codec', 'encoding_mode', 'crf', 'target_size_bytes', 'preset', 'width', 'height', 'fit', 'fps', 'faststart', 'audio_codec', 'audio_bitrate', 'trim_start', 'trim_end']),
     document_pdf: new Set(['profile', 'colorspace', 'pages', 'flatten_forms']),
@@ -345,19 +344,6 @@ function validateMerged(media, merged, explicitKeys, winners) {
                 resolvedSnapshot: Object.freeze(snapshot),
             });
         }
-    }
-    // Image: `mode: Lossless` + `quality` set is invalid per the wire
-    // contract (`depends_on: { mode: lossy }`). Runs on post-merge so a
-    // caller passing explicit `quality` and inheriting `mode=Lossless`
-    // from a client preset is caught.
-    if (media === 'image' && merged.mode === 'lossless' && merged.quality !== undefined) {
-        const snapshot = { ...merged };
-        throw new GislConfigError(`Image compress: 'quality' is ignored when 'mode' is Lossless — passing both is a configuration bug.`, {
-            reason: 'missing_dependency',
-            conflictingFields: ['quality', 'mode'],
-            resolvedSnapshot: Object.freeze(snapshot),
-            suggestion: "Either drop 'quality' for lossless output, or set 'mode' to Lossy.",
-        });
     }
     // Video: targetSize-derived encoding_mode='target_size' is only
     // valid for H264 today. Catch the combination post-merge — explicit

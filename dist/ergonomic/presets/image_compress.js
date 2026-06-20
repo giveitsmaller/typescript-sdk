@@ -7,32 +7,26 @@
 // values ARE the wire backing values — so the leaf DTO is wire-compatible
 // once the resolver (T4b) snake_cases the property names.
 //
-// Field set (6) per EsD1hs5u / contracts v2.60.0: image =
-//   (mode, quality, metadata, iccProfile, progressive, outputFormat).
-// `width`/`height`/`fit`/`autoOrient` were REMOVED — the image-compress
-// worker never resized (resize-fit lives on thumbnail/convert; video keeps
-// its own fit). Trim / per-call knobs are deliberately excluded — they
-// belong on the per-call argument shape, not the preset cell.
+// Field set (3) per contracts v2.80.0 compress.image honesty pass (Option B,
+//   lossy-only): image = (quality, metadata, outputFormat).
+// `mode` + `iccProfile` were REMOVED — the worker is lossy-only and always
+// strips metadata, so advertising a lossless mode or ICC-profile policy was
+// an over-claim. `progressive` is still a per-JPEG wire option but is no
+// longer carried in the preset cell. `width`/`height`/`fit`/`autoOrient`
+// were removed earlier — the image-compress worker never resized (resize-fit
+// lives on thumbnail/convert; video keeps its own fit). Per-call knobs are
+// deliberately excluded — they belong on the per-call argument shape.
 import { shippedDefaultsFor as f3ShippedDefaultsFor } from '../../generated/sdk_spec/presets.js';
 import { translateEnum } from './_translate.js';
 export class ImageCompressPresetOptions {
-    mode;
     quality;
     metadata;
-    iccProfile;
-    progressive;
     outputFormat;
     constructor(input) {
-        if (input.mode !== undefined)
-            this.mode = input.mode;
         if (input.quality !== undefined)
             this.quality = input.quality;
         if (input.metadata !== undefined)
             this.metadata = input.metadata;
-        if (input.iccProfile !== undefined)
-            this.iccProfile = input.iccProfile;
-        if (input.progressive !== undefined)
-            this.progressive = input.progressive;
         if (input.outputFormat !== undefined)
             this.outputFormat = input.outputFormat;
         Object.freeze(this);
@@ -50,25 +44,18 @@ export class ImageCompressPresetOptions {
      * the given level. Reads the F3 PRESETS matrix and translates member
      * names to wire backing values.
      *
-     * Note for OptimizeFor.Quality: the F3 PRESETS cell deliberately
-     * omits `quality` because the contract has `depends_on: { mode: lossy }`
-     * on the quality field — under `mode: Lossless` the API ignores
-     * `quality`, so shipping a default would mislead callers.
+     * Since the v2.80.0 honesty pass the worker is lossy-only, so every
+     * level ships a concrete `quality` (Size 65 / Balanced 80 / Quality 92),
+     * `metadata: All`, and `outputFormat: Original`.
      */
     static shippedDefaultsFor(level) {
         const cell = f3ShippedDefaultsFor('image_compress', level);
         const input = {};
         const mut = input;
-        if ('mode' in cell)
-            mut.mode = translateEnum('ImageMode', cell.mode);
         if ('quality' in cell)
             mut.quality = cell.quality;
         if ('metadata' in cell)
             mut.metadata = translateEnum('ImageMetadataPolicy', cell.metadata);
-        if ('iccProfile' in cell)
-            mut.iccProfile = translateEnum('IccProfilePolicy', cell.iccProfile);
-        if ('progressive' in cell)
-            mut.progressive = cell.progressive;
         if ('outputFormat' in cell)
             mut.outputFormat = translateEnum('ImageFormat', cell.outputFormat);
         return new ImageCompressPresetOptions(input);

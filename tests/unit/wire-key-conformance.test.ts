@@ -114,29 +114,66 @@ describe('wire-key conformance — compress', () => {
   // explicitly documented as intentionally omitted below.
   //
   // INTENTIONALLY_OMITTED: contract compress options the ergonomic resolver
-  // deliberately does NOT expose. `output_format` on compress is the API-side
-  // "compress + change format" facade surface (contracts VcPeRWdD / ADR-0021) —
-  // canonicalized to a `convert` op server-side. Changing format is a
-  // `convert()` concern in the ergonomic SDK, never an ergonomic `compress()`
-  // option, so compress's `output_format` is omitted for every media REGARDLESS
-  // of its availability:
+  // deliberately does NOT expose.
+  //
+  // `output_format` on compress is the API-side "compress + change format"
+  // facade surface (contracts VcPeRWdD / ADR-0021) — canonicalized to a
+  // `convert` op server-side. Changing format is a `convert()` concern in the
+  // ergonomic SDK, never an ergonomic `compress()` option, so compress's
+  // `output_format` is omitted for audio + video REGARDLESS of availability:
   //   - audio: ALL values flipped `stable` in contracts v2.78.0 (RTokti20) — now
   //     live, but still omitted here (format-change goes through `convert`).
   //   - video: non-`original` values are `per_value_availability: planned`
   //     (facade unbuilt for video) — omitted; exposing a planned value would let
   //     the resolver emit a field the worker can't honour.
   // (Image keeps `output_format` in KNOWN_WIRE_FIELDS — its preset emits the
-  // stable `original` value — so it is NOT listed here.)
+  // stable `original` value — so it is NOT listed for image.)
+  //
+  // Image format-specific knobs (contracts v2.80.0 honesty pass): compress.image
+  // is now a 4-group family — image (webp/gif/svg/tiff), image_jpeg, image_png,
+  // image_avif. The ergonomic resolver models image-compress with ONE
+  // format-agnostic `image` media that emits only the options common to every
+  // image input format (quality / metadata / output_format). The per-format
+  // advanced knobs are NOT emitted by the format-agnostic path and are omitted
+  // until per-input-format ergonomic options ship (tracked follow-up):
+  //   - progressive        (image_jpeg only)
+  //   - optimization_level (image_png only)
+  //   - avif_speed         (image_avif only)
+  // Document compress `quality` (contracts v2.83.0 document-compress honesty
+  // pass): a stable, real per-document-group quality knob the ergonomic
+  // document-compress preset path does not expose yet (the document preset DTOs
+  // carry profile/image_quality/strip_* but not `quality`) — omitted until a
+  // document-quality ergonomic option ships (tracked follow-up).
   const INTENTIONALLY_OMITTED: Readonly<Record<string, ReadonlySet<string>>> = {
+    image: new Set(['progressive', 'optimization_level', 'avif_speed']),
     audio: new Set(['output_format']),
     video: new Set(['output_format']),
+    document_pdf: new Set(['quality']),
+    document_office: new Set(['quality']),
+    document_odf: new Set(['quality']),
+    document_epub: new Set(['quality']),
   };
+
+  // The SDK's single format-agnostic `image` media maps to the contract's
+  // image-family groups (`image` + every `image_*`); all other SDK media map
+  // 1:1 to a same-named mime group.
+  const imageFamilyGroups = (m: OperationMetadata): string[] =>
+    Object.keys(m.mime_groups).filter((g) => g === 'image' || g.startsWith('image_'));
 
   it('every contract compress option (per media) is in KNOWN_WIRE_FIELDS or the documented omission set', () => {
     for (const media of Object.keys(KNOWN_WIRE_FIELDS)) {
-      // mediaGroupOptionKeys asserts the mime group exists → a renamed/dropped
-      // PresetMedia⇄mime_group mapping fails loudly rather than silently skipping.
-      const contractForMedia = mediaGroupOptionKeys(compressMetadata, media);
+      // For `image` the contract surface is the UNION of every image-family
+      // group (so a per-format option like optimization_level is captured);
+      // for other media it is the one same-named group. mediaGroupOptionKeys
+      // asserts the group exists → a renamed/dropped PresetMedia⇄mime_group
+      // mapping fails loudly rather than silently skipping.
+      const contractForMedia = media === 'image'
+        ? new Set<string>(
+            imageFamilyGroups(compressMetadata).flatMap(
+              (g) => [...mediaGroupOptionKeys(compressMetadata, g)],
+            ),
+          )
+        : mediaGroupOptionKeys(compressMetadata, media);
       const allowed = new Set<string>(KNOWN_WIRE_FIELDS[media as keyof typeof KNOWN_WIRE_FIELDS]);
       for (const k of INTENTIONALLY_OMITTED[media] ?? []) allowed.add(k);
       const stray = [...contractForMedia].filter((k) => !allowed.has(k));
@@ -154,10 +191,13 @@ describe('wire-key conformance — compress', () => {
   // reverse check above iterates KNOWN_WIRE_FIELDS keys, so a contract mime_group
   // ABSENT from KNOWN_WIRE_FIELDS would be skipped silently — the resolver would
   // unknown_field-throw on every option for that media while CI stays green. Assert
-  // every contract compress mime_group has a KNOWN_WIRE_FIELDS entry.
+  // every contract compress mime_group has a KNOWN_WIRE_FIELDS entry — folding the
+  // image-family groups (image + image_*) into the SDK's single `image` media.
   it('every contract compress mime_group is covered by KNOWN_WIRE_FIELDS', () => {
     const known = new Set(Object.keys(KNOWN_WIRE_FIELDS));
-    const uncovered = Object.keys(compressMetadata.mime_groups).filter((m) => !known.has(m));
+    const uncovered = Object.keys(compressMetadata.mime_groups).filter(
+      (m) => !known.has(m) && !(known.has('image') && (m === 'image' || m.startsWith('image_'))),
+    );
     expect(
       uncovered,
       `contract compress mime_group(s) ${JSON.stringify(uncovered)} have no KNOWN_WIRE_FIELDS ` +

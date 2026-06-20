@@ -13,9 +13,7 @@ import {
   DocumentOdfCompressPresetOptions,
   DocumentEpubCompressPresetOptions,
   OptimizeFor,
-  ImageMode,
   ImageMetadataPolicy,
-  IccProfilePolicy,
   ImageFormat,
   VideoCodec,
   VideoPreset,
@@ -32,40 +30,33 @@ import { create, type GislCreateOptions } from '../../src/gisl.js';
 // ---------------------------------------------------------------------------
 
 describe('ImageCompressPresetOptions.shippedDefaultsFor', () => {
-  it('Size — populates wire backing values for all 7 cell fields, leaves width/height/fit undefined', () => {
+  // contracts v2.80.0 (compress.image honesty pass — lossy-only): image_compress
+  // presets carry only quality / metadata / outputFormat. mode / iccProfile /
+  // progressive were dropped; metadata collapses to the single `all` member.
+  it('Size — quality 65, metadata all, outputFormat original; leaves width/height/fit undefined', () => {
     const opts = ImageCompressPresetOptions.shippedDefaultsFor(OptimizeFor.Size);
-    expect(opts.mode).toBe(ImageMode.Lossy);
-    expect(opts.mode).toBe('lossy');
     expect(opts.quality).toBe(65);
     expect(opts.metadata).toBe(ImageMetadataPolicy.All);
     expect(opts.metadata).toBe('all');
-    expect(opts.iccProfile).toBe(IccProfilePolicy.Strip);
-    expect(opts.iccProfile).toBe('strip');
-    expect(opts.progressive).toBe(true);
     // VcPeRWdD (contracts v2.73.0): Size outputFormat re-pointed Smallest -> Original
     // (`smallest` is now per_value_availability:planned — the facade self-422 guard).
     expect(opts.outputFormat).toBe(ImageFormat.Original);
     expect(opts.outputFormat).toBe('original');
   });
 
-  it('Balanced (default) — different cell values', () => {
+  it('Balanced (default) — quality 80, metadata all, outputFormat original', () => {
     const opts = ImageCompressPresetOptions.shippedDefaultsFor(OptimizeFor.Balanced);
-    expect(opts.mode).toBe(ImageMode.Auto);
     expect(opts.quality).toBe(80);
-    expect(opts.metadata).toBe(ImageMetadataPolicy.Sensitive);
-    expect(opts.iccProfile).toBe(IccProfilePolicy.Preserve);
+    expect(opts.metadata).toBe(ImageMetadataPolicy.All);
     // VcPeRWdD: Balanced outputFormat re-pointed Auto -> Original (`auto` now planned).
     expect(opts.outputFormat).toBe(ImageFormat.Original);
   });
 
-  it('Quality — mode=Lossless AND quality=undefined (depends_on: { mode: lossy })', () => {
+  it('Quality — quality 92, metadata all, outputFormat original', () => {
     const opts = ImageCompressPresetOptions.shippedDefaultsFor(OptimizeFor.Quality);
-    expect(opts.mode).toBe(ImageMode.Lossless);
-    expect(opts.mode).toBe('lossless');
-    // The whole point of this AC — quality is omitted under Lossless.
-    expect(opts.quality).toBeUndefined();
-    expect(opts.metadata).toBe(ImageMetadataPolicy.None);
-    expect(opts.iccProfile).toBe(IccProfilePolicy.Preserve);
+    // v2.80.0: Quality now ships quality:92 (lossy-only — no more Lossless omission).
+    expect(opts.quality).toBe(92);
+    expect(opts.metadata).toBe(ImageMetadataPolicy.All);
     expect(opts.outputFormat).toBe(ImageFormat.Original);
   });
 });
@@ -231,11 +222,8 @@ describe('*PresetOptions.from() — sparse-delta semantics', () => {
   it('image: from({ quality: 75 }) returns instance with only quality populated', () => {
     const opts = ImageCompressPresetOptions.from({ quality: 75 });
     expect(opts.quality).toBe(75);
-    expect(opts.mode).toBeUndefined();
     expect(opts.metadata).toBeUndefined();
-    expect(opts.iccProfile).toBeUndefined();
     expect(opts.outputFormat).toBeUndefined();
-    expect(opts.progressive).toBeUndefined();
   });
 
   it('video: from({ codec: H264, crf: 22 }) — exactly two fields populated', () => {
@@ -292,11 +280,8 @@ describe('presetDefaults() / PresetDefaults', () => {
     const cell = d.cellFor('image', 'compress', OptimizeFor.Size);
     expect(cell).toBeInstanceOf(ImageCompressPresetOptions);
     expect(cell?.quality).toBe(75);
-    expect(cell?.mode).toBeUndefined();
     expect(cell?.metadata).toBeUndefined();
-    expect(cell?.iccProfile).toBeUndefined();
     expect(cell?.outputFormat).toBeUndefined();
-    expect(cell?.progressive).toBeUndefined();
   });
 
   it('imageCompress(level) with no options registers empty delta', () => {
@@ -305,7 +290,7 @@ describe('presetDefaults() / PresetDefaults', () => {
     expect(cell).toBeInstanceOf(ImageCompressPresetOptions);
     // Empty input → every field undefined; resolver will use shipped defaults.
     expect(cell?.quality).toBeUndefined();
-    expect(cell?.mode).toBeUndefined();
+    expect(cell?.metadata).toBeUndefined();
   });
 
   it('cellFor returns undefined for an unregistered (media, op, level) tuple', () => {
@@ -402,13 +387,10 @@ describe('GislCreateOptions.presetDefaults', () => {
 // ---------------------------------------------------------------------------
 
 describe('ergonomic enums serialise to wire backing values', () => {
-  it('ImageMode / ImageMetadataPolicy / IccProfilePolicy / ImageFormat', () => {
-    expect(ImageMode.Lossy).toBe('lossy');
-    expect(ImageMode.Lossless).toBe('lossless');
-    expect(ImageMode.Auto).toBe('auto');
+  it('ImageMetadataPolicy / ImageFormat', () => {
+    // v2.80.0: ImageMetadataPolicy collapsed to a single `all` member;
+    // ImageMode + IccProfilePolicy were removed entirely.
     expect(ImageMetadataPolicy.All).toBe('all');
-    expect(ImageMetadataPolicy.Sensitive).toBe('sensitive');
-    expect(IccProfilePolicy.Strip).toBe('strip');
     expect(ImageFormat.Smallest).toBe('smallest');
   });
 
@@ -483,8 +465,9 @@ describe('PRESETS regen drift trip-wire', () => {
     }
   });
 
-  it('image_compress Quality cell intentionally omits `quality` (depends_on: { mode: lossy }) — regen must not start populating it', () => {
-    expect('quality' in PRESETS.image_compress.Quality).toBe(false);
+  it('image_compress Quality cell ships `quality` (v2.80.0 lossy-only honesty pass — was previously omitted under Lossless)', () => {
+    expect('quality' in PRESETS.image_compress.Quality).toBe(true);
+    expect(PRESETS.image_compress.Quality.quality).toBe(92);
   });
 });
 
@@ -494,34 +477,34 @@ describe('PRESETS regen drift trip-wire', () => {
 
 describe('translateEnum (internal)', () => {
   it('happy path: known member resolves to wire backing value', () => {
-    expect(translateEnum('ImageMode', 'Lossy')).toBe('lossy');
+    expect(translateEnum('VideoCodec', 'H264')).toBe('h264');
     expect(translateEnum('AudioBitrate', '_96')).toBe(96);
     expect(translateEnum('PdfProfile', 'Web')).toBe('web');
   });
 
   it('throws on unknown member name (no silent fall-through to wire)', () => {
-    expect(() => translateEnum('ImageMode', 'NotAMember')).toThrow(/not a member of ImageMode/);
+    expect(() => translateEnum('VideoCodec', 'NotAMember')).toThrow(/not a member of VideoCodec/);
   });
 
   it('throws on inherited-property names like "toString" (Object.hasOwn — not `in`)', () => {
     // Without an own-property check, the prototype-chain `in` operator
     // would silently return Object.prototype.toString, shipping a function
     // to the wire. Codex review round 1 finding 1791738ed47c.
-    expect(() => translateEnum('ImageMode', 'toString')).toThrow(/not a member of ImageMode/);
-    expect(() => translateEnum('ImageMode', 'hasOwnProperty')).toThrow(/not a member of ImageMode/);
+    expect(() => translateEnum('VideoCodec', 'toString')).toThrow(/not a member of VideoCodec/);
+    expect(() => translateEnum('VideoCodec', 'hasOwnProperty')).toThrow(/not a member of VideoCodec/);
     expect(() => translateEnum('AudioBitrate', 'constructor')).toThrow(/not a member of AudioBitrate/);
   });
 
   it('error message lists known members so the regen drift is diagnosable', () => {
     try {
-      translateEnum('ImageMode', 'BogusKey');
+      translateEnum('VideoCodec', 'BogusKey');
       throw new Error('expected throw');
     } catch (err) {
       const msg = (err as Error).message;
       expect(msg).toMatch(/Known members:/);
-      expect(msg).toContain('Lossy');
-      expect(msg).toContain('Lossless');
-      expect(msg).toContain('Auto');
+      expect(msg).toContain('H264');
+      expect(msg).toContain('H265');
+      expect(msg).toContain('Av1');
     }
   });
 });

@@ -41,7 +41,7 @@ export { DocumentOfficeCompressPresetOptions, } from './document_office_compress
 export { DocumentOdfCompressPresetOptions, } from './document_odf_compress.js';
 export { DocumentEpubCompressPresetOptions, } from './document_epub_compress.js';
 // Re-export ergonomic enums for callers (single canonical path).
-export { OptimizeFor, ImageMode, ImageMetadataPolicy, IccProfilePolicy, ImageFormat, VideoCodec, VideoPreset, VideoFit, AudioBitrate, AudioCodec, AudioSampleRate, PdfProfile, PdfColorspace, } from '../../generated/sdk_spec/enums.js';
+export { OptimizeFor, ImageMetadataPolicy, ImageFormat, VideoCodec, VideoPreset, VideoFit, AudioBitrate, AudioCodec, AudioSampleRate, PdfProfile, PdfColorspace, } from '../../generated/sdk_spec/enums.js';
 function cellKeyOf(media, op) {
     return `${media}_${op}`;
 }
@@ -55,8 +55,8 @@ function cellKeyOf(media, op) {
  *
  * `definedFieldsOf` filters undefined values out of each instance
  * BEFORE the merge: with TS `useDefineForClassFields` (the ES2022
- * default), `readonly mode?: ImageMode` declarations initialise the
- * field as an enumerable own property with value `undefined` BEFORE
+ * default), `readonly outputFormat?: ImageFormat` declarations initialise
+ * the field as an enumerable own property with value `undefined` BEFORE
  * the ctor body runs. A naive `Object.assign({}, parent, child)`
  * therefore lets child's `undefined` overwrite parent's defined value
  * — caught by CI on PR #125 first run. Filter-then-spread restores

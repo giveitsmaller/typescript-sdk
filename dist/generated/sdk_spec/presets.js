@@ -4,26 +4,18 @@
 export const PRESETS = Object.freeze({
     "image_compress": Object.freeze({
         Size: Object.freeze({
-            "mode": "Lossy",
             "quality": 65,
             "metadata": "All",
-            "iccProfile": "Strip",
-            "progressive": true,
             "outputFormat": "Original",
         }),
         Balanced: Object.freeze({
-            "mode": "Auto",
             "quality": 80,
-            "metadata": "Sensitive",
-            "iccProfile": "Preserve",
-            "progressive": true,
+            "metadata": "All",
             "outputFormat": "Original",
         }),
         Quality: Object.freeze({
-            "mode": "Lossless",
-            "metadata": "None",
-            "iccProfile": "Preserve",
-            "progressive": true,
+            "quality": 92,
+            "metadata": "All",
             "outputFormat": "Original",
         }),
     }),

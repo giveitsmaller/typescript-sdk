@@ -4,7 +4,6 @@ import {
   presetDefaults,
   PresetDefaults,
   OptimizeFor,
-  ImageMode,
   ImageMetadataPolicy,
   ImageFormat,
   VideoCodec,
@@ -135,7 +134,9 @@ describe('client.withPresetDefaults — chained derives (a.withPresetDefaults(d1
       }),
     });
     const d1 = presetDefaults().imageCompress(OptimizeFor.Size, { quality: 80 });
-    const d2 = presetDefaults().imageCompress(OptimizeFor.Size, { metadata: ImageMetadataPolicy.None });
+    // v2.80.0: metadata collapsed to a single `All` member, so the d2-owned
+    // override field is now outputFormat (Jpeg), distinct from the parent's Webp.
+    const d2 = presetDefaults().imageCompress(OptimizeFor.Size, { outputFormat: ImageFormat.Jpeg });
     const chained = client.withPresetDefaults(d1).withPresetDefaults(d2);
     expect(chained).toBeDefined();
     // Resolve via the resolver directly (same scoped state the chained client carries).
@@ -151,15 +152,15 @@ describe('client.withPresetDefaults — chained derives (a.withPresetDefaults(d1
       scopedPresetDefaults: PresetDefaults.merge(d1, d2),
       explicitOptions: {},
     });
-    // metadata: d2 wins (None, not d1-untouched, not parent's All)
-    expect(wireOptions.metadata).toBe('none');
+    // outputFormat: d2 wins (Jpeg, not parent's Webp)
+    expect(wireOptions.output_format).toBe('jpeg');
     // quality: d1 wins (80, not parent's 65), d2 didn't set it
     expect(wireOptions.quality).toBe(80);
-    // outputFormat: parent's clientDefault still wins (Webp), scoped didn't set
-    expect(wireOptions.output_format).toBe('webp');
-    expect(resolvedOptions.sources.scopedDefault).toContain('metadata');
+    // metadata: parent's clientDefault still wins (All), scoped didn't set
+    expect(wireOptions.metadata).toBe('all');
+    expect(resolvedOptions.sources.scopedDefault).toContain('output_format');
     expect(resolvedOptions.sources.scopedDefault).toContain('quality');
-    expect(resolvedOptions.sources.clientDefault).toContain('output_format');
+    expect(resolvedOptions.sources.clientDefault).toContain('metadata');
   });
 
   it('intermediate derive (after .withPresetDefaults(d1)) is unaffected by later .withPresetDefaults(d2)', async () => {
@@ -504,21 +505,9 @@ describe('resolveCompressOptions — presetConfigHash with scoped layer', () => 
 // ---------------------------------------------------------------------------
 
 describe('resolveCompressOptions — validations operate post-merge across scoped', () => {
-  it('scoped sets mode=Lossless + quality from parent clientDefault → missing_dependency thrown', () => {
-    const parent = presetDefaults().imageCompress(OptimizeFor.Size, { quality: 80 });
-    const scoped = presetDefaults().imageCompress(OptimizeFor.Size, { mode: ImageMode.Lossless });
-    expect(() =>
-      resolveCompressOptions({
-        media: 'image',
-        op: 'compress',
-        optimize: OptimizeFor.Size,
-        presetDefaults: parent,
-        scopedPresetDefaults: scoped,
-        explicitOptions: {},
-      }),
-    ).toThrow(/missing_dependency|quality.*Lossless/);
-  });
-
+  // (v2.80.0 removed the image lossless+quality missing_dependency error: the
+  // resolver is lossy-only now and never throws it. The post-merge validation
+  // coverage that survives is the video targetSize+codec combination below.)
   it('scoped targetSize + parent non-H264 codec → invalid_combination', () => {
     const parent = presetDefaults().videoCompress(OptimizeFor.Size, { codec: VideoCodec.H265 });
     const scoped = presetDefaults().videoCompress(OptimizeFor.Size, { targetSize: '50MB' });

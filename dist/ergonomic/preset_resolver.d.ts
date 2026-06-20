@@ -9,7 +9,7 @@ import { type PresetDefaults, type PresetMedia, type PresetOp } from './presets/
  * construction. Previously a hand-typed literal that the v2.73.0 regen had to
  * bump manually (yREs0srv).
  */
-export declare const PRESET_VERSION: "1.2";
+export declare const PRESET_VERSION: "1.3";
 /**
  * Inputs to {@link resolveCompressOptions}. `media` selects which leaf
  * DTO drives sdkDefault + clientDefault lookups + invalid-combo

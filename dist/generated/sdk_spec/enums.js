@@ -7,12 +7,6 @@ export const OptimizeFor = {
     Balanced: "Balanced",
     Quality: "Quality",
 };
-// Image compression algorithm. lossy = smaller file; lossless = no quality loss; auto = format-best.
-export const ImageMode = {
-    Lossy: "lossy",
-    Lossless: "lossless",
-    Auto: "auto",
-};
 // Image output format selection. Original keeps input; Auto picks best per browser support; Smallest tries all and returns smallest.
 export const ImageFormat = {
     Original: "original",
@@ -23,22 +17,14 @@ export const ImageFormat = {
     Webp: "webp",
     Avif: "avif",
 };
-// Image metadata handling. Counter-intuitive wire naming:
-//   All       = strip everything (smallest file)
-//   None      = keep all EXIF/IPTC/XMP
-//   Copyright = keep only copyright/author fields
-//   Sensitive = keep EXIF but strip GPS/location (GDPR-friendly)
+// Image metadata handling. Single value today (Option B, 2026-06-20):
+//   All = strip all EXIF/IPTC/XMP (smallest file)
+// The compress worker always strips metadata; None/Copyright/Sensitive were
+// removed — they never reached the worker (it hardcodes strip-everything), so
+// advertising metadata preservation was an over-claim. Preservation is a
+// possible future feature (would need worker support).
 export const ImageMetadataPolicy = {
     All: "all",
-    None: "none",
-    Copyright: "copyright",
-    Sensitive: "sensitive",
-};
-// ICC color profile handling.
-export const IccProfilePolicy = {
-    Preserve: "preserve",
-    Strip: "strip",
-    Srgb: "srgb",
 };
 // Video codec. H264 = widest compatibility; H265/Av1 = better compression but slower.
 export const VideoCodec = {
@@ -105,10 +91,8 @@ export const PdfColorspace = {
 /** Catalog of every ergonomic enum (canonicalName → wire). */
 export const ERGONOMIC_ENUMS = {
     OptimizeFor,
-    ImageMode,
     ImageFormat,
     ImageMetadataPolicy,
-    IccProfilePolicy,
     VideoCodec,
     VideoPreset,
     VideoFit,

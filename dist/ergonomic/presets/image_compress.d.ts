@@ -1,18 +1,12 @@
-import { ImageMode, ImageMetadataPolicy, IccProfilePolicy, ImageFormat, OptimizeFor } from '../../generated/sdk_spec/enums.js';
+import { ImageMetadataPolicy, ImageFormat, OptimizeFor } from '../../generated/sdk_spec/enums.js';
 export interface ImageCompressPresetOptionsInput {
-    readonly mode?: ImageMode;
     readonly quality?: number;
     readonly metadata?: ImageMetadataPolicy;
-    readonly iccProfile?: IccProfilePolicy;
-    readonly progressive?: boolean;
     readonly outputFormat?: ImageFormat;
 }
 export declare class ImageCompressPresetOptions {
-    readonly mode?: ImageMode;
     readonly quality?: number;
     readonly metadata?: ImageMetadataPolicy;
-    readonly iccProfile?: IccProfilePolicy;
-    readonly progressive?: boolean;
     readonly outputFormat?: ImageFormat;
     private constructor();
     /**
@@ -26,10 +20,9 @@ export declare class ImageCompressPresetOptions {
      * the given level. Reads the F3 PRESETS matrix and translates member
      * names to wire backing values.
      *
-     * Note for OptimizeFor.Quality: the F3 PRESETS cell deliberately
-     * omits `quality` because the contract has `depends_on: { mode: lossy }`
-     * on the quality field — under `mode: Lossless` the API ignores
-     * `quality`, so shipping a default would mislead callers.
+     * Since the v2.80.0 honesty pass the worker is lossy-only, so every
+     * level ships a concrete `quality` (Size 65 / Balanced 80 / Quality 92),
+     * `metadata: All`, and `outputFormat: Original`.
      */
     static shippedDefaultsFor(level: OptimizeFor): ImageCompressPresetOptions;
 }

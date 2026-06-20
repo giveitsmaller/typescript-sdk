@@ -4,12 +4,6 @@ export declare const OptimizeFor: {
     readonly Quality: "Quality";
 };
 export type OptimizeFor = typeof OptimizeFor[keyof typeof OptimizeFor];
-export declare const ImageMode: {
-    readonly Lossy: "lossy";
-    readonly Lossless: "lossless";
-    readonly Auto: "auto";
-};
-export type ImageMode = typeof ImageMode[keyof typeof ImageMode];
 export declare const ImageFormat: {
     readonly Original: "original";
     readonly Auto: "auto";
@@ -22,17 +16,8 @@ export declare const ImageFormat: {
 export type ImageFormat = typeof ImageFormat[keyof typeof ImageFormat];
 export declare const ImageMetadataPolicy: {
     readonly All: "all";
-    readonly None: "none";
-    readonly Copyright: "copyright";
-    readonly Sensitive: "sensitive";
 };
 export type ImageMetadataPolicy = typeof ImageMetadataPolicy[keyof typeof ImageMetadataPolicy];
-export declare const IccProfilePolicy: {
-    readonly Preserve: "preserve";
-    readonly Strip: "strip";
-    readonly Srgb: "srgb";
-};
-export type IccProfilePolicy = typeof IccProfilePolicy[keyof typeof IccProfilePolicy];
 export declare const VideoCodec: {
     readonly H264: "h264";
     readonly H265: "h265";
@@ -102,11 +87,6 @@ export declare const ERGONOMIC_ENUMS: {
         readonly Balanced: "Balanced";
         readonly Quality: "Quality";
     };
-    readonly ImageMode: {
-        readonly Lossy: "lossy";
-        readonly Lossless: "lossless";
-        readonly Auto: "auto";
-    };
     readonly ImageFormat: {
         readonly Original: "original";
         readonly Auto: "auto";
@@ -118,14 +98,6 @@ export declare const ERGONOMIC_ENUMS: {
     };
     readonly ImageMetadataPolicy: {
         readonly All: "all";
-        readonly None: "none";
-        readonly Copyright: "copyright";
-        readonly Sensitive: "sensitive";
-    };
-    readonly IccProfilePolicy: {
-        readonly Preserve: "preserve";
-        readonly Strip: "strip";
-        readonly Srgb: "srgb";
     };
     readonly VideoCodec: {
         readonly H264: "h264";

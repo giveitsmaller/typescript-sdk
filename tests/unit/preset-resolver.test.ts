@@ -12,9 +12,7 @@ import {
   OptimizeFor,
   VideoCodec,
   AudioBitrate,
-  ImageMode,
   ImageMetadataPolicy,
-  IccProfilePolicy,
   ImageFormat,
 } from '../../src/index.js';
 import { _parseTargetSize } from '../../src/ergonomic/preset_resolver.js';
@@ -32,16 +30,19 @@ describe('resolveCompressOptions — layer 1 (sdkDefault)', () => {
       optimize: OptimizeFor.Size,
       explicitOptions: {},
     });
-    expect(wireOptions.mode).toBe('lossy');
+    // v2.80.0 (compress.image honesty pass — lossy-only): the image-compress
+    // wire surface is now only {quality, metadata, output_format}. mode /
+    // icc_profile / progressive are no longer emitted.
     expect(wireOptions.quality).toBe(65);
     expect(wireOptions.metadata).toBe('all');
-    expect(wireOptions.icc_profile).toBe('strip');
-    expect(wireOptions.progressive).toBe(true);
     // VcPeRWdD (contracts v2.73.0): Size outputFormat re-pointed Smallest -> Original.
     expect(wireOptions.output_format).toBe('original');
+    expect('mode' in wireOptions).toBe(false);
+    expect('icc_profile' in wireOptions).toBe(false);
+    expect('progressive' in wireOptions).toBe(false);
     expect(resolvedOptions.preset).toBe(OptimizeFor.Size);
-    expect(resolvedOptions.sources.sdkDefault).toContain('mode');
-    expect(resolvedOptions.sources.sdkDefault).toContain('icc_profile');
+    expect(resolvedOptions.sources.sdkDefault).toContain('quality');
+    expect(resolvedOptions.sources.sdkDefault).toContain('metadata');
     expect(resolvedOptions.sources.sdkDefault).toContain('output_format');
     expect(resolvedOptions.sources.explicit).toEqual([]);
   });
@@ -107,15 +108,15 @@ describe('resolveCompressOptions — layer 1 (sdkDefault)', () => {
     expect(resolvedOptions.sources.sdkDefault).toContain('encoding_mode');
   });
 
-  it('image Quality cell — mode=lossless and quality undefined (no quality key on wire)', () => {
+  it('image Quality cell — quality 92 on wire, no mode key (v2.80.0 lossy-only)', () => {
     const { wireOptions } = resolveCompressOptions({
       media: 'image',
       op: 'compress',
       optimize: OptimizeFor.Quality,
       explicitOptions: {},
     });
-    expect(wireOptions.mode).toBe('lossless');
-    expect('quality' in wireOptions).toBe(false);
+    expect(wireOptions.quality).toBe(92);
+    expect('mode' in wireOptions).toBe(false);
   });
 });
 
@@ -135,9 +136,9 @@ describe('resolveCompressOptions — layer 2 (clientDefault)', () => {
       explicitOptions: {},
     });
     expect(wireOptions.quality).toBe(75); // client beats sdkDefault's 65
-    expect(wireOptions.mode).toBe('lossy'); // mode untouched by client, falls back to sdkDefault
+    expect(wireOptions.metadata).toBe('all'); // metadata untouched by client, falls back to sdkDefault
     expect(resolvedOptions.sources.clientDefault).toEqual(['quality']);
-    expect(resolvedOptions.sources.sdkDefault).toContain('mode');
+    expect(resolvedOptions.sources.sdkDefault).toContain('metadata');
   });
 
   it('client default for a different level does NOT apply when caller picks another level', () => {
@@ -175,8 +176,8 @@ describe('resolveCompressOptions — layer 3 (scopedDefault, reserved for T4c)',
       op: 'compress',
       optimize: OptimizeFor.Size,
       presetDefaults: presetDefaults().imageCompress(OptimizeFor.Size, { quality: 70 }),
-      presetOverrides: { progressive: false },
-      explicitOptions: { progressive: false },
+      presetOverrides: { quality: 60 },
+      explicitOptions: { quality: 60 },
     });
     expect(resolvedOptions.sources.scopedDefault).toEqual([]);
   });
@@ -264,11 +265,11 @@ describe('resolveCompressOptions — layer 5 (explicit) wins over every lower la
       media: 'image',
       op: 'compress',
       optimize: OptimizeFor.Size,
-      explicitOptions: { progressive: false, iccProfile: IccProfilePolicy.Preserve },
+      explicitOptions: { metadata: ImageMetadataPolicy.All, outputFormat: ImageFormat.Jpeg },
     });
-    expect(wireOptions.progressive).toBe(false);
-    expect(wireOptions.icc_profile).toBe('preserve');
-    expect([...resolvedOptions.sources.explicit].sort()).toEqual(['icc_profile', 'progressive']);
+    expect(wireOptions.metadata).toBe('all');
+    expect(wireOptions.output_format).toBe('jpeg');
+    expect([...resolvedOptions.sources.explicit].sort()).toEqual(['metadata', 'output_format']);
   });
 });
 
@@ -462,35 +463,6 @@ describe('resolveCompressOptions — invalid-combo validations', () => {
     }
   });
 
-  it('lossless + quality (post-merge) → reason=missing_dependency, conflictingFields=[quality, mode]', () => {
-    try {
-      resolveCompressOptions({
-        media: 'image',
-        op: 'compress',
-        explicitOptions: { mode: ImageMode.Lossless, quality: 90 },
-      });
-      throw new Error('expected throw');
-    } catch (err) {
-      const e = err as GislConfigError;
-      expect(e.reason).toBe('missing_dependency');
-      expect(e.conflictingFields).toEqual(['quality', 'mode']);
-      expect(e.resolvedSnapshot?.mode).toBe('lossless');
-    }
-  });
-
-  it('lossless from client default + quality from explicit → still rejects (post-merge)', () => {
-    const defaults = presetDefaults().imageCompress(OptimizeFor.Quality);
-    expect(() =>
-      resolveCompressOptions({
-        media: 'image',
-        op: 'compress',
-        optimize: OptimizeFor.Quality,
-        presetDefaults: defaults,
-        explicitOptions: { quality: 90 },
-      }),
-    ).toThrow(/quality.*Lossless|missing_dependency/);
-  });
-
   it('presetOverrides type mismatch (video-shaped overrides on image op) → reason=type_mismatch', () => {
     try {
       resolveCompressOptions({
@@ -620,15 +592,25 @@ describe('resolveCompressOptions — presetConfigHash', () => {
     );
   });
 
-  it('exact hash — override {quality:70, progressive:true} sorts keys', () => {
-    const { resolvedOptions } = resolveCompressOptions({
+  it('exact hash — override {metadata:"all", quality:70} canonical regardless of key order (cross-anchored with PHP)', () => {
+    // v2.80.0: `progressive` left the image wire surface, so this key-sorting
+    // anchor now uses two surviving image fields. Both insertion orders must
+    // produce the SAME byte-identical digest, also pinned in the PHP suite.
+    const a = resolveCompressOptions({
       media: 'image',
       op: 'compress',
-      presetOverrides: { quality: 70, progressive: true },
+      presetOverrides: { quality: 70, metadata: 'all' },
       explicitOptions: {},
-    });
-    expect(resolvedOptions.presetConfigHash).toBe(
-      'sha256:26aa8ab195e269b4dde191a94f5018e50fc84493251074c2974f90e88b93e40b',
+    }).resolvedOptions.presetConfigHash;
+    const b = resolveCompressOptions({
+      media: 'image',
+      op: 'compress',
+      presetOverrides: { metadata: 'all', quality: 70 },
+      explicitOptions: {},
+    }).resolvedOptions.presetConfigHash;
+    expect(a).toBe(b);
+    expect(a).toBe(
+      'sha256:62daaae9d0b8717221d87f7a2e9823cea7fd833220b5cda7cdcd9c845f96c104',
     );
   });
 
@@ -679,21 +661,21 @@ describe('resolveCompressOptions — presetConfigHash', () => {
     );
   });
 
-  it('exact hash — clientDefault {progressive:false} keeps falsy (cross-anchored with PHP)', () => {
-    // Guards the falsy-KEEP symmetry: TS `definedFieldsOf` drops only
-    // `undefined`, PHP `leafToRecord` drops only `null` — both KEEP `false`.
-    // Canonical clientDefault record is {progressive:false}. A regression
-    // where either SDK starts dropping `false` (e.g. a truthiness filter)
-    // would break exactly one pin.
+  it('exact hash — clientDefault {quality:0} keeps the falsy value in the hashed record (cross-anchored with PHP)', () => {
+    // v2.80.0 dropped the boolean `progressive` field that previously guarded
+    // the falsy-KEEP symmetry, so this now uses a falsy NUMBER (quality:0):
+    // TS `definedFieldsOf` drops only `undefined` (never 0/false), matching
+    // PHP's leaf normalisation. A regression where the registered cell is
+    // dropped because its only value is falsy would make the hash disappear.
     const { resolvedOptions } = resolveCompressOptions({
       media: 'image',
       op: 'compress',
       optimize: OptimizeFor.Size,
-      presetDefaults: presetDefaults().imageCompress(OptimizeFor.Size, { progressive: false }),
+      presetDefaults: presetDefaults().imageCompress(OptimizeFor.Size, { quality: 0 }),
       explicitOptions: {},
     });
     expect(resolvedOptions.presetConfigHash).toBe(
-      'sha256:bfb3f628b3f8aa42d05bde2afbc5a3fc88818da676a4bd7d47d2f93757be6976',
+      'sha256:65a242e8070dccc9befe4770232de2c9b2f83eb942e1644212dcafc26b03e8bb',
     );
   });
 });
@@ -720,7 +702,7 @@ describe('resolveCompressOptions — invariants', () => {
     const { resolvedOptions } = resolveCompressOptions({
       media: 'image',
       op: 'compress',
-      explicitOptions: { quality: 80, progressive: false },
+      explicitOptions: { quality: 80, metadata: ImageMetadataPolicy.All },
     });
     // Mirror exact contents.
     expect([...resolvedOptions.overrides].sort()).toEqual([...resolvedOptions.sources.explicit].sort());
@@ -783,13 +765,13 @@ describe('GislConfigError back-compat', () => {
 describe('PresetDefaults builder integration (T4a x T4b)', () => {
   it('builder produces a PresetDefaults whose cellFor returns the registered delta', () => {
     const d = presetDefaults()
-      .imageCompress(OptimizeFor.Size, { quality: 75, progressive: true })
+      .imageCompress(OptimizeFor.Size, { quality: 75, outputFormat: ImageFormat.Webp })
       .audioCompress(OptimizeFor.Balanced, { bitrate: AudioBitrate._192 });
     expect(d).toBeInstanceOf(PresetDefaults);
     const cell = d.cellFor('image', 'compress', OptimizeFor.Size);
     expect(cell).toBeInstanceOf(ImageCompressPresetOptions);
     expect(cell?.quality).toBe(75);
-    expect(cell?.progressive).toBe(true);
+    expect(cell?.outputFormat).toBe(ImageFormat.Webp);
   });
 
   it('shippedDefaultsFor wires up the same wire values the resolver consumes', () => {
@@ -852,14 +834,14 @@ describe('code-review R1 regression: presetConfigHash is canonical across nested
       media: 'image',
       op: 'compress',
       optimize: OptimizeFor.Size,
-      presetOverrides: { quality: 75, progressive: true } as Readonly<Record<string, unknown>>,
+      presetOverrides: { quality: 75, metadata: 'all' } as Readonly<Record<string, unknown>>,
       explicitOptions: {},
     }).resolvedOptions.presetConfigHash;
     const b = resolveCompressOptions({
       media: 'image',
       op: 'compress',
       optimize: OptimizeFor.Size,
-      presetOverrides: { progressive: true, quality: 75 } as Readonly<Record<string, unknown>>,
+      presetOverrides: { metadata: 'all', quality: 75 } as Readonly<Record<string, unknown>>,
       explicitOptions: {},
     }).resolvedOptions.presetConfigHash;
     expect(a).toBe(b);
@@ -909,9 +891,9 @@ describe('code-review R1 regression: type_mismatch suggestion uses correct Pasca
       media: 'image',
       op: 'compress',
       optimize: OptimizeFor.Size,
-      explicitOptions: { metadata: ImageMetadataPolicy.None, outputFormat: ImageFormat.Jpeg },
+      explicitOptions: { metadata: ImageMetadataPolicy.All, outputFormat: ImageFormat.Jpeg },
     });
-    expect(wireOptions.metadata).toBe('none');
+    expect(wireOptions.metadata).toBe('all');
     expect(wireOptions.output_format).toBe('jpeg');
   });
 });
@@ -1036,7 +1018,7 @@ describe('resolveCompressOptions — audio lossless bitrate drop (0Vcogefw)', ()
       audioLossless: true,
     });
     // Image has no bitrate concept; the flag changes nothing.
-    expect(wireOptions.mode).toBe('lossy');
+    expect(wireOptions.quality).toBe(65);
     expect('bitrate' in wireOptions).toBe(false);
   });
 });

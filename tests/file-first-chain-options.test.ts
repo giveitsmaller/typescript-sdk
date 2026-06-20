@@ -36,9 +36,13 @@ const operations = (r: Recipe): OperationDef[] => loweredJob(r).operations;
 
 describe('Recipe chain options — explicit options reach the wire', () => {
   it('convert(format, options) lowers the shorthand to output_format + merges the bag', () => {
-    const ops = operations(recipe('clip.mov').convert('mp4', { codec: 'h265', quality: 90 }));
+    // Image convert legitimately carries two passthrough keys (quality + background)
+    // — video convert is only { output_format, crf? } since v2.81.0.
+    const ops = operations(
+      recipe('photo.jpg').convert('webp', { quality: 90, background: '#ffffff' }),
+    );
     expect(ops).toEqual([
-      { type: 'convert', options: { output_format: 'mp4', codec: 'h265', quality: 90 } },
+      { type: 'convert', options: { output_format: 'webp', quality: 90, background: '#ffffff' } },
     ]);
   });
 
@@ -89,8 +93,8 @@ describe('Recipe chain options — explicit shorthand arg wins over a bag key', 
   it('convert(\'mp4\', { format: \'legacy\' }) drops the stray legacy format key (no double-key leak)', () => {
     // A `format` key in the bag is the OLD (wrong) wire key — the shorthand now
     // owns output_format, so the stray `format` must NOT leak onto the wire.
-    const ops = operations(recipe('clip.mov').convert('mp4', { format: 'legacy', codec: 'h264' }));
-    expect(ops[0].options).toEqual({ output_format: 'mp4', codec: 'h264' });
+    const ops = operations(recipe('clip.mov').convert('mp4', { format: 'legacy', crf: 23 }));
+    expect(ops[0].options).toEqual({ output_format: 'mp4', crf: 23 });
     expect(ops[0].options).not.toHaveProperty('format');
   });
 
@@ -383,13 +387,13 @@ describe('Recipe chain options — minimal forms unchanged (regression guard)', 
 describe('FilesRecipe chain options — fan-out threads options into every job', () => {
   it('convert(format, options) carries the option into EVERY job', () => {
     const payload = new FilesRecipe([fileInput.path('a.mov'), fileInput.path('b.mov')])
-      .convert('mp4', { codec: 'h265' })
+      .convert('mp4', { crf: 23 })
       .toWorkflowPayload(['f0', 'f1']);
 
     expect(payload.jobs).toHaveLength(2);
     payload.jobs.forEach((job) => {
       expect(job.operations).toEqual([
-        { type: 'convert', options: { output_format: 'mp4', codec: 'h265' } },
+        { type: 'convert', options: { output_format: 'mp4', crf: 23 } },
       ]);
     });
   });
@@ -452,13 +456,13 @@ describe('MergedRecipe chain options — post-combine ops carry options', () => 
 
   it('merge().convert(format, options) carries the bag onto the merge job', () => {
     const payload = mergedVideo(['a.mp4', 'b.mp4'])
-      .convert('webm', { codec: 'vp9' })
+      .convert('webm', { crf: 28 })
       .toWorkflowPayload(['f0', 'f1']);
 
     const mergeJob = payload.jobs[2];
     expect(mergeJob.operations[1]).toEqual({
       type: 'convert',
-      options: { output_format: 'webm', codec: 'vp9' },
+      options: { output_format: 'webm', crf: 28 },
     });
   });
 
