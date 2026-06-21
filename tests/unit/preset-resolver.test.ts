@@ -265,10 +265,10 @@ describe('resolveCompressOptions — layer 5 (explicit) wins over every lower la
       media: 'image',
       op: 'compress',
       optimize: OptimizeFor.Size,
-      explicitOptions: { metadata: ImageMetadataPolicy.All, outputFormat: ImageFormat.Jpeg },
+      explicitOptions: { metadata: ImageMetadataPolicy.All, outputFormat: ImageFormat.Webp },
     });
     expect(wireOptions.metadata).toBe('all');
-    expect(wireOptions.output_format).toBe('jpeg');
+    expect(wireOptions.output_format).toBe('webp');
     expect([...resolvedOptions.sources.explicit].sort()).toEqual(['metadata', 'output_format']);
   });
 });
@@ -891,10 +891,10 @@ describe('code-review R1 regression: type_mismatch suggestion uses correct Pasca
       media: 'image',
       op: 'compress',
       optimize: OptimizeFor.Size,
-      explicitOptions: { metadata: ImageMetadataPolicy.All, outputFormat: ImageFormat.Jpeg },
+      explicitOptions: { metadata: ImageMetadataPolicy.All, outputFormat: ImageFormat.Webp },
     });
     expect(wireOptions.metadata).toBe('all');
-    expect(wireOptions.output_format).toBe('jpeg');
+    expect(wireOptions.output_format).toBe('webp');
   });
 });
 

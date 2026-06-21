@@ -7,15 +7,10 @@ export const OptimizeFor = {
     Balanced: "Balanced",
     Quality: "Quality",
 };
-// Image output format selection. Original keeps input; Auto picks best per browser support; Smallest tries all and returns smallest.
+// Image output format for compress. Original keeps the input format; Webp recompresses to WebP. Other format changes (jpeg/png/avif/...) are the convert operation's job, not compress.
 export const ImageFormat = {
     Original: "original",
-    Auto: "auto",
-    Smallest: "smallest",
-    Jpeg: "jpeg",
-    Png: "png",
     Webp: "webp",
-    Avif: "avif",
 };
 // Image metadata handling. Single value today (Option B, 2026-06-20):
 //   All = strip all EXIF/IPTC/XMP (smallest file)

@@ -390,8 +390,11 @@ describe('ergonomic enums serialise to wire backing values', () => {
   it('ImageMetadataPolicy / ImageFormat', () => {
     // v2.80.0: ImageMetadataPolicy collapsed to a single `all` member;
     // ImageMode + IccProfilePolicy were removed entirely.
+    // v2.92.0: compress.image output_format facade pruned to the live set —
+    // ImageFormat now carries only Original + Webp.
     expect(ImageMetadataPolicy.All).toBe('all');
-    expect(ImageFormat.Smallest).toBe('smallest');
+    expect(ImageFormat.Original).toBe('original');
+    expect(ImageFormat.Webp).toBe('webp');
   });
 
   it('VideoCodec / VideoPreset', () => {

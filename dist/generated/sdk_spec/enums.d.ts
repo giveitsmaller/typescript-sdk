@@ -6,12 +6,7 @@ export declare const OptimizeFor: {
 export type OptimizeFor = typeof OptimizeFor[keyof typeof OptimizeFor];
 export declare const ImageFormat: {
     readonly Original: "original";
-    readonly Auto: "auto";
-    readonly Smallest: "smallest";
-    readonly Jpeg: "jpeg";
-    readonly Png: "png";
     readonly Webp: "webp";
-    readonly Avif: "avif";
 };
 export type ImageFormat = typeof ImageFormat[keyof typeof ImageFormat];
 export declare const ImageMetadataPolicy: {
@@ -89,12 +84,7 @@ export declare const ERGONOMIC_ENUMS: {
     };
     readonly ImageFormat: {
         readonly Original: "original";
-        readonly Auto: "auto";
-        readonly Smallest: "smallest";
-        readonly Jpeg: "jpeg";
-        readonly Png: "png";
         readonly Webp: "webp";
-        readonly Avif: "avif";
     };
     readonly ImageMetadataPolicy: {
         readonly All: "all";

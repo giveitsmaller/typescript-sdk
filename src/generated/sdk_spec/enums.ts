@@ -10,15 +10,10 @@ export const OptimizeFor = {
 } as const;
 export type OptimizeFor = typeof OptimizeFor[keyof typeof OptimizeFor];
 
-// Image output format selection. Original keeps input; Auto picks best per browser support; Smallest tries all and returns smallest.
+// Image output format for compress. Original keeps the input format; Webp recompresses to WebP. Other format changes (jpeg/png/avif/...) are the convert operation's job, not compress.
 export const ImageFormat = {
   Original: "original",
-  Auto: "auto",
-  Smallest: "smallest",
-  Jpeg: "jpeg",
-  Png: "png",
   Webp: "webp",
-  Avif: "avif",
 } as const;
 export type ImageFormat = typeof ImageFormat[keyof typeof ImageFormat];
 

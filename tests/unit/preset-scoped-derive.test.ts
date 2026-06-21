@@ -135,8 +135,9 @@ describe('client.withPresetDefaults — chained derives (a.withPresetDefaults(d1
     });
     const d1 = presetDefaults().imageCompress(OptimizeFor.Size, { quality: 80 });
     // v2.80.0: metadata collapsed to a single `All` member, so the d2-owned
-    // override field is now outputFormat (Jpeg), distinct from the parent's Webp.
-    const d2 = presetDefaults().imageCompress(OptimizeFor.Size, { outputFormat: ImageFormat.Jpeg });
+    // override field is outputFormat. v2.92.0: ImageFormat pruned to
+    // [Original, Webp], so d2 uses Original — distinct from the parent's Webp.
+    const d2 = presetDefaults().imageCompress(OptimizeFor.Size, { outputFormat: ImageFormat.Original });
     const chained = client.withPresetDefaults(d1).withPresetDefaults(d2);
     expect(chained).toBeDefined();
     // Resolve via the resolver directly (same scoped state the chained client carries).
@@ -152,8 +153,8 @@ describe('client.withPresetDefaults — chained derives (a.withPresetDefaults(d1
       scopedPresetDefaults: PresetDefaults.merge(d1, d2),
       explicitOptions: {},
     });
-    // outputFormat: d2 wins (Jpeg, not parent's Webp)
-    expect(wireOptions.output_format).toBe('jpeg');
+    // outputFormat: d2 wins (Original, not parent's Webp)
+    expect(wireOptions.output_format).toBe('original');
     // quality: d1 wins (80, not parent's 65), d2 didn't set it
     expect(wireOptions.quality).toBe(80);
     // metadata: parent's clientDefault still wins (All), scoped didn't set
