@@ -290,6 +290,9 @@ export type {
   RetryResponse,
   JobDownload,
   OperationDownload,
+  // The zip-all "download all" response shape (contracts v2.94.0) — reachable
+  // from WorkflowDownloadResponse.bundle; re-exported so consumers can name it.
+  DownloadBundle,
   WebhookPayload,
   WebhookOperationContext,
   JobResponse,
