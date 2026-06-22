@@ -96,17 +96,39 @@ function optionKeysOf(ops: OperationDef[], type: string): string[] {
 }
 
 describe('wire-key conformance — compress', () => {
+  // The SDK's single format-agnostic `image` media maps to the contract's
+  // image-family groups (`image` + every `image_*`); all other SDK media map
+  // 1:1 to a same-named mime group.
+  const imageFamilyGroups = (m: OperationMetadata): string[] =>
+    Object.keys(m.mime_groups).filter((g) => g === 'image' || g.startsWith('image_'));
+
+  // The contract option surface for a single SDK media: the UNION of every
+  // image-family group for `image`, else the one same-named mime group.
+  // mediaGroupOptionKeys asserts the group exists → a renamed/dropped
+  // PresetMedia⇄mime_group mapping fails loudly rather than silently skipping.
+  const contractOptionKeysForMedia = (media: string): Set<string> =>
+    media === 'image'
+      ? new Set<string>(
+          imageFamilyGroups(compressMetadata).flatMap(
+            (g) => [...mediaGroupOptionKeys(compressMetadata, g)],
+          ),
+        )
+      : mediaGroupOptionKeys(compressMetadata, media);
+
   // KNOWN_WIRE_FIELDS is the SDK's own declared compress wire vocabulary (the
   // post-rename allowlist the preset resolver validates against). Pin it to the
-  // contract so a contract rename/removal that the hand-maintained list misses
-  // fails CI instead of shipping a silently-wrong key.
-  it('every KNOWN_WIRE_FIELDS key is a real compress contract option', () => {
-    const contract = operationOptionKeys(compressMetadata);
-    const declared = new Set<string>();
-    for (const set of Object.values(KNOWN_WIRE_FIELDS)) {
-      for (const k of set) declared.add(k);
+  // contract PER MEDIA so a contract rename/removal that the hand-maintained list
+  // misses fails CI — AND so a key parked under the WRONG media (e.g. a PDF
+  // `grayscale` listed under document_office) is caught too, which the previous
+  // union-wide check would have let through as long as some media owned the key.
+  it('every KNOWN_WIRE_FIELDS key is a real compress contract option for its media', () => {
+    for (const media of Object.keys(KNOWN_WIRE_FIELDS)) {
+      assertKeysConform(
+        `compress[${media}]`,
+        KNOWN_WIRE_FIELDS[media as keyof typeof KNOWN_WIRE_FIELDS],
+        contractOptionKeysForMedia(media),
+      );
     }
-    assertKeysConform('compress', declared, contract);
   });
 
   // Reverse direction (7dUpPmDZ): the check above only catches a contract key
@@ -146,48 +168,73 @@ describe('wire-key conformance — compress', () => {
   // Document compress `quality` (contracts v2.83.0 document-compress honesty
   // pass): a stable, real per-document-group quality knob the ergonomic
   // document-compress preset path does not expose yet (the document preset DTOs
-  // carry profile/image_quality/strip_* but not `quality`) — omitted until a
-  // document-quality ergonomic option ships (tracked follow-up).
+  // carry profile/grayscale/image_quality/strip_* but not `quality`) — omitted
+  // until a document-quality ergonomic option ships (tracked follow-up).
+  //
+  // document_pdf `image_dpi` (contracts v2.96.0 Acrobat-PDF realignment
+  // Lw1LseYr): the PDF preset DTO now carries only {profile, grayscale}.
+  // `image_dpi` is a STABLE, worker-honored PER-CALL knob (not a preset cell) —
+  // omitted until a per-call PDF-DPI ergonomic option ships (tracked follow-up).
+  // The PDF `colorspace` / `pages` / `flatten_forms` are `planned` and live in
+  // PLANNED_OMISSIONS below (drift-guarded), NOT here.
   const INTENTIONALLY_OMITTED: Readonly<Record<string, ReadonlySet<string>>> = {
     image: new Set(['progressive', 'optimization_level', 'avif_speed']),
     audio: new Set(['output_format']),
     video: new Set(['output_format']),
-    document_pdf: new Set(['quality']),
+    document_pdf: new Set(['quality', 'image_dpi']),
     document_office: new Set(['quality']),
     document_odf: new Set(['quality']),
     document_epub: new Set(['quality']),
   };
 
-  // The SDK's single format-agnostic `image` media maps to the contract's
-  // image-family groups (`image` + every `image_*`); all other SDK media map
-  // 1:1 to a same-named mime group.
-  const imageFamilyGroups = (m: OperationMetadata): string[] =>
-    Object.keys(m.mime_groups).filter((g) => g === 'image' || g.startsWith('image_'));
+  // PLANNED_OMISSIONS: contract compress options omitted SPECIFICALLY BECAUSE the
+  // contract marks them `availability: 'planned'` (advertised-ahead, not yet read
+  // by the worker, FE-hidden). Kept separate from INTENTIONALLY_OMITTED (which is
+  // stable-but-deliberately-unexposed) so a drift-guard can assert these are
+  // STILL planned: if a future regen flips one to stable, the assertion below
+  // fails and forces a deliberate "expose it or reclassify it" decision instead
+  // of silently leaving a now-live option unreachable.
+  const PLANNED_OMISSIONS: Readonly<Record<string, ReadonlySet<string>>> = {
+    document_pdf: new Set(['colorspace', 'pages', 'flatten_forms']),
+  };
 
-  it('every contract compress option (per media) is in KNOWN_WIRE_FIELDS or the documented omission set', () => {
+  it('every contract compress option (per media) is in KNOWN_WIRE_FIELDS or a documented omission set', () => {
     for (const media of Object.keys(KNOWN_WIRE_FIELDS)) {
-      // For `image` the contract surface is the UNION of every image-family
-      // group (so a per-format option like optimization_level is captured);
-      // for other media it is the one same-named group. mediaGroupOptionKeys
-      // asserts the group exists → a renamed/dropped PresetMedia⇄mime_group
-      // mapping fails loudly rather than silently skipping.
-      const contractForMedia = media === 'image'
-        ? new Set<string>(
-            imageFamilyGroups(compressMetadata).flatMap(
-              (g) => [...mediaGroupOptionKeys(compressMetadata, g)],
-            ),
-          )
-        : mediaGroupOptionKeys(compressMetadata, media);
+      const contractForMedia = contractOptionKeysForMedia(media);
       const allowed = new Set<string>(KNOWN_WIRE_FIELDS[media as keyof typeof KNOWN_WIRE_FIELDS]);
       for (const k of INTENTIONALLY_OMITTED[media] ?? []) allowed.add(k);
+      for (const k of PLANNED_OMISSIONS[media] ?? []) allowed.add(k);
       const stray = [...contractForMedia].filter((k) => !allowed.has(k));
       expect(
         stray,
-        `compress[${media}]: contract option(s) ${JSON.stringify(stray)} are neither in ` +
-          `KNOWN_WIRE_FIELDS['${media}'] nor INTENTIONALLY_OMITTED['${media}'] — the ergonomic ` +
-          `resolver would throw 'unknown_field' on a field the wire accepts. Either add it to ` +
-          `KNOWN_WIRE_FIELDS (and its preset/alias plumbing) or document the omission.`,
+        `compress[${media}]: contract option(s) ${JSON.stringify(stray)} are in neither ` +
+          `KNOWN_WIRE_FIELDS['${media}'], INTENTIONALLY_OMITTED['${media}'], nor ` +
+          `PLANNED_OMISSIONS['${media}'] — the ergonomic resolver would throw 'unknown_field' on a ` +
+          `field the wire accepts. Either add it to KNOWN_WIRE_FIELDS (and its preset/alias ` +
+          `plumbing) or document the omission.`,
       ).toEqual([]);
+    }
+  });
+
+  // Drift-guard for PLANNED_OMISSIONS (closes the blind spot codex flagged): an
+  // option is allowed in the reverse check above purely because we asserted it is
+  // `planned`. Pin that assumption to the generated contract — if any of these is
+  // no longer `availability: 'planned'` (i.e. it went live), this fails so the
+  // omission is re-evaluated rather than silently masking a now-supported option.
+  it('every PLANNED_OMISSIONS option is still availability:planned in the contract', () => {
+    for (const [media, opts] of Object.entries(PLANNED_OMISSIONS)) {
+      const group = compressMetadata.mime_groups[media];
+      expect(group, `metadata has a '${media}' mime group`).toBeDefined();
+      for (const opt of opts) {
+        const meta = group.options[opt];
+        expect(meta, `compress[${media}].${opt} exists in the contract`).toBeDefined();
+        expect(
+          meta.availability,
+          `compress[${media}].${opt} is listed in PLANNED_OMISSIONS but is no longer ` +
+            `availability:'planned' (got ${JSON.stringify(meta.availability)}) — it likely went ` +
+            `live; expose it in KNOWN_WIRE_FIELDS or move it to INTENTIONALLY_OMITTED.`,
+        ).toBe('planned');
+      }
     }
   });
 

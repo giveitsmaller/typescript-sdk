@@ -62,10 +62,10 @@ export declare const AudioSampleRate: {
 };
 export type AudioSampleRate = typeof AudioSampleRate[keyof typeof AudioSampleRate];
 export declare const PdfProfile: {
-    readonly Web: "web";
-    readonly Print: "print";
-    readonly Archive: "archive";
-    readonly Max: "max";
+    readonly Screen: "screen";
+    readonly Ebook: "ebook";
+    readonly Printer: "printer";
+    readonly Prepress: "prepress";
 };
 export type PdfProfile = typeof PdfProfile[keyof typeof PdfProfile];
 export declare const PdfColorspace: {
@@ -132,10 +132,10 @@ export declare const ERGONOMIC_ENUMS: {
         readonly _48000: 48000;
     };
     readonly PdfProfile: {
-        readonly Web: "web";
-        readonly Print: "print";
-        readonly Archive: "archive";
-        readonly Max: "max";
+        readonly Screen: "screen";
+        readonly Ebook: "ebook";
+        readonly Printer: "printer";
+        readonly Prepress: "prepress";
     };
     readonly PdfColorspace: {
         readonly Unchanged: "unchanged";

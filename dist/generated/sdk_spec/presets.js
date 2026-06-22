@@ -52,19 +52,16 @@ export const PRESETS = Object.freeze({
     }),
     "document_pdf_compress": Object.freeze({
         Size: Object.freeze({
-            "profile": "Max",
-            "colorspace": "Grayscale",
-            "flattenForms": false,
+            "profile": "Screen",
+            "grayscale": true,
         }),
         Balanced: Object.freeze({
-            "profile": "Web",
-            "colorspace": "Unchanged",
-            "flattenForms": false,
+            "profile": "Ebook",
+            "grayscale": false,
         }),
         Quality: Object.freeze({
-            "profile": "Archive",
-            "colorspace": "Unchanged",
-            "flattenForms": false,
+            "profile": "Printer",
+            "grayscale": false,
         }),
     }),
     "document_office_compress": Object.freeze({

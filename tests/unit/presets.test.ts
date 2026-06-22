@@ -131,22 +131,20 @@ describe('VideoCompressPresetOptions.shippedDefaultsFor', () => {
 });
 
 describe('DocumentPdfCompressPresetOptions.shippedDefaultsFor', () => {
-  it('Size — Max profile + Grayscale colorspace + flattenForms=false', () => {
+  it('Size — Screen profile + grayscale=true (v2.96.0 Acrobat-PDF realignment)', () => {
     const opts = DocumentPdfCompressPresetOptions.shippedDefaultsFor(OptimizeFor.Size);
-    expect(opts.profile).toBe(PdfProfile.Max);
-    expect(opts.profile).toBe('max');
-    expect(opts.colorspace).toBe(PdfColorspace.Grayscale);
-    expect(opts.colorspace).toBe('grayscale');
-    expect(opts.flattenForms).toBe(false);
+    expect(opts.profile).toBe(PdfProfile.Screen);
+    expect(opts.profile).toBe('screen');
+    expect(opts.grayscale).toBe(true);
   });
 
-  it('Balanced / Quality differ on profile', () => {
-    expect(DocumentPdfCompressPresetOptions.shippedDefaultsFor(OptimizeFor.Balanced).profile).toBe(
-      PdfProfile.Web,
-    );
-    expect(DocumentPdfCompressPresetOptions.shippedDefaultsFor(OptimizeFor.Quality).profile).toBe(
-      PdfProfile.Archive,
-    );
+  it('Balanced / Quality differ on profile + drop grayscale', () => {
+    const balanced = DocumentPdfCompressPresetOptions.shippedDefaultsFor(OptimizeFor.Balanced);
+    expect(balanced.profile).toBe(PdfProfile.Ebook);
+    expect(balanced.grayscale).toBe(false);
+    const quality = DocumentPdfCompressPresetOptions.shippedDefaultsFor(OptimizeFor.Quality);
+    expect(quality.profile).toBe(PdfProfile.Printer);
+    expect(quality.grayscale).toBe(false);
   });
 });
 
@@ -325,7 +323,7 @@ describe('presetDefaults() / PresetDefaults', () => {
       .imageCompress(OptimizeFor.Size, { quality: 70 })
       .videoCompress(OptimizeFor.Quality, { codec: VideoCodec.H264, crf: 18 })
       .audioCompress(OptimizeFor.Balanced, { bitrate: AudioBitrate._192 })
-      .pdfCompress(OptimizeFor.Size, { profile: PdfProfile.Max })
+      .pdfCompress(OptimizeFor.Size, { profile: PdfProfile.Printer })
       .officeCompress(OptimizeFor.Balanced, { imageQuality: 75 })
       .odfCompress(OptimizeFor.Quality, { stripMetadata: false })
       .epubCompress(OptimizeFor.Size, { fontSubsetting: true });
@@ -333,7 +331,7 @@ describe('presetDefaults() / PresetDefaults', () => {
     expect(d.cellFor('image', 'compress', OptimizeFor.Size)?.quality).toBe(70);
     expect(d.cellFor('video', 'compress', OptimizeFor.Quality)?.crf).toBe(18);
     expect(d.cellFor('audio', 'compress', OptimizeFor.Balanced)?.bitrate).toBe(AudioBitrate._192);
-    expect(d.cellFor('document_pdf', 'compress', OptimizeFor.Size)?.profile).toBe(PdfProfile.Max);
+    expect(d.cellFor('document_pdf', 'compress', OptimizeFor.Size)?.profile).toBe(PdfProfile.Printer);
     expect(d.cellFor('document_office', 'compress', OptimizeFor.Balanced)?.imageQuality).toBe(75);
     expect(d.cellFor('document_odf', 'compress', OptimizeFor.Quality)?.stripMetadata).toBe(false);
     expect(d.cellFor('document_epub', 'compress', OptimizeFor.Size)?.fontSubsetting).toBe(true);
@@ -414,8 +412,8 @@ describe('ergonomic enums serialise to wire backing values', () => {
 
   it('AudioCodec / PdfProfile / PdfColorspace', () => {
     expect(AudioCodec.Aac).toBe('aac');
-    expect(PdfProfile.Web).toBe('web');
-    expect(PdfProfile.Archive).toBe('archive');
+    expect(PdfProfile.Screen).toBe('screen');
+    expect(PdfProfile.Prepress).toBe('prepress');
     expect(PdfColorspace.Grayscale).toBe('grayscale');
     expect(PdfColorspace.Unchanged).toBe('unchanged');
   });
@@ -482,7 +480,7 @@ describe('translateEnum (internal)', () => {
   it('happy path: known member resolves to wire backing value', () => {
     expect(translateEnum('VideoCodec', 'H264')).toBe('h264');
     expect(translateEnum('AudioBitrate', '_96')).toBe(96);
-    expect(translateEnum('PdfProfile', 'Web')).toBe('web');
+    expect(translateEnum('PdfProfile', 'Screen')).toBe('screen');
   });
 
   it('throws on unknown member name (no silent fall-through to wire)', () => {

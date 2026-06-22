@@ -1,3 +1,3 @@
-export declare const SDK_SPEC_VERSION: "1.8.0";
-export declare const PRESET_VERSION: "1.3";
-export declare const PRESET_CONFIG_HASH: "sha256:f28d0eeabb6a15477643a9816850bb728154ace6ac3c6ad0d319a589515d3b37";
+export declare const SDK_SPEC_VERSION: "2.0.0";
+export declare const PRESET_VERSION: "1.4";
+export declare const PRESET_CONFIG_HASH: "sha256:62fbada24e33f983dacb0f717b0c9bb80824a208c3dc7f9af8523026e783543a";

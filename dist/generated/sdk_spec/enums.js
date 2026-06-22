@@ -69,12 +69,12 @@ export const AudioSampleRate = {
     _44100: 44100,
     _48000: 48000,
 };
-// PDF optimization profile. Web = aggressive; Print = preserve quality; Archive = PDF/A; Max = smallest.
+// PDF Ghostscript preset. Screen = smallest; Ebook = mid; Printer = 300dpi; Prepress = print-production.
 export const PdfProfile = {
-    Web: "web",
-    Print: "print",
-    Archive: "archive",
-    Max: "max",
+    Screen: "screen",
+    Ebook: "ebook",
+    Printer: "printer",
+    Prepress: "prepress",
 };
 // PDF output color space.
 export const PdfColorspace = {

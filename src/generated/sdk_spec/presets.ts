@@ -59,19 +59,16 @@ export const PRESETS: PresetMatrix = Object.freeze({
   } as Readonly<Record<PresetLevel, PresetCell>>),
   "document_pdf_compress": Object.freeze({
     Size: Object.freeze({
-      "profile": "Max",
-      "colorspace": "Grayscale",
-      "flattenForms": false,
+      "profile": "Screen",
+      "grayscale": true,
     } as PresetCell),
     Balanced: Object.freeze({
-      "profile": "Web",
-      "colorspace": "Unchanged",
-      "flattenForms": false,
+      "profile": "Ebook",
+      "grayscale": false,
     } as PresetCell),
     Quality: Object.freeze({
-      "profile": "Archive",
-      "colorspace": "Unchanged",
-      "flattenForms": false,
+      "profile": "Printer",
+      "grayscale": false,
     } as PresetCell),
   } as Readonly<Record<PresetLevel, PresetCell>>),
   "document_office_compress": Object.freeze({

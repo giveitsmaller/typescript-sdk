@@ -88,12 +88,12 @@ export const AudioSampleRate = {
 } as const;
 export type AudioSampleRate = typeof AudioSampleRate[keyof typeof AudioSampleRate];
 
-// PDF optimization profile. Web = aggressive; Print = preserve quality; Archive = PDF/A; Max = smallest.
+// PDF Ghostscript preset. Screen = smallest; Ebook = mid; Printer = 300dpi; Prepress = print-production.
 export const PdfProfile = {
-  Web: "web",
-  Print: "print",
-  Archive: "archive",
-  Max: "max",
+  Screen: "screen",
+  Ebook: "ebook",
+  Printer: "printer",
+  Prepress: "prepress",
 } as const;
 export type PdfProfile = typeof PdfProfile[keyof typeof PdfProfile];
 

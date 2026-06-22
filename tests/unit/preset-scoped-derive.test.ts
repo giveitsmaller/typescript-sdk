@@ -274,7 +274,7 @@ describe('PresetDefaults.merge (static)', () => {
       .imageCompress(OptimizeFor.Size, { quality: 70 })
       .audioCompress(OptimizeFor.Size, { bitrate: AudioBitrate._128 })
       .videoCompress(OptimizeFor.Size, { codec: VideoCodec.H264 })
-      .pdfCompress(OptimizeFor.Size, { profile: PdfProfile.Web })
+      .pdfCompress(OptimizeFor.Size, { profile: PdfProfile.Printer })
       .officeCompress(OptimizeFor.Size, { imageQuality: 75 })
       .odfCompress(OptimizeFor.Size, { imageQuality: 75 })
       .epubCompress(OptimizeFor.Size, { imageQuality: 75 });
@@ -287,7 +287,7 @@ describe('PresetDefaults.merge (static)', () => {
     expect(merged.cellFor('audio', 'compress', OptimizeFor.Size)?.bitrate).toBe(AudioBitrate._320);
     // Non-overlapping cells: parent verbatim
     expect(merged.cellFor('video', 'compress', OptimizeFor.Size)?.codec).toBe(VideoCodec.H264);
-    expect(merged.cellFor('document_pdf', 'compress', OptimizeFor.Size)?.profile).toBe(PdfProfile.Web);
+    expect(merged.cellFor('document_pdf', 'compress', OptimizeFor.Size)?.profile).toBe(PdfProfile.Printer);
     expect(merged.cellFor('document_office', 'compress', OptimizeFor.Size)?.imageQuality).toBe(75);
     expect(merged.cellFor('document_odf', 'compress', OptimizeFor.Size)?.imageQuality).toBe(75);
     expect(merged.cellFor('document_epub', 'compress', OptimizeFor.Size)?.imageQuality).toBe(75);

@@ -856,8 +856,8 @@ describe('code-review R1 regression: type_mismatch suggestion uses correct Pasca
         media: 'image',
         op: 'compress',
         // PDF-flavoured fields on an image op — triggers type_mismatch
-        // (profile + colorspace + flattenForms all belong to document_pdf).
-        presetOverrides: { profile: 'web', colorspace: 'rgb', flattenForms: false },
+        // (profile + grayscale both belong to document_pdf).
+        presetOverrides: { profile: 'screen', grayscale: true },
         explicitOptions: {},
       });
       throw new Error('expected throw');
