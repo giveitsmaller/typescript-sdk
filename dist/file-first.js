@@ -14,6 +14,7 @@ import { _detectCompressMedia, _detectAudioLossless, _consumeSseToTerminal, _pol
 import { LazyHttpDownloader } from './lazy-downloader.js';
 import { resolveCompressOptions, } from './ergonomic/preset_resolver.js';
 import { validateVerbOptions, assertThumbnailDimensions } from './ergonomic/option_validation.js';
+import { resolveOutputRoute, tokenForMime, tokenForPath, isPlannedValue, FACADE_MANAGED_OUTPUTS, } from './ergonomic/image_output_routes.js';
 import { OptimizeFor } from './generated/sdk_spec/enums.js';
 import { uploadSource, jobOutputSource } from './types.js';
 // Value import used only at call-time (inside MergedRecipe.toWorkflowPayload),
@@ -488,6 +489,56 @@ export class Recipe {
         return this.withStep({ opType: 'thumbnail', options: wire });
     }
     /**
+     * Produce ONE transformed image: keep or change format, plus quality, resize
+     * and route-honored controls. The single user-facing image transform — the SDK
+     * resolves the route from `(input format, output_format)` against the contract's
+     * image-output-routes projection and lowers to that route's wire op:
+     * same-format → `compress` (optimiser, `output_format: 'original'`), format-change
+     * → `convert` (transcoder, `output_format: <fmt>`). Only options the resolved
+     * route honors are sent; a planned or not-honored option throws BEFORE upload.
+     * Resize (`width`/`height`/`fit`, via `options` or {@link resize}) stays on the
+     * SAME op — one output, never a separate thumbnail.
+     *
+     * `format` omitted → keep the input format (same-format optimiser route).
+     */
+    output(format, options = {}) {
+        // Eager pre-upload key validation (coarse: rejects keys no image route honors,
+        // + a bag-supplied output_format/format which the positional `format` owns).
+        validateVerbOptions('output', options);
+        const wire = {};
+        for (const [key, value] of Object.entries(options)) {
+            if (value !== undefined)
+                wire[key] = value;
+        }
+        // Store the REQUESTED format token under `output_format`; lowerOutputStep
+        // resolves the route and rewrites it to the wire value ('original' for
+        // same-format). Omitted format → no output_format key → same-format route.
+        if (format !== undefined)
+            wire.output_format = format;
+        return this.withStep({ opType: 'output', options: wire });
+    }
+    /**
+     * Resize as part of the Output transform. Merges `width`/`height`/`fit` into the
+     * PRECEDING `output()` step (one artifact); if no Output step precedes, appends a
+     * same-format Output step carrying the resize. Never emits a `thumbnail` op.
+     * `height` is optional — width-only resize preserves aspect ratio. Resize is
+     * raster-only (e.g. an SVG input has no resize on its route → throws at lower).
+     */
+    resize(width, height, fit) {
+        const resizeOptions = { width };
+        if (height !== undefined)
+            resizeOptions.height = height;
+        if (fit !== undefined)
+            resizeOptions.fit = fit;
+        const steps = [...this.steps];
+        const last = steps[steps.length - 1];
+        if (last !== undefined && last.opType === 'output') {
+            steps[steps.length - 1] = { opType: 'output', options: { ...last.options, ...resizeOptions } };
+            return new Recipe(this.input, this.recipeKey, steps, this.presetDefaults, this.scopedPresetDefaults, this.client);
+        }
+        return this.withStep({ opType: 'output', options: resizeOptions });
+    }
+    /**
      * Apply a text watermark. Single-input (the text is an option, not a
      * secondary file) — lowers to the `text_watermark` op with a `text` option;
      * `options` carries any additional per-op watermark options.
@@ -744,6 +795,11 @@ export class Recipe {
         return new Recipe(this.input, this.recipeKey, [...this.steps, step], this.presetDefaults, this.scopedPresetDefaults, this.client);
     }
     lowerStep(step, stepIndex) {
+        // The internal `output` step lowers to a `compress`/`convert` wire op per the
+        // route projection (it owns its own type + options resolution + gating).
+        if (step.opType === 'output')
+            return this.lowerOutputStep(step, stepIndex);
+        // After the early return, `step.opType` narrows to the wire op kinds.
         const options = step.opType === 'compress'
             ? this.lowerCompressOptions(step.options, stepIndex)
             : { ...step.options };
@@ -752,6 +808,103 @@ export class Recipe {
         return Object.keys(options).length === 0
             ? { type: step.opType }
             : { type: step.opType, options };
+    }
+    /**
+     * Lower an `output` step to its route's wire op. Resolves the route from the
+     * (chain-folded) input format token + the requested `output_format`, then emits
+     * `compress` (same_format) or `convert` (format_change) carrying only the
+     * route-honored options. A planned option (e.g. `lossless`), an option not
+     * honored on the resolved route (e.g. `progressive` on a format-change), a
+     * planned per-value (e.g. `metadata: 'keep'`), or an unrepresentable route all
+     * throw a typed {@link GislConfigError} BEFORE upload. Resize (`width`/`height`/
+     * `fit`) is input-keyed (raster only) and rides whichever op the route selects.
+     */
+    lowerOutputStep(step, stepIndex) {
+        const requested = typeof step.options.output_format === 'string' ? step.options.output_format : undefined;
+        const inputToken = this.outputInputToken(stepIndex);
+        if (inputToken === undefined) {
+            // Undetectable input (bare upload id / unnamed blob) → the route can't be
+            // resolved. Only the legacy compress facade for a facade-managed output
+            // (webp) + quality is expressible without knowing the input; anything else
+            // (resize, a same-format optimise, a non-facade target) needs a detectable
+            // input. Mirrors lowerCompressOptions' media_unknown fail-fast.
+            if (requested !== undefined && FACADE_MANAGED_OUTPUTS.includes(requested)) {
+                const facade = { output_format: requested };
+                for (const [key, value] of Object.entries(step.options)) {
+                    if (key === 'output_format' || value === undefined)
+                        continue;
+                    if (key !== 'quality') {
+                        throw new GislConfigError(`output(): '${key}' needs a detectable input format to route; reference the file by ` +
+                            'a path with an extension (or a named/typed Blob) rather than a bare upload id.', { reason: 'media_unknown', conflictingFields: [key] });
+                    }
+                    facade[key] = value;
+                }
+                return { type: 'compress', options: facade };
+            }
+            throw new GislConfigError('output() needs a detectable input format to resolve the route (same-format optimise vs ' +
+                'format-change transcode); reference the file by a path with an extension, or a Blob with ' +
+                'a media type / filename, rather than a bare upload id.', { reason: 'media_unknown', conflictingFields: ['output_format'] });
+        }
+        const resolved = resolveOutputRoute(inputToken, requested);
+        if (resolved === undefined) {
+            throw new GislConfigError(`output(): cannot produce ${requested === undefined ? 'this output' : `'${requested}'`} ` +
+                `from a '${inputToken}' input — no such image Output route.`, { reason: 'unsupported_route', conflictingFields: ['output_format'] });
+        }
+        const wireOptions = { output_format: resolved.outputFormatWire };
+        for (const [key, value] of Object.entries(step.options)) {
+            if (key === 'output_format' || value === undefined)
+                continue;
+            if (resolved.planned.has(key)) {
+                throw new GislConfigError(`output(): '${key}' is advertised but not available yet on the ${resolved.route} route ` +
+                    `for '${resolved.inputToken}' images (planned). It will work once stable-flipped.`, { reason: 'feature_not_available', conflictingFields: [key] });
+            }
+            if (!resolved.honored.has(key)) {
+                throw new GislConfigError(`output(): '${key}' is not honored on the ${resolved.route} route ` +
+                    `(${resolved.inputToken} → ${requested ?? resolved.inputToken}). ` +
+                    'Check it applies to this format/route combination.', { reason: 'option_not_on_route', conflictingFields: [key] });
+            }
+            if (isPlannedValue(resolved.inputToken, key, value)) {
+                throw new GislConfigError(`output(): '${key}: ${String(value)}' is advertised but not available yet (planned).`, { reason: 'feature_not_available', conflictingFields: [key] });
+            }
+            wireOptions[key] = value;
+        }
+        return { type: resolved.sourceOp, options: wireOptions };
+    }
+    /**
+     * The input format token an `output` step at `uptoIndex` operates on — the
+     * original input's token, FOLDED through preceding `convert`/`output` steps that
+     * change the format (mirrors {@link compressMediaHint}). Undefined when the input
+     * media is not inferable (a bare upload id / unnamed, untyped Blob).
+     */
+    outputInputToken(uptoIndex) {
+        let token = this.inputFormatToken();
+        if (uptoIndex === undefined)
+            return token;
+        for (let i = 0; i < uptoIndex; i++) {
+            const prior = this.steps[i];
+            if (prior.opType === 'convert' || prior.opType === 'output') {
+                const fmt = prior.options.output_format;
+                // A same-format `output` step carries no output_format (or 'original') →
+                // token unchanged; a format target (e.g. 'webp') advances it.
+                if (typeof fmt === 'string')
+                    token = tokenForPath(`f.${fmt}`) ?? token;
+            }
+        }
+        return token;
+    }
+    /** The original input's image format token (path ext / Blob type / Blob name). */
+    inputFormatToken() {
+        if (this.input.kind === 'path')
+            return tokenForPath(this.input.path);
+        if (this.input.kind === 'blob') {
+            const blob = this.input.blob;
+            const fromType = blob.type ? tokenForMime(blob.type) : undefined;
+            if (fromType !== undefined)
+                return fromType;
+            const name = blob.name;
+            return name !== undefined ? tokenForPath(name) : undefined;
+        }
+        return undefined; // uploadId — undetectable
     }
     lowerCompressOptions(stepOptions, uptoIndex) {
         // Mirror the op-first resolver precedence (OperationBuilder._resolve in

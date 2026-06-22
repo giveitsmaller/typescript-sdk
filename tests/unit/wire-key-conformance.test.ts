@@ -177,8 +177,21 @@ describe('wire-key conformance — compress', () => {
   // omitted until a per-call PDF-DPI ergonomic option ships (tracked follow-up).
   // The PDF `colorspace` / `pages` / `flatten_forms` are `planned` and live in
   // PLANNED_OMISSIONS below (drift-guarded), NOT here.
+  // image Output-facade knobs (contracts v2.97.0 tewB37Jg): compress.image* now
+  // also carries width/height/fit (Resize-inside-Output) + lossless/lossy. These
+  // are the image OUTPUT facade surface — exposed/gated by the ergonomic
+  // `output()`/`resize()` verbs (see file-first-output.test.ts), NOT the
+  // preset-driven `compress()` verb, whose resolver emits only quality/metadata/
+  // output_format. Their availability + route gating is pinned by
+  // output-route-conformance.test.ts (the projection honored/planned), so they
+  // are omitted from the compress() KNOWN_WIRE_FIELDS here:
+  //   - width / height / fit  (stable resize; output().resize())
+  //   - lossless / lossy      (planned; gated unavailable by output())
   const INTENTIONALLY_OMITTED: Readonly<Record<string, ReadonlySet<string>>> = {
-    image: new Set(['progressive', 'optimization_level', 'avif_speed']),
+    image: new Set([
+      'progressive', 'optimization_level', 'avif_speed',
+      'width', 'height', 'fit', 'lossless', 'lossy',
+    ]),
     audio: new Set(['output_format']),
     video: new Set(['output_format']),
     document_pdf: new Set(['quality', 'image_dpi']),
@@ -378,7 +391,11 @@ describe('wire-key conformance — archive', () => {
  * Mirrored by the PHP `WireKeyConformanceTest`.
  */
 describe('option-key validation conformance — validator + typed interfaces vs OperationMetadata', () => {
-  const expectedContract: Record<ValidatedVerb, ReadonlySet<string>> = {
+  // `output` is EXCLUDED here — its contract source is the image-output-routes
+  // PROJECTION (not a single op's OperationMetadata), so its validator/typed-key
+  // conformance is owned by `output-route-conformance.test.ts`.
+  type MetadataVerb = Exclude<ValidatedVerb, 'output'>;
+  const expectedContract: Record<MetadataVerb, ReadonlySet<string>> = {
     convert: operationOptionKeys(convertMetadata),
     thumbnail: operationOptionKeys(thumbnailMetadata),
     textWatermark: operationOptionKeys(textWatermarkMetadata),
@@ -393,12 +410,12 @@ describe('option-key validation conformance — validator + typed interfaces vs 
   // CONTRACT keys a verb owns via its first argument (so they are excluded from
   // the typed interface). `format` is an SDK alias, NOT a contract key, so it is
   // absent here — it is rejected by the positional guard, not the contract set.
-  const positionalOwnedContractKeys: Partial<Record<ValidatedVerb, readonly string[]>> = {
+  const positionalOwnedContractKeys: Partial<Record<MetadataVerb, readonly string[]>> = {
     convert: ['output_format'],
     textWatermark: ['text'],
   };
 
-  const verbs: ValidatedVerb[] = ['convert', 'thumbnail', 'textWatermark', 'watermark'];
+  const verbs: MetadataVerb[] = ['convert', 'thumbnail', 'textWatermark', 'watermark'];
 
   it.each(verbs)('%s: runtime validator allowed-key set equals the contract option set', (verb) => {
     expect([...allowedKeysFor(verb)].sort()).toEqual([...expectedContract[verb]].sort());

@@ -473,6 +473,10 @@ function applyLoweringOp(recipe: Recipe, op: FixtureLoweringOp): Recipe {
       return recipe.thumbnail(thumbnailDimsOf(op));
     case 'text_watermark':
       return recipe.textWatermark(op.text as string);
+    case 'output':
+      return recipe.output(op.format, (op.options ?? {}) as Parameters<Recipe['output']>[1]);
+    case 'resize':
+      return recipe.resize(op.width as number, op.height, op.fit as Parameters<Recipe['resize']>[2]);
     default:
       throw new Error(`[lowering] unknown op '${String((op as { op: string }).op)}'`);
   }

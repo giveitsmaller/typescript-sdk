@@ -1,5 +1,6 @@
 import { convertMetadata, thumbnailMetadata, textWatermarkMetadata, imageWatermarkMetadata, videoWatermarkMetadata, } from '@giveitsmaller/contracts/operations';
 import { GislConfigError } from '../errors.js';
+import { VERB_OPTION_KEYS } from './option_types.js';
 /**
  * Eager, synchronous, PRE-UPLOAD option-key validation for the ergonomic verbs
  * (card Dhje3Faq). The file-first builders accept verb options as untyped bags;
@@ -52,6 +53,15 @@ const ALLOWED_KEYS = {
     thumbnail: operationOptionKeys(thumbnailMetadata),
     textWatermark: operationOptionKeys(textWatermarkMetadata),
     watermark: union(operationOptionKeys(imageWatermarkMetadata), operationOptionKeys(videoWatermarkMetadata)),
+    // `output` is the image Output facade — its allowed keys are the UNION of every
+    // image route's honored+planned options (the image-output-routes projection),
+    // INCLUDING `output_format` (in every cell's honored set) which — like `convert`
+    // — is in the allowed set but rejected first by the positional-owned guard. This
+    // is the COARSE static gate (reject keys no image route ever honors, e.g. a video
+    // `crf`); the precise per-route honored/planned narrowing happens in the
+    // `output()` lowering (`resolveOutputRoute`). Pinned to the projection union by
+    // the output-route conformance test.
+    output: new Set([...VERB_OPTION_KEYS.output, 'output_format']),
 };
 /**
  * Keys a verb OWNS via a positional argument: a user must not also supply them
@@ -63,6 +73,9 @@ const ALLOWED_KEYS = {
 const POSITIONAL_OWNED = {
     convert: ['output_format', 'format'],
     textWatermark: ['text'],
+    // `output(format, …)` sets the target format via its first argument; the wire
+    // key `output_format` and the SDK alias `format` must not be supplied in the bag.
+    output: ['output_format', 'format'],
 };
 /** Accessor for the conformance guard (pins these sets to the contract metadata). */
 export function allowedKeysFor(verb) {

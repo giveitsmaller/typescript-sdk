@@ -25,7 +25,7 @@ import { type OperationMetadata } from '@giveitsmaller/contracts/operations';
  */
 export declare function operationOptionKeys(metadata: OperationMetadata): ReadonlySet<string>;
 /** The ergonomic verbs whose option bags this module key-validates. */
-export type ValidatedVerb = 'convert' | 'thumbnail' | 'textWatermark' | 'watermark';
+export type ValidatedVerb = 'convert' | 'thumbnail' | 'textWatermark' | 'watermark' | 'output';
 /** Accessor for the conformance guard (pins these sets to the contract metadata). */
 export declare function allowedKeysFor(verb: ValidatedVerb): ReadonlySet<string>;
 /**

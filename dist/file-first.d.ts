@@ -13,7 +13,7 @@ import { GislItemFailedError } from './errors.js';
 import { type ProgressEvent } from './builder.js';
 import type { GislClient } from './client.js';
 import type { OperationDownload, WorkflowStatusResponse } from '@giveitsmaller/contracts/openapi';
-import type { ConvertOptions, ThumbnailOptions, TextWatermarkOptions, WatermarkOptions } from './ergonomic/option_types.js';
+import type { ConvertOptions, ThumbnailOptions, TextWatermarkOptions, WatermarkOptions, OutputOptions, OutputFit } from './ergonomic/option_types.js';
 import { OptimizeFor } from './generated/sdk_spec/enums.js';
 import type { PresetDefaults } from './ergonomic/presets/index.js';
 import type { WorkflowCreatePayload } from './types.js';
@@ -295,7 +295,7 @@ export declare const fileInput: {
 };
 /** One step in a {@link Recipe}'s chain — an op kind + captured ergonomic args. */
 interface RecipeStep {
-    readonly opType: 'compress' | 'convert' | 'thumbnail' | 'text_watermark';
+    readonly opType: 'compress' | 'convert' | 'thumbnail' | 'text_watermark' | 'output';
     readonly options: Readonly<Record<string, unknown>>;
 }
 /**
@@ -349,6 +349,28 @@ export declare class Recipe {
      * dropped from the wire options (not sent as `undefined`).
      */
     thumbnail(options: ThumbnailOptions): Recipe;
+    /**
+     * Produce ONE transformed image: keep or change format, plus quality, resize
+     * and route-honored controls. The single user-facing image transform — the SDK
+     * resolves the route from `(input format, output_format)` against the contract's
+     * image-output-routes projection and lowers to that route's wire op:
+     * same-format → `compress` (optimiser, `output_format: 'original'`), format-change
+     * → `convert` (transcoder, `output_format: <fmt>`). Only options the resolved
+     * route honors are sent; a planned or not-honored option throws BEFORE upload.
+     * Resize (`width`/`height`/`fit`, via `options` or {@link resize}) stays on the
+     * SAME op — one output, never a separate thumbnail.
+     *
+     * `format` omitted → keep the input format (same-format optimiser route).
+     */
+    output(format?: string, options?: OutputOptions): Recipe;
+    /**
+     * Resize as part of the Output transform. Merges `width`/`height`/`fit` into the
+     * PRECEDING `output()` step (one artifact); if no Output step precedes, appends a
+     * same-format Output step carrying the resize. Never emits a `thumbnail` op.
+     * `height` is optional — width-only resize preserves aspect ratio. Resize is
+     * raster-only (e.g. an SVG input has no resize on its route → throws at lower).
+     */
+    resize(width: number, height?: number, fit?: OutputFit): Recipe;
     /**
      * Apply a text watermark. Single-input (the text is an option, not a
      * secondary file) — lowers to the `text_watermark` op with a `text` option;
@@ -452,6 +474,26 @@ export declare class Recipe {
     private _uploadAndCreate;
     private withStep;
     private lowerStep;
+    /**
+     * Lower an `output` step to its route's wire op. Resolves the route from the
+     * (chain-folded) input format token + the requested `output_format`, then emits
+     * `compress` (same_format) or `convert` (format_change) carrying only the
+     * route-honored options. A planned option (e.g. `lossless`), an option not
+     * honored on the resolved route (e.g. `progressive` on a format-change), a
+     * planned per-value (e.g. `metadata: 'keep'`), or an unrepresentable route all
+     * throw a typed {@link GislConfigError} BEFORE upload. Resize (`width`/`height`/
+     * `fit`) is input-keyed (raster only) and rides whichever op the route selects.
+     */
+    private lowerOutputStep;
+    /**
+     * The input format token an `output` step at `uptoIndex` operates on — the
+     * original input's token, FOLDED through preceding `convert`/`output` steps that
+     * change the format (mirrors {@link compressMediaHint}). Undefined when the input
+     * media is not inferable (a bare upload id / unnamed, untyped Blob).
+     */
+    private outputInputToken;
+    /** The original input's image format token (path ext / Blob type / Blob name). */
+    private inputFormatToken;
     private lowerCompressOptions;
     /** Media of the original input (no chain context) — used by the probe gate. */
     private inputMedia;

@@ -129,6 +129,50 @@ const WATERMARK_OPTION_KEYS = [
   'anchor', 'margin_x', 'margin_y', 'opacity', 'overlay_width',
 ] as const;
 
+// ---- output (image Output facade; output_format is positional-owned → excluded) ----
+/** Resize mode (contract `fit` enum, v2.97.0). */
+export type OutputFit = 'max' | 'crop' | 'scale';
+/** Metadata policy (contract `metadata` enum, v2.97.0). `keep` is `availability:planned`. */
+export type OutputMetadata = 'all' | 'keep';
+
+/**
+ * Options for the file-first `output()` image transform. The KEY SET is the
+ * UNION of every image route's honored + planned option keys (image-output-routes
+ * projection); the PER-ROUTE honored/planned narrowing happens in the lowering
+ * (`resolveOutputRoute`), so supplying an option not honored on the resolved
+ * route (or a planned one) throws pre-upload. `output_format` is set via the
+ * positional `format` argument, so it is excluded here. Resize (`width`/`height`/
+ * `fit`) is honored on raster routes; `height` is optional (width-only resize).
+ */
+export interface OutputOptions {
+  /** Output quality for lossy formats (1-100). Honored: avif/jpeg/webp routes. */
+  quality?: number;
+  /** Resize target width in px (1-16384; width*height <= 16MP). */
+  width?: number;
+  /** Resize target height in px (optional — width-only resize preserves aspect). */
+  height?: number;
+  /** Resize mode (applies when width or height is set). */
+  fit?: OutputFit;
+  /** Background colour (hex) for transparent images → JPEG. Honored: format_change→jpeg only. */
+  background?: string;
+  /** Progressive JPEG. Honored: same_format jpeg only. */
+  progressive?: boolean;
+  /** PNG lossless optimisation effort. Honored: same_format png only. */
+  optimization_level?: number;
+  /** AVIF encode speed. Honored: same_format avif only. */
+  avif_speed?: number;
+  /** Metadata policy. Honored: same_format routes. (`keep` value is planned.) */
+  metadata?: OutputMetadata;
+  /** JPEG/WebP lossless. PLANNED (gated unavailable). */
+  lossless?: boolean;
+  /** Lossy PNG quantization. PLANNED (gated unavailable; licence-gated). */
+  lossy?: boolean;
+}
+const OUTPUT_OPTION_KEYS = [
+  'quality', 'width', 'height', 'fit', 'background', 'progressive',
+  'optimization_level', 'avif_speed', 'metadata', 'lossless', 'lossy',
+] as const;
+
 // --- Source-level drift guard: interface keys must equal the key tuple (tsc-enforced). ---
 // `Equal<A, B>` is `true` only when A and B are the SAME union; assigning `true` to it
 // fails to compile if an interface key is added/removed without updating its tuple. The
@@ -140,11 +184,13 @@ const _convertKeysMatch: Equal<keyof ConvertOptions, (typeof CONVERT_OPTION_KEYS
 const _thumbnailKeysMatch: Equal<keyof ThumbnailOptions, (typeof THUMBNAIL_OPTION_KEYS)[number]> = true;
 const _textWatermarkKeysMatch: Equal<keyof TextWatermarkOptions, (typeof TEXT_WATERMARK_OPTION_KEYS)[number]> = true;
 const _watermarkKeysMatch: Equal<keyof WatermarkOptions, (typeof WATERMARK_OPTION_KEYS)[number]> = true;
+const _outputKeysMatch: Equal<keyof OutputOptions, (typeof OUTPUT_OPTION_KEYS)[number]> = true;
 // Reference the assertions so `noUnusedLocals` doesn't strip them.
 void _convertKeysMatch;
 void _thumbnailKeysMatch;
 void _textWatermarkKeysMatch;
 void _watermarkKeysMatch;
+void _outputKeysMatch;
 
 /**
  * The user-supplyable option keys per verb (excludes positional-owned keys).
@@ -156,4 +202,5 @@ export const VERB_OPTION_KEYS = {
   thumbnail: THUMBNAIL_OPTION_KEYS,
   textWatermark: TEXT_WATERMARK_OPTION_KEYS,
   watermark: WATERMARK_OPTION_KEYS,
+  output: OUTPUT_OPTION_KEYS,
 } as const;

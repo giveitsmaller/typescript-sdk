@@ -95,12 +95,16 @@ export interface FixtureLoweringFile {
 }
 
 export interface FixtureLoweringOp {
-  readonly op: 'compress' | 'convert' | 'thumbnail' | 'text_watermark';
+  readonly op: 'compress' | 'convert' | 'thumbnail' | 'text_watermark' | 'output' | 'resize';
   readonly optimize?: string;
   readonly format?: string;
   readonly width?: number;
   readonly height?: number;
   readonly text?: string;
+  /** output: the OutputOptions bag (quality/metadata/background/progressive/…). */
+  readonly options?: Readonly<Record<string, unknown>>;
+  /** resize / output: the fit mode (max|crop|scale). */
+  readonly fit?: string;
 }
 
 /**
@@ -880,10 +884,10 @@ export function validateFixture(raw: unknown, file: string): Fixture {
   };
 }
 
-const LOWERING_OPS = new Set(['compress', 'convert', 'thumbnail', 'text_watermark']);
+const LOWERING_OPS = new Set(['compress', 'convert', 'thumbnail', 'text_watermark', 'output', 'resize']);
 const LOWERING_KEYS = new Set(['file', 'resolvedFileId', 'operations', 'watermark']);
 const LOWERING_FILE_KEYS = new Set(['kind', 'path', 'uploadId', 'key']);
-const LOWERING_OP_KEYS = new Set(['op', 'optimize', 'format', 'width', 'height', 'text']);
+const LOWERING_OP_KEYS = new Set(['op', 'optimize', 'format', 'width', 'height', 'text', 'options', 'fit']);
 // FF4a (Z7zTr789) — watermark sub-block keys + post-op grammar (no text_watermark).
 const WATERMARK_KEYS = new Set(['overlay', 'options', 'post']);
 const WATERMARK_OVERLAY_KEYS = new Set(['file', 'resolvedFileId', 'operations']);

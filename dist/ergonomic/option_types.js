@@ -28,15 +28,21 @@ const TEXT_WATERMARK_OPTION_KEYS = [
 const WATERMARK_OPTION_KEYS = [
     'anchor', 'margin_x', 'margin_y', 'opacity', 'overlay_width',
 ];
+const OUTPUT_OPTION_KEYS = [
+    'quality', 'width', 'height', 'fit', 'background', 'progressive',
+    'optimization_level', 'avif_speed', 'metadata', 'lossless', 'lossy',
+];
 const _convertKeysMatch = true;
 const _thumbnailKeysMatch = true;
 const _textWatermarkKeysMatch = true;
 const _watermarkKeysMatch = true;
+const _outputKeysMatch = true;
 // Reference the assertions so `noUnusedLocals` doesn't strip them.
 void _convertKeysMatch;
 void _thumbnailKeysMatch;
 void _textWatermarkKeysMatch;
 void _watermarkKeysMatch;
+void _outputKeysMatch;
 /**
  * The user-supplyable option keys per verb (excludes positional-owned keys).
  * Exported for the wire-key conformance guard, which asserts each tuple ∪ its
@@ -47,4 +53,5 @@ export const VERB_OPTION_KEYS = {
     thumbnail: THUMBNAIL_OPTION_KEYS,
     textWatermark: TEXT_WATERMARK_OPTION_KEYS,
     watermark: WATERMARK_OPTION_KEYS,
+    output: OUTPUT_OPTION_KEYS,
 };

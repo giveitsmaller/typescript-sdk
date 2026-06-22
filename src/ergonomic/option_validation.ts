@@ -8,6 +8,7 @@ import {
 } from '@giveitsmaller/contracts/operations';
 
 import { GislConfigError } from '../errors.js';
+import { VERB_OPTION_KEYS } from './option_types.js';
 
 /**
  * Eager, synchronous, PRE-UPLOAD option-key validation for the ergonomic verbs
@@ -44,7 +45,7 @@ export function operationOptionKeys(metadata: OperationMetadata): ReadonlySet<st
 }
 
 /** The ergonomic verbs whose option bags this module key-validates. */
-export type ValidatedVerb = 'convert' | 'thumbnail' | 'textWatermark' | 'watermark';
+export type ValidatedVerb = 'convert' | 'thumbnail' | 'textWatermark' | 'watermark' | 'output';
 
 function union(...sets: ReadonlySet<string>[]): ReadonlySet<string> {
   const out = new Set<string>();
@@ -63,6 +64,15 @@ const ALLOWED_KEYS: Readonly<Record<ValidatedVerb, ReadonlySet<string>>> = {
   thumbnail: operationOptionKeys(thumbnailMetadata),
   textWatermark: operationOptionKeys(textWatermarkMetadata),
   watermark: union(operationOptionKeys(imageWatermarkMetadata), operationOptionKeys(videoWatermarkMetadata)),
+  // `output` is the image Output facade — its allowed keys are the UNION of every
+  // image route's honored+planned options (the image-output-routes projection),
+  // INCLUDING `output_format` (in every cell's honored set) which — like `convert`
+  // — is in the allowed set but rejected first by the positional-owned guard. This
+  // is the COARSE static gate (reject keys no image route ever honors, e.g. a video
+  // `crf`); the precise per-route honored/planned narrowing happens in the
+  // `output()` lowering (`resolveOutputRoute`). Pinned to the projection union by
+  // the output-route conformance test.
+  output: new Set<string>([...VERB_OPTION_KEYS.output, 'output_format']),
 };
 
 /**
@@ -75,6 +85,9 @@ const ALLOWED_KEYS: Readonly<Record<ValidatedVerb, ReadonlySet<string>>> = {
 const POSITIONAL_OWNED: Partial<Record<ValidatedVerb, readonly string[]>> = {
   convert: ['output_format', 'format'],
   textWatermark: ['text'],
+  // `output(format, …)` sets the target format via its first argument; the wire
+  // key `output_format` and the SDK alias `format` must not be supplied in the bag.
+  output: ['output_format', 'format'],
 };
 
 /** Accessor for the conformance guard (pins these sets to the contract metadata). */
