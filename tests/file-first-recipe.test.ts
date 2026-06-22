@@ -39,7 +39,7 @@ describe('Recipe — immutability (clone-on-write)', () => {
   it('two branches off one base are independent', () => {
     const base = recipe('clip.mov');
     const branchA = base.convert('mp4').compress(OptimizeFor.Size);
-    const branchB = base.thumbnail({ width: 320 });
+    const branchB = base.thumbnail({ width: 320, height: 240 });
 
     expect(base.stepCount).toBe(0);
     expect(branchA.stepCount).toBe(2);
@@ -91,16 +91,29 @@ describe('Recipe — single-op lowering', () => {
     ]);
   });
 
-  it('thumbnail omits an unset dimension', () => {
-    const ops = operations(recipe('photo.jpg').thumbnail({ width: 320 }));
-    expect(ops).toEqual([{ type: 'thumbnail', options: { width: 320 } }]);
-    expect(ops[0].options).not.toHaveProperty('height');
+  it('thumbnail rejects a missing height', () => {
+    // The contract marks BOTH width and height required for image/video/document.
+    // A JS caller omitting one (the typed interface forbids it) is rejected
+    // eagerly at the verb call (assertThumbnailDimensions), before any upload.
+    expect(() => recipe('photo.jpg').thumbnail({ width: 320 } as never)).toThrow(GislConfigError);
+    try {
+      recipe('photo.jpg').thumbnail({ width: 320 } as never);
+      expect.unreachable('thumbnail without a height must throw');
+    } catch (err) {
+      expect((err as GislConfigError).reason).toBe('missing_required_field');
+      expect((err as GislConfigError).conflictingFields).toContain('height');
+    }
   });
 
-  it('thumbnail carries height only', () => {
-    const ops = operations(recipe('photo.jpg').thumbnail({ height: 240 }));
-    expect(ops).toEqual([{ type: 'thumbnail', options: { height: 240 } }]);
-    expect(ops[0].options).not.toHaveProperty('width');
+  it('thumbnail rejects a missing width', () => {
+    expect(() => recipe('photo.jpg').thumbnail({ height: 240 } as never)).toThrow(GislConfigError);
+    try {
+      recipe('photo.jpg').thumbnail({ height: 240 } as never);
+      expect.unreachable('thumbnail without a width must throw');
+    } catch (err) {
+      expect((err as GislConfigError).reason).toBe('missing_required_field');
+      expect((err as GislConfigError).conflictingFields).toContain('width');
+    }
   });
 
   it('an op with empty options omits the options key', () => {
@@ -124,7 +137,7 @@ describe('Recipe — job shape', () => {
   });
 
   it('a chain preserves operation order in one job', () => {
-    const ops = operations(recipe('clip.mov').convert('mp4').thumbnail({ width: 100 }));
+    const ops = operations(recipe('clip.mov').convert('mp4').thumbnail({ width: 100, height: 100 }));
     expect(ops.map((o) => o.type)).toEqual(['convert', 'thumbnail']);
   });
 });

@@ -27,6 +27,19 @@ import type { WorkflowCreatePayload } from '../../src/types.js';
 import type { Fixture, FixtureValue, FixtureLoweringOp } from './fixtures.js';
 import { decodeBytesValue } from './fetch-stub.js';
 
+/**
+ * Dhje3Faq — `thumbnail` now requires BOTH dimensions (the contract marks them
+ * required). A fixture op that omits one no longer type-checks against the typed
+ * `ThumbnailOptions`, so the parity adapter asserts both are present up front
+ * (a fixture authoring error → a clear harness message, not a downstream throw).
+ */
+function thumbnailDimsOf(op: FixtureLoweringOp): { width: number; height: number } {
+  if (op.width === undefined || op.height === undefined) {
+    throw new Error('[parity] thumbnail fixture must supply both width and height');
+  }
+  return { width: op.width, height: op.height };
+}
+
 // Ergonomic-facade verbs whose dispatch is wired through `OperationBuilder`
 // rather than a direct GislClient method (PHP P2 / 7QXkzoIi symmetric
 // addition). Args shape: `[input, options?, terminal?]` where `input` is
@@ -347,12 +360,8 @@ function applyMergedOp(recipe: MergedRecipe, op: FixtureLoweringOp): MergedRecip
       return recipe.compress(op.optimize as OptimizeFor | undefined);
     case 'convert':
       return recipe.convert(op.format as string);
-    case 'thumbnail': {
-      const dims: { width?: number; height?: number } = {};
-      if (op.width !== undefined) dims.width = op.width;
-      if (op.height !== undefined) dims.height = op.height;
-      return recipe.thumbnail(dims);
-    }
+    case 'thumbnail':
+      return recipe.thumbnail(thumbnailDimsOf(op));
     default:
       throw new Error(`[files.merge] unsupported post-combine op '${String((op as { op: string }).op)}'`);
   }
@@ -369,12 +378,8 @@ function applyWatermarkedOp(recipe: WatermarkedRecipe, op: FixtureLoweringOp): W
       return recipe.compress(op.optimize as OptimizeFor | undefined);
     case 'convert':
       return recipe.convert(op.format as string);
-    case 'thumbnail': {
-      const dims: { width?: number; height?: number } = {};
-      if (op.width !== undefined) dims.width = op.width;
-      if (op.height !== undefined) dims.height = op.height;
-      return recipe.thumbnail(dims);
-    }
+    case 'thumbnail':
+      return recipe.thumbnail(thumbnailDimsOf(op));
     default:
       throw new Error(`[watermark] unsupported post-watermark op '${String((op as { op: string }).op)}'`);
   }
@@ -449,12 +454,8 @@ function applyFilesOp(recipe: FilesRecipe, op: FixtureLoweringOp): FilesRecipe {
       return recipe.compress(op.optimize as OptimizeFor | undefined);
     case 'convert':
       return recipe.convert(op.format as string);
-    case 'thumbnail': {
-      const dims: { width?: number; height?: number } = {};
-      if (op.width !== undefined) dims.width = op.width;
-      if (op.height !== undefined) dims.height = op.height;
-      return recipe.thumbnail(dims);
-    }
+    case 'thumbnail':
+      return recipe.thumbnail(thumbnailDimsOf(op));
     case 'text_watermark':
       return recipe.textWatermark(op.text as string);
     default:
@@ -468,12 +469,8 @@ function applyLoweringOp(recipe: Recipe, op: FixtureLoweringOp): Recipe {
       return recipe.compress(op.optimize as OptimizeFor | undefined);
     case 'convert':
       return recipe.convert(op.format as string);
-    case 'thumbnail': {
-      const dims: { width?: number; height?: number } = {};
-      if (op.width !== undefined) dims.width = op.width;
-      if (op.height !== undefined) dims.height = op.height;
-      return recipe.thumbnail(dims);
-    }
+    case 'thumbnail':
+      return recipe.thumbnail(thumbnailDimsOf(op));
     case 'text_watermark':
       return recipe.textWatermark(op.text as string);
     default:

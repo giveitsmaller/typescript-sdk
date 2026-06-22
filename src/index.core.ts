@@ -607,6 +607,14 @@ export {
   videoTextWatermarkMetadata,
   splitMetadata,
 } from '@giveitsmaller/contracts/operations';
+// Typed per-op option interfaces for the ergonomic verbs (card Dhje3Faq).
+export type {
+  ConvertOptions,
+  ThumbnailOptions,
+  TextWatermarkOptions,
+  WatermarkOptions,
+  WatermarkAnchor,
+} from './ergonomic/option_types.js';
 export type {
   OperationMetadata,
   AvailabilityValue,

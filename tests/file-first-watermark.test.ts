@@ -46,7 +46,7 @@ describe('WatermarkedRecipe — routing', () => {
   });
 
   it('routes a transformed base by its OUTPUT media (video + thumbnail -> image_watermark)', () => {
-    const wr = recipe('clip.mp4').thumbnail({ width: 640 }).watermark(overlay());
+    const wr = recipe('clip.mp4').thumbnail({ width: 640, height: 360 }).watermark(overlay());
     const payload = wr.toWorkflowPayload(['base', 'ovl']);
     expect(watermarkJobOf(payload).operations[0].type).toBe('image_watermark');
   });
@@ -110,14 +110,14 @@ describe('WatermarkedRecipe — lowering shape', () => {
 
   it('lowers base preceding steps into src_0 and overlay own steps into src_1', () => {
     const wr = recipe('hero.jpg')
-      .thumbnail({ width: 1200 })
+      .thumbnail({ width: 1200, height: 800 })
       .watermark(overlay('logo.png').convert('png'));
     const payload = wr.toWorkflowPayload(['b', 'o']) as unknown as {
       jobs: { id: string; operations: { type: string; options?: Record<string, unknown> }[] }[];
     };
     const src0 = payload.jobs.find((j) => j.id === 'src_0')!;
     const src1 = payload.jobs.find((j) => j.id === 'src_1')!;
-    expect(src0.operations).toEqual([{ type: 'thumbnail', options: { width: 1200 } }]);
+    expect(src0.operations).toEqual([{ type: 'thumbnail', options: { width: 1200, height: 800 } }]);
     expect(src1.operations).toEqual([{ type: 'convert', options: { output_format: 'png' } }]);
   });
 
@@ -201,7 +201,7 @@ describe('WatermarkedRecipe — overlay validation', () => {
   });
 
   it('allows a transformed overlay whose output is an image (video -> thumbnail)', () => {
-    const wr = recipe('photo.jpg').watermark(overlay('clip.mp4').thumbnail({ width: 64 }));
+    const wr = recipe('photo.jpg').watermark(overlay('clip.mp4').thumbnail({ width: 64, height: 64 }));
     expect(wr).toBeInstanceOf(WatermarkedRecipe);
   });
 

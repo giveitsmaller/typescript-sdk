@@ -45,7 +45,7 @@ describe('FilesRecipe — immutability (clone-on-write)', () => {
   it('two branches off one base are independent', () => {
     const base = filesRecipe('a.mov', 'b.mov');
     const branchA = base.convert('mp4').compress(OptimizeFor.Size);
-    const branchB = base.thumbnail({ width: 320 });
+    const branchB = base.thumbnail({ width: 320, height: 240 });
 
     expect(base.stepCount).toBe(0);
     expect(branchA.stepCount).toBe(2);

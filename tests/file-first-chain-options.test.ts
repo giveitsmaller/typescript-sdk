@@ -47,74 +47,93 @@ describe('Recipe chain options — explicit options reach the wire', () => {
   });
 
   it('thumbnail(options) carries ALL defined keys (not just width/height)', () => {
+    // Both dims required (the contract marks them so) — `height` added alongside
+    // the incidental fit/format keys this test pins.
     const ops = operations(
-      recipe('photo.jpg').thumbnail({ width: 200, fit: 'cover', format: 'webp' }),
+      recipe('photo.jpg').thumbnail({ width: 200, height: 150, fit: 'crop', format: 'webp' }),
     );
     expect(ops).toEqual([
-      { type: 'thumbnail', options: { width: 200, fit: 'cover', format: 'webp' } },
+      { type: 'thumbnail', options: { width: 200, height: 150, fit: 'crop', format: 'webp' } },
     ]);
   });
 
-  it('thumbnail(options) drops an undefined value', () => {
+  it('thumbnail(options) drops an undefined optional value', () => {
     // TS drops only `undefined` (the absent-key signal); the PHP mirror drops
     // `null` (its absent-key signal). Each language drops its own omission
     // sentinel — see the PHP RecipeChainOptionsTest::thumbnail_drops_a_null_value.
+    // Both REQUIRED dims are present; the dropped sentinel rides on an OPTIONAL
+    // key (`fit`) — an undefined width/height would instead throw the
+    // missing_required_field guard (assertThumbnailDimensions).
     const ops = operations(
-      recipe('photo.jpg').thumbnail({ width: 200, height: undefined, fit: 'cover' }),
+      recipe('photo.jpg').thumbnail({ width: 200, height: 150, fit: undefined } as never),
     );
-    expect(ops).toEqual([{ type: 'thumbnail', options: { width: 200, fit: 'cover' } }]);
-    expect(ops[0].options).not.toHaveProperty('height');
+    expect(ops).toEqual([{ type: 'thumbnail', options: { width: 200, height: 150 } }]);
+    expect(ops[0].options).not.toHaveProperty('fit');
   });
 
   it('textWatermark(text, options) merges the bag after text', () => {
     const ops = operations(
-      recipe('photo.jpg').textWatermark('hi', { position: 'bottom-right', opacity: 0.5 }),
+      recipe('photo.jpg').textWatermark('hi', { anchor: 'bottom_right', opacity: 0.5 }),
     );
     expect(ops).toEqual([
-      { type: 'text_watermark', options: { text: 'hi', position: 'bottom-right', opacity: 0.5 } },
+      { type: 'text_watermark', options: { text: 'hi', anchor: 'bottom_right', opacity: 0.5 } },
     ]);
   });
 });
 
 // ---------------------------------------------------------------------------
-// 1b. The explicit shorthand arg is AUTHORITATIVE over a bag key (codex r2).
-//     options are spread FIRST, then the explicit format/text, so a bag key
-//     can never silently override the call's explicit argument.
+// 1b. Positional-owned bag keys are REJECTED eagerly (Dhje3Faq).
+//     `convert` owns the output format via its first arg (lowered to
+//     `output_format`; `format` is its SDK alias); `textWatermark` owns `text`.
+//     Supplying either in the options bag would be silently overridden by the
+//     positional, so the eager validator throws a GislConfigError(unknown_field)
+//     at the verb call — BEFORE any upload — naming the offending key. The bag
+//     is cast (`as never`) because the typed interface already forbids these
+//     keys; these tests prove the RUNTIME guard for untyped JS callers.
 // ---------------------------------------------------------------------------
 
-describe('Recipe chain options — explicit shorthand arg wins over a bag key', () => {
-  it('convert(\'mp4\', { output_format: \'webm\' }) lowers output_format=mp4 (the bag is overridden)', () => {
-    const ops = operations(recipe('clip.mov').convert('mp4', { output_format: 'webm' }));
-    expect(ops).toHaveLength(1);
-    expect(ops[0].type).toBe('convert');
-    expect((ops[0].options as Record<string, unknown>).output_format).toBe('mp4');
+describe('Recipe chain options — positional-owned bag keys are rejected', () => {
+  const expectUnknownField = (fn: () => unknown, field: string): void => {
+    expect(fn).toThrow(GislConfigError);
+    try {
+      fn();
+      expect.unreachable(`expected a GislConfigError naming '${field}'`);
+    } catch (err) {
+      expect((err as GislConfigError).reason).toBe('unknown_field');
+      expect((err as GislConfigError).conflictingFields).toEqual([field]);
+    }
+  };
+
+  it("convert('mp4', { output_format: 'webm' }) throws unknown_field on output_format", () => {
+    expectUnknownField(
+      () => recipe('clip.mov').convert('mp4', { output_format: 'webm' } as never),
+      'output_format',
+    );
   });
 
-  it('convert(\'mp4\', { format: \'legacy\' }) drops the stray legacy format key (no double-key leak)', () => {
-    // A `format` key in the bag is the OLD (wrong) wire key — the shorthand now
-    // owns output_format, so the stray `format` must NOT leak onto the wire.
-    const ops = operations(recipe('clip.mov').convert('mp4', { format: 'legacy', crf: 23 }));
-    expect(ops[0].options).toEqual({ output_format: 'mp4', crf: 23 });
-    expect(ops[0].options).not.toHaveProperty('format');
+  it("convert('mp4', { format: 'legacy' }) throws unknown_field on format", () => {
+    // `format` is the convert verb's SDK alias for the positional — also owned.
+    expectUnknownField(
+      () => recipe('clip.mov').convert('mp4', { format: 'legacy' } as never),
+      'format',
+    );
   });
 
-  it('textWatermark(\'real\', { text: \'fake\' }) lowers text=real (the bag text is overridden)', () => {
-    const ops = operations(recipe('photo.jpg').textWatermark('real', { text: 'fake' }));
-    expect(ops).toHaveLength(1);
-    expect(ops[0].type).toBe('text_watermark');
-    expect((ops[0].options as Record<string, unknown>).text).toBe('real');
+  it("textWatermark('real', { text: 'fake' }) throws unknown_field on text", () => {
+    expectUnknownField(
+      () => recipe('photo.jpg').textWatermark('real', { text: 'fake' } as never),
+      'text',
+    );
   });
 
-  it('files([...]).merge().convert(\'mp4\', { output_format: \'webm\' }) lowers output_format=mp4 on the merge job', () => {
-    const payload = new MergedRecipe([fileInput.path('a.mp4'), fileInput.path('b.mp4')], {
-      mediaKind: 'video',
-    })
-      .convert('mp4', { output_format: 'webm' })
-      .toWorkflowPayload(['f0', 'f1']);
-
-    const mergeJob = payload.jobs[2]; // 2 src jobs + the merge job
-    expect(mergeJob.operations[1].type).toBe('convert');
-    expect((mergeJob.operations[1].options as Record<string, unknown>).output_format).toBe('mp4');
+  it('the duplicated MergedRecipe.convert body validates too (output_format rejected)', () => {
+    expectUnknownField(
+      () =>
+        new MergedRecipe([fileInput.path('a.mp4'), fileInput.path('b.mp4')], {
+          mediaKind: 'video',
+        }).convert('mp4', { output_format: 'webm' } as never),
+      'output_format',
+    );
   });
 });
 
@@ -367,9 +386,9 @@ describe('Recipe chain options — minimal forms unchanged (regression guard)', 
     ]);
   });
 
-  it('thumbnail({ width }) with no extra keys is unchanged', () => {
-    expect(operations(recipe('photo.jpg').thumbnail({ width: 100 }))).toEqual([
-      { type: 'thumbnail', options: { width: 100 } },
+  it('thumbnail({ width, height }) with no extra keys is unchanged', () => {
+    expect(operations(recipe('photo.jpg').thumbnail({ width: 100, height: 100 }))).toEqual([
+      { type: 'thumbnail', options: { width: 100, height: 100 } },
     ]);
   });
 
@@ -418,11 +437,11 @@ describe('FilesRecipe chain options — fan-out threads options into every job',
 
   it('thumbnail(options) carries extra keys into every job', () => {
     const payload = new FilesRecipe([fileInput.path('a.jpg'), fileInput.path('b.jpg')])
-      .thumbnail({ width: 200, fit: 'cover' })
+      .thumbnail({ width: 200, height: 150, fit: 'crop' })
       .toWorkflowPayload(['f0', 'f1']);
     payload.jobs.forEach((job) => {
       expect(job.operations).toEqual([
-        { type: 'thumbnail', options: { width: 200, fit: 'cover' } },
+        { type: 'thumbnail', options: { width: 200, height: 150, fit: 'crop' } },
       ]);
     });
   });
@@ -468,13 +487,13 @@ describe('MergedRecipe chain options — post-combine ops carry options', () => 
 
   it('merge().thumbnail(options) carries extra keys onto the merge job', () => {
     const payload = mergedVideo(['a.mp4', 'b.mp4'])
-      .thumbnail({ width: 320, format: 'jpeg' })
+      .thumbnail({ width: 320, height: 180, format: 'jpg' })
       .toWorkflowPayload(['f0', 'f1']);
 
     const mergeJob = payload.jobs[2];
     expect(mergeJob.operations[1]).toEqual({
       type: 'thumbnail',
-      options: { width: 320, format: 'jpeg' },
+      options: { width: 320, height: 180, format: 'jpg' },
     });
   });
 });

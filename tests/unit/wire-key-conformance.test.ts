@@ -3,13 +3,17 @@ import {
   archiveMetadata,
   compressMetadata,
   convertMetadata,
+  imageWatermarkMetadata,
   mergeMetadata,
   textWatermarkMetadata,
   thumbnailMetadata,
+  videoWatermarkMetadata,
   type OperationMetadata,
 } from '@giveitsmaller/contracts/operations';
 
 import { KNOWN_WIRE_FIELDS } from '../../src/ergonomic/preset_resolver.js';
+import { allowedKeysFor, type ValidatedVerb } from '../../src/ergonomic/option_validation.js';
+import { VERB_OPTION_KEYS } from '../../src/ergonomic/option_types.js';
 import { Recipe, MergedRecipe, ArchivedRecipe, fileInput, type FileInput } from '../../src/file-first.js';
 import type { MergeOptions } from '../../src/merge.js';
 import type { OperationDef, WorkflowCreatePayload } from '../../src/types.js';
@@ -314,5 +318,50 @@ describe('wire-key conformance — archive', () => {
     const archived = new ArchivedRecipe(inputs, { format: 'tar.gz', folderStructure: 'by_job' });
     const ops = lastJobOps(archived.toWorkflowPayload([FILE_ID, 'file_0002']));
     assertKeysConform('archive', optionKeysOf(ops, 'archive'), contract);
+  });
+});
+
+/**
+ * Eager option-key validator conformance (card Dhje3Faq). The runtime validator's
+ * allowed-key set per verb, AND the hand-written typed-interface key tuples, must
+ * both equal the contract `operationOptionKeys(metadata)` — so a contract
+ * rename/add fails CI rather than silently de-syncing the validator or the typed
+ * surface. `keyof Interface` is pinned to its tuple at `tsc` time (Equal<> in
+ * option_types.ts); this ties the tuple to the contract metadata at test time.
+ * Mirrored by the PHP `WireKeyConformanceTest`.
+ */
+describe('option-key validation conformance — validator + typed interfaces vs OperationMetadata', () => {
+  const expectedContract: Record<ValidatedVerb, ReadonlySet<string>> = {
+    convert: operationOptionKeys(convertMetadata),
+    thumbnail: operationOptionKeys(thumbnailMetadata),
+    textWatermark: operationOptionKeys(textWatermarkMetadata),
+    // watermark routes image_watermark | video_watermark; the base media may be
+    // undetectable at the verb call, so the validator accepts the UNION.
+    watermark: new Set<string>([
+      ...operationOptionKeys(imageWatermarkMetadata),
+      ...operationOptionKeys(videoWatermarkMetadata),
+    ]),
+  };
+
+  // CONTRACT keys a verb owns via its first argument (so they are excluded from
+  // the typed interface). `format` is an SDK alias, NOT a contract key, so it is
+  // absent here — it is rejected by the positional guard, not the contract set.
+  const positionalOwnedContractKeys: Partial<Record<ValidatedVerb, readonly string[]>> = {
+    convert: ['output_format'],
+    textWatermark: ['text'],
+  };
+
+  const verbs: ValidatedVerb[] = ['convert', 'thumbnail', 'textWatermark', 'watermark'];
+
+  it.each(verbs)('%s: runtime validator allowed-key set equals the contract option set', (verb) => {
+    expect([...allowedKeysFor(verb)].sort()).toEqual([...expectedContract[verb]].sort());
+  });
+
+  it.each(verbs)('%s: typed-interface keys ∪ positional-owned equal the contract option set', (verb) => {
+    const reconstructed = new Set<string>([
+      ...VERB_OPTION_KEYS[verb],
+      ...(positionalOwnedContractKeys[verb] ?? []),
+    ]);
+    expect([...reconstructed].sort()).toEqual([...expectedContract[verb]].sort());
   });
 });

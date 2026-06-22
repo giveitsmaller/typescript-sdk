@@ -32,6 +32,13 @@ import {
   resolveCompressOptions,
   type ResolveCompressOptionsInput,
 } from './ergonomic/preset_resolver.js';
+import { validateVerbOptions, assertThumbnailDimensions } from './ergonomic/option_validation.js';
+import type {
+  ConvertOptions,
+  ThumbnailOptions,
+  TextWatermarkOptions,
+  WatermarkOptions,
+} from './ergonomic/option_types.js';
 import { OptimizeFor } from './generated/sdk_spec/enums.js';
 import type { PresetDefaults, PresetMedia } from './ergonomic/presets/index.js';
 import type {
@@ -638,23 +645,25 @@ export class Recipe {
    * option (the convert op's wire key per the contract); `options` carries any
    * additional per-op convert options.
    */
-  convert(format: string, options: Record<string, unknown> = {}): Recipe {
+  convert(format: string, options: ConvertOptions = {}): Recipe {
+    // Eager pre-upload key validation (rejects unknown keys + a user-supplied
+    // output_format/format, which this verb owns via the `format` argument).
+    validateVerbOptions('convert', options);
     // The convert op's wire key is `output_format` (contract: convert.yaml,
-    // required, all media), NOT `format`. Spread options FIRST so the explicit
-    // shorthand wins over an `output_format` key in the bag.
-    // The shorthand owns the format → a stray legacy `format` key in the bag is
-    // not a valid convert option; drop it so the wire never carries both keys.
-    const rest = { ...options };
-    delete rest.format;
-    return this.withStep({ opType: 'convert', options: { ...rest, output_format: format } });
+    // required, all media), NOT `format`. Validation above guarantees the bag
+    // carries neither `format` nor `output_format`, so no drop is needed.
+    return this.withStep({ opType: 'convert', options: { ...options, output_format: format } });
   }
 
   /**
-   * Generate a preview. Width and/or height in pixels; any additional per-op
-   * thumbnail options pass through. An omitted (`undefined`) value is dropped
-   * from the wire options (not sent as `undefined`).
+   * Generate a preview / resize. `width` AND `height` are required (the contract
+   * marks both required for image/video/document); any additional per-op
+   * thumbnail option passes through. An omitted (`undefined`) optional value is
+   * dropped from the wire options (not sent as `undefined`).
    */
-  thumbnail(options: { width?: number; height?: number } & Record<string, unknown> = {}): Recipe {
+  thumbnail(options: ThumbnailOptions): Recipe {
+    validateVerbOptions('thumbnail', options);
+    assertThumbnailDimensions(options);
     const wire: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(options)) {
       if (value !== undefined) wire[key] = value;
@@ -667,8 +676,10 @@ export class Recipe {
    * secondary file) — lowers to the `text_watermark` op with a `text` option;
    * `options` carries any additional per-op watermark options.
    */
-  textWatermark(text: string, options: Record<string, unknown> = {}): Recipe {
-    // Spread options FIRST so the explicit `text` argument is authoritative.
+  textWatermark(text: string, options: TextWatermarkOptions = {}): Recipe {
+    // Eager pre-upload validation (rejects unknown keys + a user-supplied `text`,
+    // which this verb owns via the first argument).
+    validateVerbOptions('textWatermark', options);
     return this.withStep({ opType: 'text_watermark', options: { ...options, text } });
   }
 
@@ -684,7 +695,10 @@ export class Recipe {
    * `compress`/`convert`/`thumbnail`, then `run`/`submit`). Distinct from
    * {@link textWatermark} (single-input text overlay).
    */
-  watermark(overlay: Recipe, options: Record<string, unknown> = {}): WatermarkedRecipe {
+  watermark(overlay: Recipe, options: WatermarkOptions = {}): WatermarkedRecipe {
+    // Eager pre-upload key validation (against image_watermark ∪ video_watermark,
+    // since the base media may be undetectable here; routing is gated separately).
+    validateVerbOptions('watermark', options);
     // Eager gate when the base media is KNOWN (unit-testable pre-upload); an
     // undetectable base is DEFERRED — re-checked pre-upload in run()/submit().
     const base = _watermarkEffectiveBase(this.input, this.steps);
@@ -1346,7 +1360,7 @@ function _validateWatermarkOverlay(overlay: Recipe): void {
   }
 }
 
-function _lowerWatermarkOp(wireOp: WatermarkWireOp, options: Readonly<Record<string, unknown>>): OperationDef {
+function _lowerWatermarkOp(wireOp: WatermarkWireOp, options: WatermarkOptions): OperationDef {
   // Watermark options (anchor/opacity/margin_x/margin_y/overlay_width) are
   // already wire keys; empty options omit the `options` key (byte-identical to PHP).
   const wire = { ...options };
@@ -1502,18 +1516,18 @@ export class FilesRecipe {
     return this.withStep(this.baseRecipe().compress(optimize, options));
   }
 
-  /** Change every input's format. `format` lowers to the contract `output_format` wire key (via {@link Recipe.convert}), NOT `format`. */
-  convert(format: string, options: Record<string, unknown> = {}): FilesRecipe {
+  /** Change every input's format. `format` lowers to the contract `output_format` wire key (via {@link Recipe.convert}), NOT `format`. Option keys are validated (via the base {@link Recipe}) before any upload. */
+  convert(format: string, options: ConvertOptions = {}): FilesRecipe {
     return this.withStep(this.baseRecipe().convert(format, options));
   }
 
-  /** Generate a preview of every input. Omitted dimensions are dropped from the wire options. */
-  thumbnail(options: { width?: number; height?: number } & Record<string, unknown> = {}): FilesRecipe {
+  /** Generate a preview of every input. `width` AND `height` are required; validated via the base {@link Recipe} before any upload. */
+  thumbnail(options: ThumbnailOptions): FilesRecipe {
     return this.withStep(this.baseRecipe().thumbnail(options));
   }
 
-  /** Apply the same text watermark to every input. */
-  textWatermark(text: string, options: Record<string, unknown> = {}): FilesRecipe {
+  /** Apply the same text watermark to every input. Option keys validated via the base {@link Recipe}. */
+  textWatermark(text: string, options: TextWatermarkOptions = {}): FilesRecipe {
     return this.withStep(this.baseRecipe().textWatermark(text, options));
   }
 
@@ -1854,20 +1868,17 @@ export class MergedRecipe {
     });
   }
 
-  /** Change the merged output's format. See {@link Recipe.convert}. */
-  convert(format: string, options: Record<string, unknown> = {}): MergedRecipe {
-    // The convert op's wire key is `output_format` (contract: convert.yaml,
-    // required, all media), NOT `format`. Spread options FIRST so the explicit
-    // shorthand wins over an `output_format` key in the bag.
-    // The shorthand owns the format → a stray legacy `format` key in the bag is
-    // not a valid convert option; drop it so the wire never carries both keys.
-    const rest = { ...options };
-    delete rest.format;
-    return this.withStep({ opType: 'convert', options: { ...rest, output_format: format } });
+  /** Change the merged output's format. See {@link Recipe.convert}. Option keys validated pre-upload. */
+  convert(format: string, options: ConvertOptions = {}): MergedRecipe {
+    validateVerbOptions('convert', options);
+    // Validation guarantees the bag carries neither `format` nor `output_format`.
+    return this.withStep({ opType: 'convert', options: { ...options, output_format: format } });
   }
 
-  /** Thumbnail the merged output. Omitted dimensions are dropped from the wire options. */
-  thumbnail(options: { width?: number; height?: number } & Record<string, unknown> = {}): MergedRecipe {
+  /** Thumbnail the merged output. `width` AND `height` are required; validated pre-upload. */
+  thumbnail(options: ThumbnailOptions): MergedRecipe {
+    validateVerbOptions('thumbnail', options);
+    assertThumbnailDimensions(options);
     const wire: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(options)) {
       if (value !== undefined) wire[key] = value;
@@ -2423,7 +2434,7 @@ export class WatermarkedRecipe {
     private readonly baseInput: FileInput,
     private readonly baseSteps: readonly RecipeStep[],
     private readonly overlay: Recipe,
-    private readonly watermarkOptions: Readonly<Record<string, unknown>>,
+    private readonly watermarkOptions: WatermarkOptions,
     private readonly postSteps: readonly RecipeStep[] = [],
     private readonly presetDefaults?: PresetDefaults,
     private readonly scopedPresetDefaults?: PresetDefaults,
@@ -2445,15 +2456,17 @@ export class WatermarkedRecipe {
     });
   }
 
-  /** Change the watermarked output's format. See {@link Recipe.convert}. */
-  convert(format: string, options: Record<string, unknown> = {}): WatermarkedRecipe {
-    const rest = { ...options };
-    delete rest.format;
-    return this.withStep({ opType: 'convert', options: { ...rest, output_format: format } });
+  /** Change the watermarked output's format. See {@link Recipe.convert}. Option keys validated pre-upload. */
+  convert(format: string, options: ConvertOptions = {}): WatermarkedRecipe {
+    validateVerbOptions('convert', options);
+    // Validation guarantees the bag carries neither `format` nor `output_format`.
+    return this.withStep({ opType: 'convert', options: { ...options, output_format: format } });
   }
 
-  /** Thumbnail the watermarked output. Omitted dimensions are dropped from the wire options. */
-  thumbnail(options: { width?: number; height?: number } & Record<string, unknown> = {}): WatermarkedRecipe {
+  /** Thumbnail the watermarked output. `width` AND `height` are required; validated pre-upload. */
+  thumbnail(options: ThumbnailOptions): WatermarkedRecipe {
+    validateVerbOptions('thumbnail', options);
+    assertThumbnailDimensions(options);
     const wire: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(options)) {
       if (value !== undefined) wire[key] = value;

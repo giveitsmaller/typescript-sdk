@@ -12,6 +12,7 @@
 import { type ProgressEvent } from './builder.js';
 import type { GislClient } from './client.js';
 import type { OperationDownload, WorkflowStatusResponse } from '@giveitsmaller/contracts/openapi';
+import type { ConvertOptions, ThumbnailOptions, TextWatermarkOptions, WatermarkOptions } from './ergonomic/option_types.js';
 import { OptimizeFor } from './generated/sdk_spec/enums.js';
 import type { PresetDefaults } from './ergonomic/presets/index.js';
 import type { WorkflowCreatePayload } from './types.js';
@@ -352,22 +353,20 @@ export declare class Recipe {
      * option (the convert op's wire key per the contract); `options` carries any
      * additional per-op convert options.
      */
-    convert(format: string, options?: Record<string, unknown>): Recipe;
+    convert(format: string, options?: ConvertOptions): Recipe;
     /**
-     * Generate a preview. Width and/or height in pixels; any additional per-op
-     * thumbnail options pass through. An omitted (`undefined`) value is dropped
-     * from the wire options (not sent as `undefined`).
+     * Generate a preview / resize. `width` AND `height` are required (the contract
+     * marks both required for image/video/document); any additional per-op
+     * thumbnail option passes through. An omitted (`undefined`) optional value is
+     * dropped from the wire options (not sent as `undefined`).
      */
-    thumbnail(options?: {
-        width?: number;
-        height?: number;
-    } & Record<string, unknown>): Recipe;
+    thumbnail(options: ThumbnailOptions): Recipe;
     /**
      * Apply a text watermark. Single-input (the text is an option, not a
      * secondary file) — lowers to the `text_watermark` op with a `text` option;
      * `options` carries any additional per-op watermark options.
      */
-    textWatermark(text: string, options?: Record<string, unknown>): Recipe;
+    textWatermark(text: string, options?: TextWatermarkOptions): Recipe;
     /**
      * Composite an image OVERLAY onto this file (a multi-input op). `overlay` is a
      * secondary file-NODE (a {@link Recipe} — e.g. `client.file('logo.png')`),
@@ -380,7 +379,7 @@ export declare class Recipe {
      * `compress`/`convert`/`thumbnail`, then `run`/`submit`). Distinct from
      * {@link textWatermark} (single-input text overlay).
      */
-    watermark(overlay: Recipe, options?: Record<string, unknown>): WatermarkedRecipe;
+    watermark(overlay: Recipe, options?: WatermarkOptions): WatermarkedRecipe;
     /**
      * Lower this recipe to a workflow-create payload against a resolved upload
      * id. Single-input chain → ONE job, `source: upload(fileId)`, ordered
@@ -555,15 +554,12 @@ export declare class FilesRecipe {
      * lowering builds an internal Recipe that throws the same `GislConfigError`.
      */
     compress(optimize?: OptimizeFor, options?: Record<string, unknown>): FilesRecipe;
-    /** Change every input's format. `format` lowers to the contract `output_format` wire key (via {@link Recipe.convert}), NOT `format`. */
-    convert(format: string, options?: Record<string, unknown>): FilesRecipe;
-    /** Generate a preview of every input. Omitted dimensions are dropped from the wire options. */
-    thumbnail(options?: {
-        width?: number;
-        height?: number;
-    } & Record<string, unknown>): FilesRecipe;
-    /** Apply the same text watermark to every input. */
-    textWatermark(text: string, options?: Record<string, unknown>): FilesRecipe;
+    /** Change every input's format. `format` lowers to the contract `output_format` wire key (via {@link Recipe.convert}), NOT `format`. Option keys are validated (via the base {@link Recipe}) before any upload. */
+    convert(format: string, options?: ConvertOptions): FilesRecipe;
+    /** Generate a preview of every input. `width` AND `height` are required; validated via the base {@link Recipe} before any upload. */
+    thumbnail(options: ThumbnailOptions): FilesRecipe;
+    /** Apply the same text watermark to every input. Option keys validated via the base {@link Recipe}. */
+    textWatermark(text: string, options?: TextWatermarkOptions): FilesRecipe;
     /**
      * Combine the inputs into ONE output (N→1), in array order (FF3b). Returns a
      * single-output {@link MergedRecipe} you chain further ops on
@@ -694,13 +690,10 @@ export declare class MergedRecipe {
     constructor(inputs: readonly FileInput[], mergeOptions: MergeOptions, postSteps?: readonly RecipeStep[], presetDefaults?: PresetDefaults | undefined, scopedPresetDefaults?: PresetDefaults | undefined, client?: GislClient | undefined);
     /** Reduce the merged output's size. See {@link Recipe.compress}. */
     compress(optimize?: OptimizeFor, options?: Record<string, unknown>): MergedRecipe;
-    /** Change the merged output's format. See {@link Recipe.convert}. */
-    convert(format: string, options?: Record<string, unknown>): MergedRecipe;
-    /** Thumbnail the merged output. Omitted dimensions are dropped from the wire options. */
-    thumbnail(options?: {
-        width?: number;
-        height?: number;
-    } & Record<string, unknown>): MergedRecipe;
+    /** Change the merged output's format. See {@link Recipe.convert}. Option keys validated pre-upload. */
+    convert(format: string, options?: ConvertOptions): MergedRecipe;
+    /** Thumbnail the merged output. `width` AND `height` are required; validated pre-upload. */
+    thumbnail(options: ThumbnailOptions): MergedRecipe;
     /**
      * Lower to the merge DAG: one `passthrough` source job per input + one
      * `merge` job whose `operations[]` is `[merge, ...post-combine ops]`. The
@@ -877,16 +870,13 @@ export declare class WatermarkedRecipe {
     private readonly presetDefaults?;
     private readonly scopedPresetDefaults?;
     private readonly client?;
-    constructor(baseInput: FileInput, baseSteps: readonly RecipeStep[], overlay: Recipe, watermarkOptions: Readonly<Record<string, unknown>>, postSteps?: readonly RecipeStep[], presetDefaults?: PresetDefaults | undefined, scopedPresetDefaults?: PresetDefaults | undefined, client?: GislClient | undefined);
+    constructor(baseInput: FileInput, baseSteps: readonly RecipeStep[], overlay: Recipe, watermarkOptions: WatermarkOptions, postSteps?: readonly RecipeStep[], presetDefaults?: PresetDefaults | undefined, scopedPresetDefaults?: PresetDefaults | undefined, client?: GislClient | undefined);
     /** Reduce the watermarked output's size. See {@link Recipe.compress}. */
     compress(optimize?: OptimizeFor, options?: Record<string, unknown>): WatermarkedRecipe;
-    /** Change the watermarked output's format. See {@link Recipe.convert}. */
-    convert(format: string, options?: Record<string, unknown>): WatermarkedRecipe;
-    /** Thumbnail the watermarked output. Omitted dimensions are dropped from the wire options. */
-    thumbnail(options?: {
-        width?: number;
-        height?: number;
-    } & Record<string, unknown>): WatermarkedRecipe;
+    /** Change the watermarked output's format. See {@link Recipe.convert}. Option keys validated pre-upload. */
+    convert(format: string, options?: ConvertOptions): WatermarkedRecipe;
+    /** Thumbnail the watermarked output. `width` AND `height` are required; validated pre-upload. */
+    thumbnail(options: ThumbnailOptions): WatermarkedRecipe;
     /**
      * Lower to the watermark DAG: a `src_0` passthrough/base-steps job + a `src_1`
      * passthrough/overlay-steps job + one `watermark` job whose `inputs[]` consume
