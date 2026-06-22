@@ -102,6 +102,12 @@ import type { GislNoSuchKeyError, GislSinkError, GislNetworkError, GislItemFaile
 // below). Imported via `./index.js` so dropping the re-export breaks
 // `tsc --noEmit` here.
 import type { StatusSnapshot, GislResultNotReadyError } from './index.js';
+import type {
+  AccountLimits,
+  CreditsBalanceResponse,
+  CreditsUsageResponse,
+  CreditsUsageOptions,
+} from './index.js';
 
 // Ergonomic-layer entry points (T1 / wVU4xHx3) — `gisl.create()` factory
 // + credential-chain types + the new local-error tree (GislConfigError +
@@ -252,6 +258,19 @@ export function _runAudit(): void {
   accept<Environment>();
   // T2 / xVDTIm8C — operation-builder surface.
   accept<ErgonomicClient>();
+  // 8yqUXLCS — pin the credits/limits accessor SIGNATURES on ErgonomicClient.
+  // accept<ErgonomicClient>() proves the type compiles; these prove the three
+  // methods EXIST and their signatures/return types match (indexed access errors
+  // if a method is missing; the typed LHS errors if the signature drifts). The
+  // RHS is a type-only cast (`null as unknown as …`) — no runtime property read.
+  const _creditsSig: () => Promise<CreditsBalanceResponse> =
+    null as unknown as ErgonomicClient['credits'];
+  const _creditsUsageSig: (options?: CreditsUsageOptions) => Promise<CreditsUsageResponse> =
+    null as unknown as ErgonomicClient['creditsUsage'];
+  const _limitsSig: () => Promise<AccountLimits> = null as unknown as ErgonomicClient['limits'];
+  void _creditsSig;
+  void _creditsUsageSig;
+  void _limitsSig;
   accept<Artifact>();
   accept<Handle>();
   accept<Result>();

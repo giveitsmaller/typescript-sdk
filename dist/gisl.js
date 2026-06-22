@@ -166,6 +166,18 @@ function wrapErgonomic(client, presetDefaults, scopedPresetDefaults) {
                     return new MergeBuilder(target, declared, mergeOpts);
                 };
             }
+            // 8yqUXLCS — first-class ergonomic billing/limits accessors (thin fluent
+            // aliases over the low-level getters, surfaced + documented here rather
+            // than relying on undocumented Proxy passthrough).
+            if (prop === 'credits') {
+                return () => target.getCreditsBalance();
+            }
+            if (prop === 'creditsUsage') {
+                return (options) => target.getCreditsUsage(options);
+            }
+            if (prop === 'limits') {
+                return () => target.getAccountLimits();
+            }
             return Reflect.get(target, prop, receiver);
         },
     });

@@ -19,7 +19,8 @@
 import { GislClient } from './client.js';
 import { GislConfigError, GislFeatureRequiresAuthError, GislMissingCredentialsError } from './errors.js';
 import { type ResolveCredentialsOptions, type ResolveEndpointOptions } from './credentials.js';
-import type { GislClientConfig } from './types.js';
+import type { CreditsUsageOptions, GislClientConfig } from './types.js';
+import type { AccountLimits, CreditsBalanceResponse, CreditsUsageResponse } from '@giveitsmaller/contracts/openapi';
 import { OperationBuilder } from './builder.js';
 import { MergeBuilder, type Asset, type MergeOptions } from './merge.js';
 import { PresetDefaults } from './ergonomic/presets/index.js';
@@ -128,6 +129,12 @@ export type ErgonomicClient = GislClient & {
      * over the existing transport.
      */
     withPresetDefaults(defaults: PresetDefaults): ErgonomicClient;
+    /** Current credit balance (sugar for `getCreditsBalance()`). */
+    credits(): Promise<CreditsBalanceResponse>;
+    /** Credit usage history (sugar for `getCreditsUsage()`). */
+    creditsUsage(options?: CreditsUsageOptions): Promise<CreditsUsageResponse>;
+    /** Effective account limits / tier-resolved caps (sugar for `getAccountLimits()`). */
+    limits(): Promise<AccountLimits>;
 };
 /**
  * The `gisl` namespace — primary ergonomic-layer entry point.

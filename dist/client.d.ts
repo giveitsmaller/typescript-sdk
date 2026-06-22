@@ -1,4 +1,4 @@
-import type { AudioWatermarkDecodeRequest, AudioWatermarkDecodeResponse, ExternalImportCreatedResponse, ExternalImportRequest, LoginUserRequest, LoginUser200ResponseData, ContactRequest, CreditsBalanceResponse, CreditsUsageResponse, UploadResponse, UploadProbeResponse, WorkflowCancelResponse, WorkflowCreateResponse, WorkflowResumeResponse, WorkflowStatusResponse, WorkflowListResponse, WorkflowSummary, WorkflowDownloadResponse, MetadataResponse, RetryResponse } from '@giveitsmaller/contracts/openapi';
+import type { AudioWatermarkDecodeRequest, AudioWatermarkDecodeResponse, ExternalImportCreatedResponse, ExternalImportRequest, LoginUserRequest, LoginUser200ResponseData, ContactRequest, AccountLimits, CreditsBalanceResponse, CreditsUsageResponse, UploadResponse, UploadProbeResponse, WorkflowCancelResponse, WorkflowCreateResponse, WorkflowResumeResponse, WorkflowStatusResponse, WorkflowListResponse, WorkflowSummary, WorkflowDownloadResponse, MetadataResponse, RetryResponse } from '@giveitsmaller/contracts/openapi';
 import type { CreditsUsageOptions, ListWorkflowsOptions, GetSchemaOptions, GetSchemaResult, GislClientConfig, GislSseEvent, PreflightClipsResult, ProbeWaitOptions, ProbeWaitResult, ReadCapabilityOptions, UploadOptions, WaitOptions, WorkflowCreatePayload, _Sdk3HandCodedKeepaliveResult, _Sdk3HandCodedMultipartStatusResult, _Sdk3HandCodedPresignPartsResult } from './types.js';
 export declare const MULTIPART_CONCURRENCY_DEFAULT: 4;
 export declare const DEFAULT_MULTIPART_FIRST_CHUNK_SIZE: number;
@@ -245,6 +245,13 @@ export declare class GislClient {
      * off the error envelope.
      */
     getCreditsBalance(): Promise<CreditsBalanceResponse>;
+    /**
+     * Fetch the caller's effective account limits (the tier-resolved caps:
+     * upload/merge size + total caps, surfaced override-aware). `GET
+     * /api/v2/account/limits`. The success envelope's `data` is unwrapped to the
+     * {@link AccountLimits} model (mirrors {@link getCreditsBalance}).
+     */
+    getAccountLimits(): Promise<AccountLimits>;
     /**
      * Authenticate with email/password. On success the server issues a
      * session cookie via `Set-Cookie`; subsequent requests authenticate

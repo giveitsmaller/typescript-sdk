@@ -4,7 +4,7 @@
 // blobByteSource, which never touches these). Kept as a STATIC import (not a
 // dynamic one) so `vi.mock('node:fs/promises')` still intercepts it in tests.
 import { open, stat, basename } from './node-fs.js';
-import { AudioWatermarkDecodeRequestToJSON, AudioWatermarkDecodeResponseFromJSON, ExternalImportCreatedResponseFromJSON, ExternalImportRequestToJSON, LoginUser200ResponseDataFromJSON, CreditsBalanceResponseFromJSON, CreditsUsageResponseFromJSON, UploadResponseFromJSON, UploadProbeResponseFromJSON, MultipartInitiateResponseFromJSON, MultipartInitiateRequestMetadataHintToJSON, MultipartCompleteResponseFromJSON, MultipartCompleteRequestToJSON, WorkflowCancelResponseFromJSON, WorkflowCreateResponseFromJSON, WorkflowResumeResponseFromJSON, WorkflowStatusResponseFromJSON, WorkflowListResponseFromJSON, WorkflowDownloadResponseFromJSON, MetadataResponseFromJSON, OperationsSchemaResponseFromJSON, RetryResponseFromJSON, WorkflowStatus, AuthErrorResponseFromJSON, AuthErrorType, AuthRejectionEnvelopeFromJSON, AuthRejectionEnvelopeErrorTypeEnum, BalanceExhaustedResponseFromJSON, BalanceExhaustedResponseRequiredActionEnum, FeatureNotAvailableResponseFromJSON, FeatureTierRestrictedResponseFromJSON, TierRestrictionKind, TierRestrictionResponseFromJSON, UserTier, WorkflowExpiredResponseFromJSON, ProbePendingResponseFromJSON, UploadSizeExceedsTierResponseFromJSON, UploadDurationExceedsTierResponseFromJSON, UploadConstraintsAppliedProcessingClassPreAssignmentEnum, UploadThresholdsSingleShotMaxBytesEnum, UploadThresholdsMultipartChunkSizeEnum, UploadThresholdsMultipartConcurrencyDefaultEnum, } from '@giveitsmaller/contracts/openapi';
+import { AudioWatermarkDecodeRequestToJSON, AudioWatermarkDecodeResponseFromJSON, ExternalImportCreatedResponseFromJSON, ExternalImportRequestToJSON, LoginUser200ResponseDataFromJSON, AccountLimitsFromJSON, CreditsBalanceResponseFromJSON, CreditsUsageResponseFromJSON, UploadResponseFromJSON, UploadProbeResponseFromJSON, MultipartInitiateResponseFromJSON, MultipartInitiateRequestMetadataHintToJSON, MultipartCompleteResponseFromJSON, MultipartCompleteRequestToJSON, WorkflowCancelResponseFromJSON, WorkflowCreateResponseFromJSON, WorkflowResumeResponseFromJSON, WorkflowStatusResponseFromJSON, WorkflowListResponseFromJSON, WorkflowDownloadResponseFromJSON, MetadataResponseFromJSON, OperationsSchemaResponseFromJSON, RetryResponseFromJSON, WorkflowStatus, AuthErrorResponseFromJSON, AuthErrorType, AuthRejectionEnvelopeFromJSON, AuthRejectionEnvelopeErrorTypeEnum, BalanceExhaustedResponseFromJSON, BalanceExhaustedResponseRequiredActionEnum, FeatureNotAvailableResponseFromJSON, FeatureTierRestrictedResponseFromJSON, TierRestrictionKind, TierRestrictionResponseFromJSON, UserTier, WorkflowExpiredResponseFromJSON, ProbePendingResponseFromJSON, UploadSizeExceedsTierResponseFromJSON, UploadDurationExceedsTierResponseFromJSON, UploadConstraintsAppliedProcessingClassPreAssignmentEnum, UploadThresholdsSingleShotMaxBytesEnum, UploadThresholdsMultipartChunkSizeEnum, UploadThresholdsMultipartConcurrencyDefaultEnum, } from '@giveitsmaller/contracts/openapi';
 import { GislAbortError, GislApiError, GislAuthError, GislAuthRejectionError, GislBalanceExhaustedError, GislError, GislFeatureNotAvailableError, GislFeatureTierRestrictedError, GislMultipartPartCountError, GislMultipartPartError, GislMultipartSessionNotFoundError, GislMultipartSessionOwnershipError, GislMultipartSessionAuthRequiredError, GislTierRestrictedError, GislTimeoutError, GislProbePendingError, GislUploadCapExceededError, GislValidationError, GislWorkflowExpiredError, } from './errors.js';
 import { parseSseStream } from './sse.js';
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -1932,6 +1932,17 @@ export class GislClient {
     async getCreditsBalance() {
         return this.request('GET', '/api/v2/credits/balance', {
             deserialize: CreditsBalanceResponseFromJSON,
+        });
+    }
+    /**
+     * Fetch the caller's effective account limits (the tier-resolved caps:
+     * upload/merge size + total caps, surfaced override-aware). `GET
+     * /api/v2/account/limits`. The success envelope's `data` is unwrapped to the
+     * {@link AccountLimits} model (mirrors {@link getCreditsBalance}).
+     */
+    async getAccountLimits() {
+        return this.request('GET', '/api/v2/account/limits', {
+            deserialize: AccountLimitsFromJSON,
         });
     }
     // -----------------------------------------------------------------------

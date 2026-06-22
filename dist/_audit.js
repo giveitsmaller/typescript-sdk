@@ -68,6 +68,17 @@ export function _runAudit() {
     accept();
     // T2 / xVDTIm8C — operation-builder surface.
     accept();
+    // 8yqUXLCS — pin the credits/limits accessor SIGNATURES on ErgonomicClient.
+    // accept<ErgonomicClient>() proves the type compiles; these prove the three
+    // methods EXIST and their signatures/return types match (indexed access errors
+    // if a method is missing; the typed LHS errors if the signature drifts). The
+    // RHS is a type-only cast (`null as unknown as …`) — no runtime property read.
+    const _creditsSig = null;
+    const _creditsUsageSig = null;
+    const _limitsSig = null;
+    void _creditsSig;
+    void _creditsUsageSig;
+    void _limitsSig;
     accept();
     accept();
     accept();

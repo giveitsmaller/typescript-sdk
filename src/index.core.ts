@@ -241,6 +241,10 @@ export type {
 
 // Re-export key contract types so users only need @giveitsmaller/sdk
 export type {
+  // 8yqUXLCS — return shapes of the credits/limits ergonomic accessors.
+  AccountLimits,
+  AccountLimitsLimits,
+  AccountLimitEntry,
   AudioWatermarkDecodeRequest,
   AudioWatermarkDecodeResponse,
   ContactRequest,

@@ -361,6 +361,7 @@ export const KNOWN_SDK_METHODS: ReadonlySet<string> = new Set([
   'streamEvents',
   'getCreditsBalance',
   'getCreditsUsage',
+  'getAccountLimits',
   'getMetadata',
   'getSchema',
   'login',

@@ -157,6 +157,115 @@ describe('gisl.create', () => {
 
 // ---------------------------------------------------------------------------
 
+describe('ergonomic billing/limits accessors (8yqUXLCS)', () => {
+  // The Proxy synthesises `credits()` / `creditsUsage()` / `limits()` as thin
+  // fluent aliases over the low-level getters. Assert each hits the right
+  // endpoint (the low-level method's literal path) and returns the right shape.
+  function jsonResponse(data: unknown, status = 200): Response {
+    return new Response(JSON.stringify(data), {
+      status,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  it('credits() calls getCreditsBalance → GET /api/v2/credits/balance', async () => {
+    const client = await create({ apiKey: 'k', baseUrl: 'https://api.example.com' });
+    fetchSpy.mockResolvedValueOnce(
+      jsonResponse({
+        success: true,
+        data: {
+          monthly_balance: 1200,
+          purchased_balance: 5000,
+          overdraft_limit: 500,
+          overdraft_debt: 0,
+          available_credits: 6700,
+          monthly_allowance: 2000,
+          tier: 'pro',
+        },
+      }),
+    );
+
+    const balance = await client.credits();
+    expect(balance.availableCredits).toBe(6700);
+    expect(balance.tier).toBe('pro');
+
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://api.example.com/api/v2/credits/balance');
+    expect(init.method).toBe('GET');
+  });
+
+  it('creditsUsage() with no options → GET /api/v2/credits/usage (no querystring)', async () => {
+    const client = await create({ apiKey: 'k', baseUrl: 'https://api.example.com' });
+    fetchSpy.mockResolvedValueOnce(
+      jsonResponse({
+        success: true,
+        data: { transactions: [], total: 0, limit: 20, offset: 0 },
+      }),
+    );
+
+    const page = await client.creditsUsage();
+    expect(page.transactions).toEqual([]);
+    expect(page.total).toBe(0);
+
+    const [url] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://api.example.com/api/v2/credits/usage');
+  });
+
+  it('creditsUsage({limit, offset}) forwards the query params', async () => {
+    const client = await create({ apiKey: 'k', baseUrl: 'https://api.example.com' });
+    fetchSpy.mockResolvedValueOnce(
+      jsonResponse({
+        success: true,
+        data: { transactions: [], total: 7, limit: 5, offset: 5 },
+      }),
+    );
+
+    const page = await client.creditsUsage({ limit: 5, offset: 5 });
+    expect(page.limit).toBe(5);
+    expect(page.offset).toBe(5);
+
+    const [url] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('/api/v2/credits/usage?');
+    expect(url).toContain('limit=5');
+    expect(url).toContain('offset=5');
+  });
+
+  it('limits() calls getAccountLimits → GET /api/v2/account/limits and decodes the limit entries', async () => {
+    const client = await create({ apiKey: 'k', baseUrl: 'https://api.example.com' });
+    fetchSpy.mockResolvedValueOnce(
+      jsonResponse({
+        success: true,
+        data: {
+          tier: 'pro',
+          limits: {
+            max_upload_size_bytes: {
+              effective: 5368709120,
+              tier_default: 5368709120,
+              overridden: false,
+            },
+            max_total_input_size_bytes: {
+              effective: 5368709120,
+              tier_default: 1073741824,
+              overridden: true,
+            },
+          },
+        },
+      }),
+    );
+
+    const accountLimits = await client.limits();
+    expect(accountLimits.tier).toBe('pro');
+    expect(accountLimits.limits.maxUploadSizeBytes.effective).toBe(5368709120);
+    expect(accountLimits.limits.maxTotalInputSizeBytes.overridden).toBe(true);
+
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://api.example.com/api/v2/account/limits');
+    expect(init.method).toBe('GET');
+  });
+});
+
+// ---------------------------------------------------------------------------
+
 describe('_internalAnonymous (internal capability behind future gisl.anonymous)', () => {
   it('constructs without throwing even when no apiKey is configured', async () => {
     // Anonymous explicitly opts out of the missing-creds throw.

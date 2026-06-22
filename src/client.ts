@@ -11,6 +11,7 @@ import {
   ExternalImportCreatedResponseFromJSON,
   ExternalImportRequestToJSON,
   LoginUser200ResponseDataFromJSON,
+  AccountLimitsFromJSON,
   CreditsBalanceResponseFromJSON,
   CreditsUsageResponseFromJSON,
   UploadResponseFromJSON,
@@ -58,6 +59,7 @@ import type {
   LoginUserRequest,
   LoginUser200ResponseData,
   ContactRequest,
+  AccountLimits,
   CreditsBalanceResponse,
   CreditsUsageResponse,
   UploadResponse,
@@ -2640,6 +2642,18 @@ export class GislClient {
   async getCreditsBalance(): Promise<CreditsBalanceResponse> {
     return this.request('GET', '/api/v2/credits/balance', {
       deserialize: CreditsBalanceResponseFromJSON,
+    });
+  }
+
+  /**
+   * Fetch the caller's effective account limits (the tier-resolved caps:
+   * upload/merge size + total caps, surfaced override-aware). `GET
+   * /api/v2/account/limits`. The success envelope's `data` is unwrapped to the
+   * {@link AccountLimits} model (mirrors {@link getCreditsBalance}).
+   */
+  async getAccountLimits(): Promise<AccountLimits> {
+    return this.request('GET', '/api/v2/account/limits', {
+      deserialize: AccountLimitsFromJSON,
     });
   }
 

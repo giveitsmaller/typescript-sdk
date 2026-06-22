@@ -29,7 +29,12 @@ import {
   type ResolveCredentialsOptions,
   type ResolveEndpointOptions,
 } from './credentials.js';
-import type { GislClientConfig } from './types.js';
+import type { CreditsUsageOptions, GislClientConfig } from './types.js';
+import type {
+  AccountLimits,
+  CreditsBalanceResponse,
+  CreditsUsageResponse,
+} from '@giveitsmaller/contracts/openapi';
 import { OperationBuilder } from './builder.js';
 import { MergeBuilder, asset, type Asset, type MergeOptions } from './merge.js';
 import { PresetDefaults } from './ergonomic/presets/index.js';
@@ -225,6 +230,19 @@ function wrapErgonomic(
           return new MergeBuilder(target, declared, mergeOpts);
         };
       }
+      // 8yqUXLCS — first-class ergonomic billing/limits accessors (thin fluent
+      // aliases over the low-level getters, surfaced + documented here rather
+      // than relying on undocumented Proxy passthrough).
+      if (prop === 'credits') {
+        return (): Promise<CreditsBalanceResponse> => target.getCreditsBalance();
+      }
+      if (prop === 'creditsUsage') {
+        return (options?: CreditsUsageOptions): Promise<CreditsUsageResponse> =>
+          target.getCreditsUsage(options);
+      }
+      if (prop === 'limits') {
+        return (): Promise<AccountLimits> => target.getAccountLimits();
+      }
       return Reflect.get(target, prop, receiver);
     },
   }) as ErgonomicClient;
@@ -312,6 +330,12 @@ export type ErgonomicClient = GislClient & {
    * over the existing transport.
    */
   withPresetDefaults(defaults: PresetDefaults): ErgonomicClient;
+  /** Current credit balance (sugar for `getCreditsBalance()`). */
+  credits(): Promise<CreditsBalanceResponse>;
+  /** Credit usage history (sugar for `getCreditsUsage()`). */
+  creditsUsage(options?: CreditsUsageOptions): Promise<CreditsUsageResponse>;
+  /** Effective account limits / tier-resolved caps (sugar for `getAccountLimits()`). */
+  limits(): Promise<AccountLimits>;
 };
 
 /**

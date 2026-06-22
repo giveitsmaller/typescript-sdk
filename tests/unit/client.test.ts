@@ -1498,6 +1498,45 @@ describe('GislClient', () => {
     });
   });
 
+  describe('getAccountLimits', () => {
+    it('GETs /api/v2/account/limits and decodes the tier + snake_case limit entries (8yqUXLCS)', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            tier: 'pro',
+            limits: {
+              max_upload_size_bytes: {
+                effective: 5368709120,
+                tier_default: 5368709120,
+                overridden: false,
+              },
+              max_total_input_size_bytes: {
+                effective: 5368709120,
+                tier_default: 1073741824,
+                overridden: true,
+              },
+            },
+          },
+        }),
+      );
+
+      const accountLimits = await client.getAccountLimits();
+      expect(accountLimits.tier).toBe('pro');
+      // snake_case → camelCase mapping on the nested limit entries.
+      expect(accountLimits.limits.maxUploadSizeBytes.effective).toBe(5368709120);
+      expect(accountLimits.limits.maxUploadSizeBytes.tierDefault).toBe(5368709120);
+      expect(accountLimits.limits.maxUploadSizeBytes.overridden).toBe(false);
+      expect(accountLimits.limits.maxTotalInputSizeBytes.effective).toBe(5368709120);
+      expect(accountLimits.limits.maxTotalInputSizeBytes.tierDefault).toBe(1073741824);
+      expect(accountLimits.limits.maxTotalInputSizeBytes.overridden).toBe(true);
+
+      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('https://api.example.com/api/v2/account/limits');
+      expect(init.method).toBe('GET');
+    });
+  });
+
   // -----------------------------------------------------------------------
   // Single upload
   // -----------------------------------------------------------------------
