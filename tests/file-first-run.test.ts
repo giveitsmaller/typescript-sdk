@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Recipe, RunResult, fileInput } from '../src/file-first.js';
 import { Handle } from '../src/handle.js';
 import type { ProgressEvent } from '../src/builder.js';
-import { GislConfigError, GislNoSuchKeyError, GislTimeoutError } from '../src/errors.js';
+import { GislConfigError, GislItemFailedError, GislNoSuchKeyError, GislTimeoutError } from '../src/errors.js';
 import type { GislClient } from '../src/client.js';
 
 /**
@@ -276,10 +276,119 @@ describe('Recipe.run — failed terminal', () => {
     expect(result.succeeded).toEqual([]);
     expect(result.failed).toHaveLength(1);
     expect(result.failed[0].key).toBeNull();
+    // The error is now a typed GislItemFailedError (still an Error subclass).
+    expect(result.failed[0].error).toBeInstanceOf(GislItemFailedError);
     expect(result.failed[0].error).toBeInstanceOf(Error);
     // The error message is "{state}: {firstOpErrorMessage}" — pin the content,
     // not just the type, so a misformatted partition message is caught.
-    expect((result.failed[0].error as Error).message).toBe('failed: codec exploded');
+    expect(result.failed[0].error.message).toBe('failed: codec exploded');
+    // The typed fields carry the terminal state + the op's human message; this op
+    // had no error_code, so errorCode is undefined.
+    expect(result.failed[0].error.state).toBe('failed');
+    expect(result.failed[0].error.errorMessage).toBe('codec exploded');
+    expect(result.failed[0].error.errorCode).toBeUndefined();
+    expect(result.failed[0].error.key).toBeNull();
+  });
+
+  it('reads BOTH error_code + error_message off the failing op into the typed error', async () => {
+    const mock = makeMockClient();
+    mock.streamEvents.mockImplementation(async function* () {
+      yield { event: 'workflow.failed', data: { status: 'failed' } };
+    });
+    mock.getWorkflowStatus.mockResolvedValue({
+      workflowId: 'wf_1',
+      status: 'failed',
+      jobs: [
+        {
+          operations: [
+            { errorMessage: 'output not smaller than input', errorCode: 'output_too_large' },
+          ],
+        },
+      ],
+    });
+    const result = await recipe(mock).compress().run({ maxWait: '30s' });
+
+    const err = result.failed[0].error;
+    expect(err).toBeInstanceOf(GislItemFailedError);
+    expect(err.state).toBe('failed');
+    expect(err.errorMessage).toBe('output not smaller than input');
+    expect(err.errorCode).toBe('output_too_large');
+    expect(err.message).toBe('failed: output not smaller than input');
+    // toJSON failed[0] surfaces all five keys in order.
+    expect(result.toJSON().failed[0]).toEqual({
+      key: null,
+      error: 'failed: output not smaller than input',
+      state: 'failed',
+      errorMessage: 'output not smaller than input',
+      errorCode: 'output_too_large',
+    });
+  });
+
+  it('pairs error_code + error_message from the SAME op (never crosses ops)', async () => {
+    // The first op carries ONLY a code, a later op carries ONLY a message. The
+    // partition reads from the FIRST op with EITHER field — so the code comes
+    // through and the message stays undefined (a code from op A must not pair
+    // with a message from op B).
+    const mock = makeMockClient();
+    mock.streamEvents.mockImplementation(async function* () {
+      yield { event: 'workflow.failed', data: { status: 'failed' } };
+    });
+    mock.getWorkflowStatus.mockResolvedValue({
+      workflowId: 'wf_1',
+      status: 'failed',
+      jobs: [
+        {
+          operations: [
+            { errorCode: 'first_op_code' },
+            { errorMessage: 'second op message' },
+          ],
+        },
+      ],
+    });
+    const result = await recipe(mock).compress().run({ maxWait: '30s' });
+
+    const err = result.failed[0].error;
+    expect(err.errorCode).toBe('first_op_code');
+    expect(err.errorMessage).toBeUndefined();
+    // errorMessage undefined → message is the bare state (NO trailing colon).
+    expect(err.message).toBe('failed');
+    // toJSON omits errorMessage (absent) but includes errorCode.
+    expect(result.toJSON().failed[0]).toEqual({
+      key: null,
+      error: 'failed',
+      state: 'failed',
+      errorCode: 'first_op_code',
+    });
+  });
+
+  it('passes an EMPTY-string errorMessage through the projection (colon added, key kept)', async () => {
+    // Edge: the failing op carries errorMessage '' (empty, but PRESENT) and no
+    // error_code. The composition is `!== undefined`, NOT truthiness, so the
+    // colon is still added and the empty string survives end-to-end through the
+    // projection — proving it isn't collapsed to undefined / dropped.
+    const mock = makeMockClient();
+    mock.streamEvents.mockImplementation(async function* () {
+      yield { event: 'workflow.failed', data: { status: 'failed' } };
+    });
+    mock.getWorkflowStatus.mockResolvedValue({
+      workflowId: 'wf_1',
+      status: 'failed',
+      jobs: [{ operations: [{ errorMessage: '' }] }],
+    });
+    const result = await recipe(mock).compress().run({ maxWait: '30s' });
+
+    const err = result.failed[0].error;
+    expect(err).toBeInstanceOf(GislItemFailedError);
+    // Empty string PRESENT (not undefined) — the projection passed '' through.
+    expect(err.errorMessage).toBe('');
+    expect(err.errorCode).toBeUndefined();
+    // The colon IS added for an empty-string message (the `!== undefined` rule).
+    expect(err.message).toBe('failed: ');
+    // toJSON INCLUDES errorMessage: '' (present); errorCode OMITTED (absent).
+    const entry = result.toJSON().failed[0];
+    expect(entry).toEqual({ key: null, error: 'failed: ', state: 'failed', errorMessage: '' });
+    expect(Object.keys(entry)).toEqual(['key', 'error', 'state', 'errorMessage']);
+    expect('errorCode' in entry).toBe(false);
   });
 
   it('picks the first DEFINED op errorMessage when an earlier op has none', async () => {
@@ -304,7 +413,9 @@ describe('Recipe.run — failed terminal', () => {
     const result = await recipe(mock).compress().run({ maxWait: '30s' });
 
     expect(result.state).toBe('failed');
-    expect((result.failed[0].error as Error).message).toBe('failed: later op blew up');
+    expect(result.failed[0].error).toBeInstanceOf(GislItemFailedError);
+    expect(result.failed[0].error.message).toBe('failed: later op blew up');
+    expect(result.failed[0].error.errorMessage).toBe('later op blew up');
   });
 });
 
@@ -329,8 +440,11 @@ describe('Recipe.run — partially_failed terminal', () => {
     expect(result.succeeded).toEqual([]);
     expect(result.failed).toHaveLength(1);
     expect(result.failed[0].key).toBeNull();
-    expect(result.failed[0].error).toBeInstanceOf(Error);
-    expect((result.failed[0].error as Error).message).toBe('partially_failed: codec exploded');
+    expect(result.failed[0].error).toBeInstanceOf(GislItemFailedError);
+    expect(result.failed[0].error.message).toBe('partially_failed: codec exploded');
+    // The terminal lifecycle state is carried verbatim on the typed error.
+    expect(result.failed[0].error.state).toBe('partially_failed');
+    expect(result.failed[0].error.errorMessage).toBe('codec exploded');
   });
 });
 

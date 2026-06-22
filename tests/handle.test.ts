@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Handle, StatusSnapshot } from '../src/handle.js';
 import { RunResult } from '../src/file-first.js';
-import { GislConfigError, GislResultNotReadyError } from '../src/errors.js';
+import { GislConfigError, GislItemFailedError, GislResultNotReadyError } from '../src/errors.js';
 import type { GislClient } from '../src/client.js';
 
 /**
@@ -184,6 +184,29 @@ describe('Handle.result', () => {
     expect(() => result.byKey('hero')).toThrow();
   });
 
+  it('a reattached failed terminal funnels through projectDownloadsToRunResult into the typed error', async () => {
+    // A reattached Handle (no recipe key) on a single-input failed workflow goes
+    // through projectDownloadsToRunResult — the SAME path the producers use — so
+    // result.failed[0].error is the typed GislItemFailedError with state + fields.
+    const mock = makeMockClient();
+    mock.getWorkflowStatus.mockResolvedValue({
+      workflowId: 'wf_1',
+      status: 'failed',
+      jobs: [{ jobId: 'job_1', ref: 'op', status: 'failed', operations: [{ errorMessage: 'boom', errorCode: 'bad_codec' }] }],
+    });
+    const result = await new Handle('wf_1', undefined, mock.client).result();
+
+    expect(result.ok).toBe(false);
+    expect(result.failed).toHaveLength(1);
+    const err = result.failed[0].error;
+    expect(err).toBeInstanceOf(GislItemFailedError);
+    expect(err.key).toBeNull();
+    expect(err.state).toBe('failed');
+    expect(err.errorMessage).toBe('boom');
+    expect(err.errorCode).toBe('bad_codec');
+    expect(err.message).toBe('failed: boom');
+  });
+
   it.each(['pending', 'in_progress'])(
     'throws GislResultNotReadyError for a non-terminal (%s) workflow without downloading',
     async (state) => {
@@ -341,9 +364,61 @@ describe('projectDownloadsToRunResult — partition invariant', () => {
       expect(result.succeeded).toEqual([]);
       expect(result.failed).toHaveLength(1);
       expect(result.failed[0].key).toBeNull();
-      expect(result.failed[0].error).toBeInstanceOf(Error);
+      // Now a typed GislItemFailedError; with no failing op (no jobs[]) the human
+      // + machine fields are BOTH absent — only the bare state is carried.
+      expect(result.failed[0].error).toBeInstanceOf(GislItemFailedError);
+      expect(result.failed[0].error.state).toBe(state);
+      expect(result.failed[0].error.errorMessage).toBeUndefined();
+      expect(result.failed[0].error.errorCode).toBeUndefined();
+      expect(result.failed[0].error.message).toBe(state);
     },
   );
+
+  it('reads BOTH error_code + error_message off the first failing op (single-input)', async () => {
+    const { projectDownloadsToRunResult } = await import('../src/file-first.js');
+    const result = projectDownloadsToRunResult(
+      'wf_1',
+      {
+        status: 'failed',
+        jobs: [
+          { operations: [{ errorMessage: 'output not smaller', errorCode: 'output_too_large' }] },
+        ],
+      } as never,
+      [],
+      'hero',
+    );
+    const err = result.failed[0].error;
+    expect(err).toBeInstanceOf(GislItemFailedError);
+    expect(err.key).toBe('hero');
+    expect(err.state).toBe('failed');
+    expect(err.errorMessage).toBe('output not smaller');
+    expect(err.errorCode).toBe('output_too_large');
+    expect(err.message).toBe('failed: output not smaller');
+    // toJSON projects all five keys in order.
+    expect(result.toJSON().failed[0]).toEqual({
+      key: 'hero',
+      error: 'failed: output not smaller',
+      state: 'failed',
+      errorMessage: 'output not smaller',
+      errorCode: 'output_too_large',
+    });
+  });
+
+  it('expired/cancelled with NO failing op → toJSON OMITS errorMessage + errorCode', async () => {
+    const { projectDownloadsToRunResult } = await import('../src/file-first.js');
+    const result = projectDownloadsToRunResult('wf_1', { status: 'expired' } as never, [], null);
+    const err = result.failed[0].error;
+    expect(err.state).toBe('expired');
+    expect(err.errorMessage).toBeUndefined();
+    expect(err.errorCode).toBeUndefined();
+    const entry = result.toJSON().failed[0];
+    // error === the bare state string (no trailing colon); the two optional keys
+    // are OMITTED entirely (parity with PHP's omit-when-null, never `=> null`).
+    expect(entry).toEqual({ key: null, error: 'expired', state: 'expired' });
+    expect(Object.keys(entry)).toEqual(['key', 'error', 'state']);
+    expect('errorMessage' in entry).toBe(false);
+    expect('errorCode' in entry).toBe(false);
+  });
 
   it('formats the failure message as `{state}: {firstOpErrorMessage}` (server reason preserved)', async () => {
     const { projectDownloadsToRunResult } = await import('../src/file-first.js');
@@ -355,7 +430,9 @@ describe('projectDownloadsToRunResult — partition invariant', () => {
     );
     // The server-provided reason must survive + carry the state prefix — a
     // regression that drops or mis-formats it would otherwise pass.
-    expect((result.failed[0].error as Error).message).toBe('failed: boom');
+    expect(result.failed[0].error).toBeInstanceOf(GislItemFailedError);
+    expect(result.failed[0].error.message).toBe('failed: boom');
+    expect(result.failed[0].error.errorMessage).toBe('boom');
   });
 
   it('falls back to the bare state when no op carries an errorMessage', async () => {
@@ -366,7 +443,11 @@ describe('projectDownloadsToRunResult — partition invariant', () => {
       [],
       null,
     );
-    expect((result.failed[0].error as Error).message).toBe('failed');
+    expect(result.failed[0].error).toBeInstanceOf(GislItemFailedError);
+    expect(result.failed[0].error.message).toBe('failed');
+    // No op carried either field → both undefined (bare state, no colon).
+    expect(result.failed[0].error.errorMessage).toBeUndefined();
+    expect(result.failed[0].error.errorCode).toBeUndefined();
   });
 
   it('still flattens file-bearing downloads into artifacts on a non-completed terminal', async () => {
@@ -516,6 +597,11 @@ describe('Handle data-driven fan-out partitioning', () => {
     expect(result.ok).toBe(false);
     expect(result.succeeded.map((s) => s.key)).toEqual(['0']);
     expect(result.failed.map((f) => f.key)).toEqual(['1']);
+    // The failed job's typed error is scoped to THAT job's per-job status + op.
+    expect(result.failed[0].error).toBeInstanceOf(GislItemFailedError);
+    expect(result.failed[0].error.key).toBe('1');
+    expect(result.failed[0].error.state).toBe('failed');
+    expect(result.failed[0].error.errorMessage).toBe('boom');
   });
 
   it('a single-file handle (ref "op") stays on the single-output path and keeps its key', async () => {

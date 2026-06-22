@@ -9,6 +9,7 @@
  *
  * Mirrors `packages/php/src/FileFirst/*`.
  */
+import { GislItemFailedError } from './errors.js';
 import { type ProgressEvent } from './builder.js';
 import type { GislClient } from './client.js';
 import type { OperationDownload, WorkflowStatusResponse } from '@giveitsmaller/contracts/openapi';
@@ -67,15 +68,16 @@ export interface ItemResult {
     readonly outputs: readonly OutputFile[];
 }
 /**
- * One failed entry in {@link RunResult.failed}: an input that did not
- * produce a deliverable, paired with the cause. One bad input does not sink
- * the rest of a multi-input run. `error` is `unknown` (mirroring the PHP
- * `\Throwable`) so the caller narrows with `instanceof`. Mirrors the PHP
- * `ItemFailure`.
+ * One failed entry in {@link RunResult.failed}: an input that did not produce a
+ * deliverable, paired with the cause. One bad input does not sink the rest of a
+ * multi-input run. `error` is a typed {@link GislItemFailedError} carrying the
+ * terminal `state` plus the failing operation's `errorMessage`/`errorCode` (when
+ * present), so the caller can branch on the failure WITHOUT string-parsing.
+ * Mirrors the PHP `ItemFailure`.
  */
 export interface ItemFailure {
     readonly key: string | null;
-    readonly error: unknown;
+    readonly error: GislItemFailedError;
 }
 /**
  * Return value of {@link RunResult.downloadTo} — the local paths written,
@@ -160,27 +162,13 @@ export declare class RunResult {
         failed: readonly {
             key: string | null;
             error: string;
+            state: string;
+            errorMessage?: string;
+            errorCode?: string;
         }[];
     };
     private requireDownloader;
 }
-/**
- * Flatten the terminal workflow status + its downloads into a {@link RunResult}.
- *
- * Shared by {@link Recipe.run} (passes its recipe key) and the file-first
- * {@link Handle} reattach surface (`Handle.wait()`/`Handle.result()`, FF5a —
- * passes `null` because a reattached handle carries no recipe key).
- *
- * **Partition invariant (carries a prior codex-review fix — do NOT let it
- * drift):** success is ONLY `state === 'completed'`. Every other terminal
- * state — `failed`, `partially_failed`, `cancelled`, `expired`,
- * `paused_insufficient_credits` — partitions into `failed[]` so a caller's
- * `ok`/`succeeded` check can never treat a cancelled/expired/paused run as a
- * clean result.
- *
- * @internal Exported for reuse by the file-first `Handle`; not part of the
- *   caller-facing fluent surface.
- */
 export declare function projectDownloadsToRunResult(workflowId: string, finalStatus: WorkflowStatusResponse, jobDownloads: readonly {
     files: readonly OperationDownload[];
 }[], key: string | null, downloader?: Downloader): RunResult;

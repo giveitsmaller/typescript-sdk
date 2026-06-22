@@ -10,7 +10,7 @@
  * Mirrors `packages/php/src/FileFirst/*`.
  */
 
-import { GislConfigError, GislNetworkError, GislNoSuchKeyError, GislSinkError, GislTimeoutError, SseEndedWithoutTerminal } from './errors.js';
+import { GislConfigError, GislItemFailedError, GislNetworkError, GislNoSuchKeyError, GislSinkError, GislTimeoutError, SseEndedWithoutTerminal } from './errors.js';
 import {
   _detectCompressMedia,
   _detectAudioLossless,
@@ -111,15 +111,16 @@ export interface ItemResult {
 }
 
 /**
- * One failed entry in {@link RunResult.failed}: an input that did not
- * produce a deliverable, paired with the cause. One bad input does not sink
- * the rest of a multi-input run. `error` is `unknown` (mirroring the PHP
- * `\Throwable`) so the caller narrows with `instanceof`. Mirrors the PHP
- * `ItemFailure`.
+ * One failed entry in {@link RunResult.failed}: an input that did not produce a
+ * deliverable, paired with the cause. One bad input does not sink the rest of a
+ * multi-input run. `error` is a typed {@link GislItemFailedError} carrying the
+ * terminal `state` plus the failing operation's `errorMessage`/`errorCode` (when
+ * present), so the caller can branch on the failure WITHOUT string-parsing.
+ * Mirrors the PHP `ItemFailure`.
  */
 export interface ItemFailure {
   readonly key: string | null;
-  readonly error: unknown;
+  readonly error: GislItemFailedError;
 }
 
 /**
@@ -265,7 +266,13 @@ export class RunResult {
     url?: string;
     artifacts: readonly OutputFile[];
     succeeded: readonly { key: string | null; outputs: readonly OutputFile[] }[];
-    failed: readonly { key: string | null; error: string }[];
+    failed: readonly {
+      key: string | null;
+      error: string;
+      state: string;
+      errorMessage?: string;
+      errorCode?: string;
+    }[];
   } {
     // Re-project each OutputFile to exactly its four fields so structurally
     // compatible inputs carrying extra properties can't leak into the JSON.
@@ -278,10 +285,16 @@ export class RunResult {
     const rest = {
       artifacts: this.artifacts.map(file),
       succeeded: this.succeeded.map((i) => ({ key: i.key, outputs: i.outputs.map(file) })),
-      failed: this.failed.map((f) => ({
-        key: f.key,
-        error: f.error instanceof Error ? f.error.message : String(f.error),
-      })),
+      // Field order (key, error, state, errorMessage?, errorCode?) is fixed to
+      // match the PHP ItemFailure::toArray() so JSON-string parity holds; the two
+      // optional keys are OMITTED when absent (cancel/expire carry only state),
+      // mirroring PHP's omit-when-null (NOT emitted as `undefined`/`null`).
+      failed: this.failed.map((f) => {
+        const e = f.error;
+        const base = { key: f.key, error: e.message, state: e.state };
+        const withMsg = e.errorMessage === undefined ? base : { ...base, errorMessage: e.errorMessage };
+        return e.errorCode === undefined ? withMsg : { ...withMsg, errorCode: e.errorCode };
+      }),
     };
     const head = { workflowId: this.workflowId, state: this.state, ok: this.ok };
     // Insert `url` BETWEEN ok and artifacts when present, matching the PHP
@@ -322,6 +335,23 @@ export class RunResult {
  * @internal Exported for reuse by the file-first `Handle`; not part of the
  *   caller-facing fluent surface.
  */
+/** The error fields read off a terminal operation (`OperationResponse`). */
+interface OpError {
+  readonly errorMessage?: string;
+  readonly errorCode?: string;
+}
+
+/**
+ * Extract the human + machine error from the FIRST failing operation in `ops`
+ * (the first op carrying an `errorMessage` OR `errorCode`), reading BOTH from the
+ * SAME op so a code from one op can't pair with a message from another. Both are
+ * absent for terminal states with no failing op (cancel/expire/credit-pause).
+ */
+function firstOpError(ops: readonly OpError[]): OpError {
+  const op = ops.find((o) => o.errorMessage !== undefined || o.errorCode !== undefined);
+  return { errorMessage: op?.errorMessage, errorCode: op?.errorCode };
+}
+
 export function projectDownloadsToRunResult(
   workflowId: string,
   finalStatus: WorkflowStatusResponse,
@@ -349,14 +379,14 @@ export function projectDownloadsToRunResult(
     succeeded = [{ key, outputs: artifacts }];
     failed = [];
   } else {
-    const firstError = ((finalStatus as unknown as { jobs?: readonly { operations?: readonly { errorMessage?: string }[] }[] }).jobs ?? [])
-      .flatMap((j) => j.operations ?? [])
-      .map((op) => op.errorMessage)
-      .find((m): m is string => m !== undefined);
+    // First failing op across ALL jobs (downloads path is whole-workflow scoped).
+    const { errorMessage, errorCode } = firstOpError(
+      ((finalStatus as unknown as { jobs?: readonly { operations?: readonly OpError[] }[] }).jobs ?? []).flatMap(
+        (j) => j.operations ?? [],
+      ),
+    );
     succeeded = [];
-    failed = [
-      { key, error: new Error(firstError !== undefined ? `${state}: ${firstError}` : state) },
-    ];
+    failed = [{ key, error: new GislItemFailedError(key, state, errorMessage, errorCode) }];
   }
 
   return new RunResult(workflowId, state, artifacts, succeeded, failed, downloader);
@@ -418,14 +448,11 @@ export function projectMultiJobToRunResult(
     if (job.status === 'completed') {
       succeeded.push({ key, outputs });
     } else {
-      const firstError = (job.operations ?? [])
-        .map((op) => op.errorMessage)
-        .find((m): m is string => m !== undefined);
+      // Per-job scoped: read the error from THIS job's ops only.
+      const { errorMessage, errorCode } = firstOpError(job.operations ?? []);
       failed.push({
         key,
-        error: new Error(
-          firstError !== undefined ? `${job.status}: ${firstError}` : String(job.status),
-        ),
+        error: new GislItemFailedError(key, String(job.status), errorMessage, errorCode),
       });
     }
   }

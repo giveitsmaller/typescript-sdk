@@ -6,7 +6,7 @@ import {
   type ItemResult,
   type ItemFailure,
 } from '../src/file-first.js';
-import { GislNoSuchKeyError, GislSinkError } from '../src/errors.js';
+import { GislItemFailedError, GislNoSuchKeyError, GislSinkError } from '../src/errors.js';
 
 /** Streaming downloader stub: records (url, dest) calls, writes nothing. */
 class RecordingDownloader implements Downloader {
@@ -36,7 +36,9 @@ describe('RunResult', () => {
 
   it('sets ok true only when failed is empty', () => {
     expect(new RunResult('wf1', 'completed', [], [], []).ok).toBe(true);
-    const failed: ItemFailure[] = [{ key: 'bad', error: new Error('boom') }];
+    const failed: ItemFailure[] = [
+      { key: 'bad', error: new GislItemFailedError('bad', 'failed', 'boom') },
+    ];
     expect(new RunResult('wf1', 'failed', [], [], failed).ok).toBe(false);
   });
 
@@ -75,7 +77,9 @@ describe('RunResult', () => {
 
   it('downloadTo failOnPartial throws when failures present and does not download', async () => {
     const dl = new RecordingDownloader();
-    const failed: ItemFailure[] = [{ key: 'bad', error: new Error('boom') }];
+    const failed: ItemFailure[] = [
+      { key: 'bad', error: new GislItemFailedError('bad', 'failed', 'boom') },
+    ];
     const r = new RunResult('wf1', 'partially_failed', [out('a.jpg')], [], failed, dl);
     await expect(r.downloadTo('/tmp/out', { failOnPartial: true })).rejects.toMatchObject({
       reason: 'partial_failure',
@@ -85,7 +89,9 @@ describe('RunResult', () => {
 
   it('downloadTo default downloads successes despite failures', async () => {
     const dl = new RecordingDownloader();
-    const failed: ItemFailure[] = [{ key: 'bad', error: new Error('boom') }];
+    const failed: ItemFailure[] = [
+      { key: 'bad', error: new GislItemFailedError('bad', 'failed', 'boom') },
+    ];
     const r = new RunResult('wf1', 'partially_failed', [out('a.jpg'), out('b.jpg')], [], failed, dl);
     const manifest = await r.downloadTo('/tmp/out'); // failOnPartial defaults false
     expect(manifest.paths).toHaveLength(2);
@@ -202,7 +208,12 @@ describe('RunResult', () => {
   // order. A TS-only field-order regression is caught there, not here.
   it('toJSON shape with a failure matches the cross-language golden', () => {
     const ok: ItemResult = { key: 'good', outputs: [out('good.jpg')] };
-    const failed: ItemFailure[] = [{ key: 'bad', error: new Error('boom') }];
+    // The failed entry now carries a typed GislItemFailedError. The job's failing
+    // op had an error_message ('boom') but no error_code, so the projection emits
+    // {key, error, state, errorMessage} — errorCode OMITTED (absent, never null).
+    const failed: ItemFailure[] = [
+      { key: 'bad', error: new GislItemFailedError('bad', 'failed', 'boom') },
+    ];
     const r = new RunResult('wf1', 'partially_failed', [out('good.jpg')], [ok], failed);
     expect(r.toJSON()).toEqual({
       workflowId: 'wf1',
@@ -213,7 +224,45 @@ describe('RunResult', () => {
       succeeded: [
         { key: 'good', outputs: [{ url: 'https://cdn.example.com/good.jpg', filename: 'good.jpg', sizeBytes: 10, operation: 'compress' }] },
       ],
-      failed: [{ key: 'bad', error: 'boom' }],
+      // error = the GislItemFailedError.message ('{state}: {errorMessage}'); the
+      // entry gains state + errorMessage, errorCode omitted (absent on the op).
+      failed: [{ key: 'bad', error: 'failed: boom', state: 'failed', errorMessage: 'boom' }],
     });
+    // Field ORDER (key, error, state, errorMessage?, errorCode?) for the failed
+    // entry — toEqual is order-insensitive, so pin it explicitly for parity.
+    expect(Object.keys(r.toJSON().failed[0])).toEqual(['key', 'error', 'state', 'errorMessage']);
+  });
+
+  it('toJSON failed entry OMITS errorMessage/errorCode when the error carries neither (bare-state)', () => {
+    // A cancel/expire-style failure carries only the bare state — no failing op,
+    // so errorMessage + errorCode are absent. The projection must OMIT both keys
+    // (never emit `=> null`/undefined), and error === the bare state string.
+    const failed: ItemFailure[] = [
+      { key: null, error: new GislItemFailedError(null, 'cancelled') },
+    ];
+    const r = new RunResult('wf1', 'cancelled', [], [], failed);
+    const entry = r.toJSON().failed[0];
+    expect(entry).toEqual({ key: null, error: 'cancelled', state: 'cancelled' });
+    expect(Object.keys(entry)).toEqual(['key', 'error', 'state']);
+    expect('errorMessage' in entry).toBe(false);
+    expect('errorCode' in entry).toBe(false);
+  });
+
+  it('toJSON failed entry includes errorCode when the error carries one', () => {
+    // Both error_code + error_message present on the failing op → the projection
+    // emits all five keys in order: key, error, state, errorMessage, errorCode.
+    const failed: ItemFailure[] = [
+      { key: 'bad', error: new GislItemFailedError('bad', 'failed', 'too big', 'output_too_large') },
+    ];
+    const r = new RunResult('wf1', 'failed', [], [], failed);
+    const entry = r.toJSON().failed[0];
+    expect(entry).toEqual({
+      key: 'bad',
+      error: 'failed: too big',
+      state: 'failed',
+      errorMessage: 'too big',
+      errorCode: 'output_too_large',
+    });
+    expect(Object.keys(entry)).toEqual(['key', 'error', 'state', 'errorMessage', 'errorCode']);
   });
 });

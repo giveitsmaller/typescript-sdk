@@ -134,6 +134,7 @@ export function _runAudit() {
     accept();
     accept();
     accept();
+    accept();
     // FF5a / Ao8RPVxD — file-first Handle reattach surface.
     accept();
     accept();

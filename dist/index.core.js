@@ -28,6 +28,8 @@ GislChainCardinalityMismatchError,
 GislBundleAlreadyArchivedError, 
 // FF1 / 3BIxEnfR — file-first result sink errors.
 GislNoSuchKeyError, GislSinkError, 
+// AjhOUuqQ — typed terminal item failure stored in RunResult.failed[].error.
+GislItemFailedError, 
 // FF5a / Ao8RPVxD — thrown by the file-first Handle.result() when the
 // workflow is not yet terminal (the non-blocking accessor).
 GislResultNotReadyError, } from './errors.js';

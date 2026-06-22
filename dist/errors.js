@@ -503,3 +503,37 @@ export class GislSinkError extends GislError {
         this.reason = options.reason;
     }
 }
+/**
+ * A terminal item failure in {@link RunResult.failed} — an input whose job did
+ * not reach `completed`. Stored in `ItemFailure.error` so a caller can branch on
+ * the failure reason WITHOUT string-parsing.
+ *
+ * - `state`: the terminal lifecycle state (`failed` / `expired` / `cancelled` /
+ *   `partially_failed` / `paused_insufficient_credits`, or a per-job
+ *   non-`completed` status).
+ * - `errorMessage` / `errorCode`: the human + machine fields read from the first
+ *   failing operation (`OperationResponse.error_message` / `.error_code`). BOTH
+ *   are absent for non-`failed` terminal states — cancel / expire / credit-pause
+ *   carry only the bare `state`.
+ *
+ * `message` is `state` optionally suffixed `: errorMessage`, preserving the
+ * pre-typed string exactly (an empty-string `errorMessage` still adds the colon).
+ *
+ * Mirrors the PHP `Gisl\Sdk\Errors\GislItemFailedError`.
+ */
+export class GislItemFailedError extends GislError {
+    key;
+    state;
+    errorMessage;
+    errorCode;
+    constructor(key, state, errorMessage, errorCode) {
+        super(state + (errorMessage !== undefined ? `: ${errorMessage}` : ''));
+        this.name = 'GislItemFailedError';
+        this.key = key;
+        this.state = state;
+        if (errorMessage !== undefined)
+            this.errorMessage = errorMessage;
+        if (errorCode !== undefined)
+            this.errorCode = errorCode;
+    }
+}

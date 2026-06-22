@@ -9,7 +9,7 @@
  *
  * Mirrors `packages/php/src/FileFirst/*`.
  */
-import { GislConfigError, GislNetworkError, GislNoSuchKeyError, GislSinkError, GislTimeoutError, SseEndedWithoutTerminal } from './errors.js';
+import { GislConfigError, GislItemFailedError, GislNetworkError, GislNoSuchKeyError, GislSinkError, GislTimeoutError, SseEndedWithoutTerminal } from './errors.js';
 import { _detectCompressMedia, _detectAudioLossless, _consumeSseToTerminal, _pollToTerminal, _parseMaxWait, _checkAborted, _cappedProbeTimeoutMs, } from './builder.js';
 import { LazyHttpDownloader } from './lazy-downloader.js';
 import { resolveCompressOptions, } from './ergonomic/preset_resolver.js';
@@ -151,10 +151,16 @@ export class RunResult {
         const rest = {
             artifacts: this.artifacts.map(file),
             succeeded: this.succeeded.map((i) => ({ key: i.key, outputs: i.outputs.map(file) })),
-            failed: this.failed.map((f) => ({
-                key: f.key,
-                error: f.error instanceof Error ? f.error.message : String(f.error),
-            })),
+            // Field order (key, error, state, errorMessage?, errorCode?) is fixed to
+            // match the PHP ItemFailure::toArray() so JSON-string parity holds; the two
+            // optional keys are OMITTED when absent (cancel/expire carry only state),
+            // mirroring PHP's omit-when-null (NOT emitted as `undefined`/`null`).
+            failed: this.failed.map((f) => {
+                const e = f.error;
+                const base = { key: f.key, error: e.message, state: e.state };
+                const withMsg = e.errorMessage === undefined ? base : { ...base, errorMessage: e.errorMessage };
+                return e.errorCode === undefined ? withMsg : { ...withMsg, errorCode: e.errorCode };
+            }),
         };
         const head = { workflowId: this.workflowId, state: this.state, ok: this.ok };
         // Insert `url` BETWEEN ok and artifacts when present, matching the PHP
@@ -174,22 +180,15 @@ export class RunResult {
     }
 }
 /**
- * Flatten the terminal workflow status + its downloads into a {@link RunResult}.
- *
- * Shared by {@link Recipe.run} (passes its recipe key) and the file-first
- * {@link Handle} reattach surface (`Handle.wait()`/`Handle.result()`, FF5a —
- * passes `null` because a reattached handle carries no recipe key).
- *
- * **Partition invariant (carries a prior codex-review fix — do NOT let it
- * drift):** success is ONLY `state === 'completed'`. Every other terminal
- * state — `failed`, `partially_failed`, `cancelled`, `expired`,
- * `paused_insufficient_credits` — partitions into `failed[]` so a caller's
- * `ok`/`succeeded` check can never treat a cancelled/expired/paused run as a
- * clean result.
- *
- * @internal Exported for reuse by the file-first `Handle`; not part of the
- *   caller-facing fluent surface.
+ * Extract the human + machine error from the FIRST failing operation in `ops`
+ * (the first op carrying an `errorMessage` OR `errorCode`), reading BOTH from the
+ * SAME op so a code from one op can't pair with a message from another. Both are
+ * absent for terminal states with no failing op (cancel/expire/credit-pause).
  */
+function firstOpError(ops) {
+    const op = ops.find((o) => o.errorMessage !== undefined || o.errorCode !== undefined);
+    return { errorMessage: op?.errorMessage, errorCode: op?.errorCode };
+}
 export function projectDownloadsToRunResult(workflowId, finalStatus, jobDownloads, key, downloader) {
     // Flatten to the lean OutputFile[] (the four file-first fields only).
     const artifacts = [];
@@ -211,14 +210,10 @@ export function projectDownloadsToRunResult(workflowId, finalStatus, jobDownload
         failed = [];
     }
     else {
-        const firstError = (finalStatus.jobs ?? [])
-            .flatMap((j) => j.operations ?? [])
-            .map((op) => op.errorMessage)
-            .find((m) => m !== undefined);
+        // First failing op across ALL jobs (downloads path is whole-workflow scoped).
+        const { errorMessage, errorCode } = firstOpError((finalStatus.jobs ?? []).flatMap((j) => j.operations ?? []));
         succeeded = [];
-        failed = [
-            { key, error: new Error(firstError !== undefined ? `${state}: ${firstError}` : state) },
-        ];
+        failed = [{ key, error: new GislItemFailedError(key, state, errorMessage, errorCode) }];
     }
     return new RunResult(workflowId, state, artifacts, succeeded, failed, downloader);
 }
@@ -270,12 +265,11 @@ export function projectMultiJobToRunResult(workflowId, finalStatus, jobDownloads
             succeeded.push({ key, outputs });
         }
         else {
-            const firstError = (job.operations ?? [])
-                .map((op) => op.errorMessage)
-                .find((m) => m !== undefined);
+            // Per-job scoped: read the error from THIS job's ops only.
+            const { errorMessage, errorCode } = firstOpError(job.operations ?? []);
             failed.push({
                 key,
-                error: new Error(firstError !== undefined ? `${job.status}: ${firstError}` : String(job.status)),
+                error: new GislItemFailedError(key, String(job.status), errorMessage, errorCode),
             });
         }
     }

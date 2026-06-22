@@ -10,7 +10,7 @@ import {
 import { create } from '../src/gisl.js';
 import { resolveCompressOptions } from '../src/ergonomic/preset_resolver.js';
 import { OptimizeFor } from '../src/generated/sdk_spec/enums.js';
-import { GislConfigError, GislNoSuchKeyError, GislTimeoutError } from '../src/errors.js';
+import { GislConfigError, GislItemFailedError, GislNoSuchKeyError, GislTimeoutError } from '../src/errors.js';
 import type { GislClient } from '../src/client.js';
 import type { WorkflowStatusResponse, OperationDownload } from '@giveitsmaller/contracts/openapi';
 
@@ -271,8 +271,13 @@ describe('projectMultiJobToRunResult — partition', () => {
     expect(result.failed.map((f) => f.key)).toEqual(['1']);
     // The failed item carries THAT job's first op error, scoped via the PER-JOB
     // status (not the workflow state): "{jobStatus}: {message}".
-    expect(result.failed[0].error).toBeInstanceOf(Error);
-    expect((result.failed[0].error as Error).message).toBe('failed: codec exploded');
+    expect(result.failed[0].error).toBeInstanceOf(GislItemFailedError);
+    expect(result.failed[0].error.message).toBe('failed: codec exploded');
+    // Typed fields: per-job state + that job's op message; key scoped to the job.
+    expect(result.failed[0].error.key).toBe('1');
+    expect(result.failed[0].error.state).toBe('failed');
+    expect(result.failed[0].error.errorMessage).toBe('codec exploded');
+    expect(result.failed[0].error.errorCode).toBeUndefined();
     // The succeeded outputs are still resolvable; the failed job carries none.
     expect(result.byKey('0').outputs[0].url).toBe('u0');
     expect(result.byKey('2').outputs[0].url).toBe('u2');
@@ -285,7 +290,58 @@ describe('projectMultiJobToRunResult — partition', () => {
       jobs: [{ ref: 'file-0', status: 'failed', operations: [] }],
     } as unknown as WorkflowStatusResponse;
     const result = projectMultiJobToRunResult('wf_1', status, [], keyByRef(1));
-    expect((result.failed[0].error as Error).message).toBe('failed');
+    expect(result.failed[0].error).toBeInstanceOf(GislItemFailedError);
+    expect(result.failed[0].error.message).toBe('failed');
+    // No op error → both optional fields absent; message is the bare job status.
+    expect(result.failed[0].error.state).toBe('failed');
+    expect(result.failed[0].error.errorMessage).toBeUndefined();
+    expect(result.failed[0].error.errorCode).toBeUndefined();
+  });
+
+  it('per-job error scoping: one job has code+message, another only message — errorCode is NOT shared', () => {
+    // Section B: the typed error of each failed job reads from ITS OWN ops only.
+    // file-0 carries error_code + error_message; file-1 carries only a message.
+    // file-1 must NOT inherit file-0's code (each error is per-job scoped).
+    const status = {
+      status: 'failed',
+      jobs: [
+        {
+          ref: 'file-0',
+          status: 'failed',
+          operations: [{ errorMessage: 'first boom', errorCode: 'first_code' }],
+        },
+        { ref: 'file-1', status: 'failed', operations: [{ errorMessage: 'second boom' }] },
+      ],
+    } as unknown as WorkflowStatusResponse;
+    const result = projectMultiJobToRunResult('wf_1', status, [], keyByRef(2));
+
+    const [first, second] = result.failed;
+    expect(first.error).toBeInstanceOf(GislItemFailedError);
+    expect(first.error.key).toBe('0');
+    expect(first.error.state).toBe('failed');
+    expect(first.error.errorMessage).toBe('first boom');
+    expect(first.error.errorCode).toBe('first_code');
+
+    expect(second.error.key).toBe('1');
+    expect(second.error.errorMessage).toBe('second boom');
+    // The second job had no code of its own and must NOT inherit the first's.
+    expect(second.error.errorCode).toBeUndefined();
+
+    // toJSON: first entry carries errorCode, second OMITS it.
+    expect(result.toJSON().failed[0]).toEqual({
+      key: '0',
+      error: 'failed: first boom',
+      state: 'failed',
+      errorMessage: 'first boom',
+      errorCode: 'first_code',
+    });
+    expect(result.toJSON().failed[1]).toEqual({
+      key: '1',
+      error: 'failed: second boom',
+      state: 'failed',
+      errorMessage: 'second boom',
+    });
+    expect('errorCode' in result.toJSON().failed[1]).toBe(false);
   });
 
   it('ALL jobs failed (workflow `failed`, not partially_failed) → failed=[0,1], succeeded=[], zero artifacts, no `url` key', () => {
@@ -308,8 +364,11 @@ describe('projectMultiJobToRunResult — partition', () => {
     expect(result.failed.map((f) => f.key)).toEqual(['0', '1']);
     // Each failed item carries THAT job's first op error, scoped via its PER-JOB
     // status: "{jobStatus}: {message}".
-    expect((result.failed[0].error as Error).message).toBe('failed: codec exploded');
-    expect((result.failed[1].error as Error).message).toBe('failed: unsupported pixel format');
+    expect(result.failed[0].error).toBeInstanceOf(GislItemFailedError);
+    expect(result.failed[0].error.message).toBe('failed: codec exploded');
+    expect(result.failed[1].error.message).toBe('failed: unsupported pixel format');
+    expect(result.failed[0].error.errorMessage).toBe('codec exploded');
+    expect(result.failed[1].error.errorMessage).toBe('unsupported pixel format');
     expect(result.artifacts).toEqual([]);
     // Zero artifacts → single-output `url` sugar is undefined and toJSON() omits
     // the key entirely (cross-language parity with PHP's omit-when-null toArray()).
@@ -511,7 +570,10 @@ describe('FilesRecipe.run — partial failure end-to-end', () => {
     expect(result.ok).toBe(false);
     expect(result.succeeded.map((s) => s.key)).toEqual(['0']);
     expect(result.failed.map((f) => f.key)).toEqual(['1']);
-    expect((result.failed[0].error as Error).message).toBe('failed: boom');
+    expect(result.failed[0].error).toBeInstanceOf(GislItemFailedError);
+    expect(result.failed[0].error.message).toBe('failed: boom');
+    expect(result.failed[0].error.state).toBe('failed');
+    expect(result.failed[0].error.errorMessage).toBe('boom');
   });
 });
 
@@ -540,8 +602,9 @@ describe('FilesRecipe.run — all-jobs-failed end-to-end', () => {
     expect(result.ok).toBe(false);
     expect(result.succeeded).toEqual([]);
     expect(result.failed.map((f) => f.key)).toEqual(['0', '1']);
-    expect((result.failed[0].error as Error).message).toBe('failed: codec exploded');
-    expect((result.failed[1].error as Error).message).toBe('failed: unsupported pixel format');
+    expect(result.failed[0].error).toBeInstanceOf(GislItemFailedError);
+    expect(result.failed[0].error.message).toBe('failed: codec exploded');
+    expect(result.failed[1].error.message).toBe('failed: unsupported pixel format');
     expect(result.artifacts).toEqual([]);
     expect(result.url).toBeUndefined();
     expect('url' in result.toJSON()).toBe(false);
