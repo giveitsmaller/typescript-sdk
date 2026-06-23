@@ -189,13 +189,15 @@ describe('wire-key conformance — compress', () => {
   //   - width / height / fit  (stable resize; output().resize())
   //   - lossless              (stable since v2.101.0; output())
   //   - lossy                 (planned; gated unavailable by output())
-  //   - encoding_mode         (v2.104.0; `quality` live, `target_size` value planned — gated by output())
-  //   - target_size_bytes     (v2.104.0; planned; gated unavailable by output())
+  //   - encoding_mode         (v2.104.0; `quality`/`target_size` — STABLE since v2.108.0; output())
+  //   - target_size_bytes     (STABLE since v2.108.0; honored same_format avif/jpeg/webp; output())
+  //   - chroma_subsampling    (v2.110.0; stable, jpeg same_format; output())
+  //   - keep_metadata         (v2.106.0; planned; gated unavailable by output())
   const INTENTIONALLY_OMITTED: Readonly<Record<string, ReadonlySet<string>>> = {
     image: new Set([
       'progressive', 'optimization_level', 'avif_speed',
       'width', 'height', 'fit', 'lossless', 'lossy',
-      'encoding_mode', 'target_size_bytes',
+      'encoding_mode', 'target_size_bytes', 'chroma_subsampling', 'keep_metadata',
     ]),
     audio: new Set(['output_format']),
     video: new Set(['output_format']),

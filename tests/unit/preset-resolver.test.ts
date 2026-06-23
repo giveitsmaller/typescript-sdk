@@ -34,7 +34,7 @@ describe('resolveCompressOptions — layer 1 (sdkDefault)', () => {
     // wire surface is now only {quality, metadata, output_format}. mode /
     // icc_profile / progressive are no longer emitted.
     expect(wireOptions.quality).toBe(65);
-    expect(wireOptions.metadata).toBe('all');
+    expect(wireOptions.metadata).toBe('strip'); // v2.107.0 rename: shipped default all -> strip
     // VcPeRWdD (contracts v2.73.0): Size outputFormat re-pointed Smallest -> Original.
     expect(wireOptions.output_format).toBe('original');
     expect('mode' in wireOptions).toBe(false);
@@ -136,7 +136,7 @@ describe('resolveCompressOptions — layer 2 (clientDefault)', () => {
       explicitOptions: {},
     });
     expect(wireOptions.quality).toBe(75); // client beats sdkDefault's 65
-    expect(wireOptions.metadata).toBe('all'); // metadata untouched by client, falls back to sdkDefault
+    expect(wireOptions.metadata).toBe('strip'); // metadata untouched by client → sdkDefault (v2.107.0: strip)
     expect(resolvedOptions.sources.clientDefault).toEqual(['quality']);
     expect(resolvedOptions.sources.sdkDefault).toContain('metadata');
   });

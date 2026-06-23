@@ -145,45 +145,42 @@ describe('output() — still-planned options gated unavailable', () => {
     }
   });
 
-  it("metadata 'all' and 'keep' both honored since v2.102.0 (keep/strip un-parked)", () => {
-    expect(soleOp(new Recipe(fileInput.path('a.jpg')).output('jpeg', { metadata: 'all' })).options).toMatchObject({
-      metadata: 'all',
+  it("metadata 'strip'/'keep' honored on same-format jpeg (v2.107.0 rename all->strip)", () => {
+    expect(soleOp(new Recipe(fileInput.path('a.jpg')).output('jpeg', { metadata: 'strip' })).options).toMatchObject({
+      metadata: 'strip',
     });
     expect(soleOp(new Recipe(fileInput.path('a.jpg')).output('jpeg', { metadata: 'keep' })).options).toMatchObject({
       metadata: 'keep',
     });
   });
+
+  it('metadata PLANNED on a format-change route → feature_not_available (v2.106.0 convert.image metadata)', () => {
+    try {
+      ops(new Recipe(fileInput.path('a.png')).output('webp', { metadata: 'strip' }));
+      throw new Error('expected throw');
+    } catch (e) {
+      expect((e as GislConfigError).reason).toBe('feature_not_available');
+    }
+  });
 });
 
-describe('output() — target-size (v2.104.0; encoding_mode quality live / target_size planned)', () => {
-  it("encoding_mode 'quality' honored on same-format webp (the live default mode)", () => {
+describe('output() — target-size (v2.108.0; encoding_mode + target_size_bytes STABLE)', () => {
+  it("encoding_mode 'quality' honored on same-format webp (the default mode)", () => {
     expect(
       soleOp(new Recipe(fileInput.path('a.webp')).output('webp', { encoding_mode: 'quality' })).options,
     ).toMatchObject({ encoding_mode: 'quality' });
   });
 
-  it("encoding_mode 'quality' honored on same-format jpeg", () => {
+  it("encoding_mode 'target_size' honored on same-format jpeg (stable since v2.108.0 — emitted, not gated)", () => {
     expect(
-      soleOp(new Recipe(fileInput.path('a.jpg')).output('jpeg', { encoding_mode: 'quality' })).options,
-    ).toMatchObject({ encoding_mode: 'quality' });
+      soleOp(new Recipe(fileInput.path('a.jpg')).output('jpeg', { encoding_mode: 'target_size' })).options,
+    ).toMatchObject({ encoding_mode: 'target_size' });
   });
 
-  it("encoding_mode 'target_size' (planned VALUE) throws feature_not_available", () => {
-    try {
-      ops(new Recipe(fileInput.path('a.jpg')).output('jpeg', { encoding_mode: 'target_size' }));
-      throw new Error('expected throw');
-    } catch (e) {
-      expect((e as GislConfigError).reason).toBe('feature_not_available');
-    }
-  });
-
-  it('target_size_bytes (planned KEY) throws feature_not_available on same-format jpeg', () => {
-    try {
-      ops(new Recipe(fileInput.path('a.jpg')).output('jpeg', { target_size_bytes: 50_000 }));
-      throw new Error('expected throw');
-    } catch (e) {
-      expect((e as GislConfigError).reason).toBe('feature_not_available');
-    }
+  it('target_size_bytes honored on same-format jpeg (stable — reaches the wire)', () => {
+    expect(
+      soleOp(new Recipe(fileInput.path('a.jpg')).output('jpeg', { encoding_mode: 'target_size', target_size_bytes: 50_000 })).options,
+    ).toMatchObject({ encoding_mode: 'target_size', target_size_bytes: 50_000 });
   });
 
   it('encoding_mode NOT honored on a format-change route → option_not_on_route', () => {
@@ -194,6 +191,32 @@ describe('output() — target-size (v2.104.0; encoding_mode quality live / targe
       throw new Error('expected throw');
     } catch (e) {
       expect((e as GislConfigError).reason).toBe('option_not_on_route');
+    }
+  });
+});
+
+describe('output() — chroma_subsampling (v2.110.0 stable) + keep_metadata (v2.106.0 planned)', () => {
+  it('chroma_subsampling honored on same-format jpeg', () => {
+    expect(
+      soleOp(new Recipe(fileInput.path('a.jpg')).output('jpeg', { chroma_subsampling: '420' })).options,
+    ).toMatchObject({ chroma_subsampling: '420' });
+  });
+
+  it('chroma_subsampling NOT honored on same-format webp (jpeg-only) → option_not_on_route', () => {
+    try {
+      ops(new Recipe(fileInput.path('a.webp')).output('webp', { chroma_subsampling: '420' }));
+      throw new Error('expected throw');
+    } catch (e) {
+      expect((e as GislConfigError).reason).toBe('option_not_on_route');
+    }
+  });
+
+  it('keep_metadata (planned) throws feature_not_available on same-format jpeg', () => {
+    try {
+      ops(new Recipe(fileInput.path('a.jpg')).output('jpeg', { keep_metadata: ['copyright'] }));
+      throw new Error('expected throw');
+    } catch (e) {
+      expect((e as GislConfigError).reason).toBe('feature_not_available');
     }
   });
 });

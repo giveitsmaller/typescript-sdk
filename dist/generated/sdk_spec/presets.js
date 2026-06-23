@@ -5,17 +5,17 @@ export const PRESETS = Object.freeze({
     "image_compress": Object.freeze({
         Size: Object.freeze({
             "quality": 65,
-            "metadata": "All",
+            "metadata": "Strip",
             "outputFormat": "Original",
         }),
         Balanced: Object.freeze({
             "quality": 80,
-            "metadata": "All",
+            "metadata": "Strip",
             "outputFormat": "Original",
         }),
         Quality: Object.freeze({
             "quality": 92,
-            "metadata": "All",
+            "metadata": "Strip",
             "outputFormat": "Original",
         }),
     }),

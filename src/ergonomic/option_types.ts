@@ -47,6 +47,8 @@ export interface ConvertOptions {
   height?: number;
   /** Resize mode for image convert (applies when width or height is set, v2.103.0). `max` never upscales. */
   fit?: 'max' | 'crop' | 'scale';
+  /** Metadata policy for image convert (`strip` removes EXIF/IPTC/XMP, `keep` preserves). PLANNED on convert.image (v2.106.0). */
+  metadata?: 'strip' | 'keep';
   /** GIF palette size (2-256). */
   max_colors?: number;
   /** GIF loop count (0 infinite, N>0 N times, -1 once). */
@@ -61,7 +63,7 @@ export interface ConvertOptions {
   dpi?: number;
 }
 const CONVERT_OPTION_KEYS = [
-  'quality', 'background', 'crf', 'trim_start', 'trim_end', 'fps', 'width', 'height', 'fit',
+  'quality', 'background', 'crf', 'trim_start', 'trim_end', 'fps', 'width', 'height', 'fit', 'metadata',
   'max_colors', 'loop', 'dither', 'bitrate', 'pages', 'dpi',
 ] as const;
 
@@ -136,15 +138,23 @@ const WATERMARK_OPTION_KEYS = [
 // ---- output (image Output facade; output_format is positional-owned → excluded) ----
 /** Resize mode (contract `fit` enum, v2.97.0). */
 export type OutputFit = 'max' | 'crop' | 'scale';
-/** Metadata policy (contract `metadata` enum). Both values stable since v2.102.0 (keep/strip un-parked). */
-export type OutputMetadata = 'all' | 'keep';
+/**
+ * Metadata policy (contract `metadata` enum). `strip` (default) removes all
+ * EXIF/IPTC/XMP; `keep` preserves them. Honored on same_format; PLANNED on
+ * format_change (v2.106.0). Renamed in contracts v2.107.0 — the legacy `all`
+ * token is now a DEPRECATED alias of `strip` (still accepted on the wire, emits
+ * a Deprecation header); use `strip`.
+ */
+export type OutputMetadata = 'strip' | 'keep';
 /**
  * Compression mode on the optimiser (same_format) route (contract `encoding_mode`
- * enum, v2.104.0). `quality` (default) drives the encode by the quality slider and
- * is live; `target_size` is PLANNED — gated unavailable by `output()` until the
- * worker's encode-measure loop ships.
+ * enum). `quality` (default) drives the encode by the quality slider; `target_size`
+ * targets a byte budget via the worker's encode-measure loop — STABLE since
+ * contracts v2.108.0 (jpeg/webp/avif).
  */
 export type OutputEncodingMode = 'quality' | 'target_size';
+/** Chroma subsampling for JPEG output (contract `chroma_subsampling` enum, v2.110.0). `420` smallest → `444` highest fidelity. Honored: same_format jpeg only. */
+export type OutputChromaSubsampling = '420' | '422' | '444';
 
 /**
  * Options for the file-first `output()` image transform. The KEY SET is the
@@ -158,10 +168,12 @@ export type OutputEncodingMode = 'quality' | 'target_size';
 export interface OutputOptions {
   /** Output quality for lossy formats (1-100). Honored: avif/jpeg/webp routes. */
   quality?: number;
-  /** Compression mode (same_format avif/jpeg/webp). `quality` (default) is live; `target_size` is PLANNED (gated unavailable). v2.104.0. */
+  /** Compression mode (same_format avif/jpeg/webp). `quality` (default) or `target_size` — STABLE since v2.108.0. */
   encoding_mode?: OutputEncodingMode;
-  /** Target output size in bytes (≥1024) for `encoding_mode: 'target_size'`. PLANNED — gated unavailable. v2.104.0. */
+  /** Target output size in bytes (≥1024) for `encoding_mode: 'target_size'`. STABLE since v2.108.0. Honored: same_format avif/jpeg/webp. */
   target_size_bytes?: number;
+  /** Chroma subsampling for JPEG output. Honored: same_format jpeg only (v2.110.0). */
+  chroma_subsampling?: OutputChromaSubsampling;
   /** Resize target width in px (1-16384; width*height <= 16MP). */
   width?: number;
   /** Resize target height in px (optional — width-only resize preserves aspect). */
@@ -176,16 +188,19 @@ export interface OutputOptions {
   optimization_level?: number;
   /** AVIF encode speed. Honored: same_format avif only. */
   avif_speed?: number;
-  /** Metadata policy. Honored: same_format routes (both `all` and `keep` since v2.102.0). */
+  /** Metadata policy (`strip` default / `keep`). Honored: same_format; PLANNED on format_change (v2.106.0). */
   metadata?: OutputMetadata;
+  /** Selective per-category metadata keep (`copyright`/`gps`/`date`); refines `metadata: 'strip'`. PLANNED (gated unavailable; v2.106.0). */
+  keep_metadata?: string[];
   /** JPEG/WebP lossless. Honored: same_format jpeg/webp (stable since v2.101.0). */
   lossless?: boolean;
   /** Lossy PNG quantization. PLANNED (gated unavailable; licence-gated). */
   lossy?: boolean;
 }
 const OUTPUT_OPTION_KEYS = [
-  'quality', 'encoding_mode', 'target_size_bytes', 'width', 'height', 'fit', 'background', 'progressive',
-  'optimization_level', 'avif_speed', 'metadata', 'lossless', 'lossy',
+  'quality', 'encoding_mode', 'target_size_bytes', 'chroma_subsampling', 'width', 'height', 'fit',
+  'background', 'progressive', 'optimization_level', 'avif_speed', 'metadata', 'keep_metadata',
+  'lossless', 'lossy',
 ] as const;
 
 // --- Source-level drift guard: interface keys must equal the key tuple (tsc-enforced). ---

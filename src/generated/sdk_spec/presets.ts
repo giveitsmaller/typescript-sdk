@@ -12,17 +12,17 @@ export const PRESETS: PresetMatrix = Object.freeze({
   "image_compress": Object.freeze({
     Size: Object.freeze({
       "quality": 65,
-      "metadata": "All",
+      "metadata": "Strip",
       "outputFormat": "Original",
     } as PresetCell),
     Balanced: Object.freeze({
       "quality": 80,
-      "metadata": "All",
+      "metadata": "Strip",
       "outputFormat": "Original",
     } as PresetCell),
     Quality: Object.freeze({
       "quality": 92,
-      "metadata": "All",
+      "metadata": "Strip",
       "outputFormat": "Original",
     } as PresetCell),
   } as Readonly<Record<PresetLevel, PresetCell>>),

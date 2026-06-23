@@ -32,31 +32,32 @@ import { create, type GislCreateOptions } from '../../src/gisl.js';
 describe('ImageCompressPresetOptions.shippedDefaultsFor', () => {
   // contracts v2.80.0 (compress.image honesty pass — lossy-only): image_compress
   // presets carry only quality / metadata / outputFormat. mode / iccProfile /
-  // progressive were dropped; metadata collapses to the single `all` member.
-  it('Size — quality 65, metadata all, outputFormat original; leaves width/height/fit undefined', () => {
+  // progressive were dropped. v2.107.0 metadata rename: the shipped default is now
+  // `strip` (the canonical token; `all` is a DEPRECATED alias of strip).
+  it('Size — quality 65, metadata strip, outputFormat original; leaves width/height/fit undefined', () => {
     const opts = ImageCompressPresetOptions.shippedDefaultsFor(OptimizeFor.Size);
     expect(opts.quality).toBe(65);
-    expect(opts.metadata).toBe(ImageMetadataPolicy.All);
-    expect(opts.metadata).toBe('all');
+    expect(opts.metadata).toBe(ImageMetadataPolicy.Strip);
+    expect(opts.metadata).toBe('strip');
     // VcPeRWdD (contracts v2.73.0): Size outputFormat re-pointed Smallest -> Original
     // (`smallest` is now per_value_availability:planned — the facade self-422 guard).
     expect(opts.outputFormat).toBe(ImageFormat.Original);
     expect(opts.outputFormat).toBe('original');
   });
 
-  it('Balanced (default) — quality 80, metadata all, outputFormat original', () => {
+  it('Balanced (default) — quality 80, metadata strip, outputFormat original', () => {
     const opts = ImageCompressPresetOptions.shippedDefaultsFor(OptimizeFor.Balanced);
     expect(opts.quality).toBe(80);
-    expect(opts.metadata).toBe(ImageMetadataPolicy.All);
+    expect(opts.metadata).toBe(ImageMetadataPolicy.Strip);
     // VcPeRWdD: Balanced outputFormat re-pointed Auto -> Original (`auto` now planned).
     expect(opts.outputFormat).toBe(ImageFormat.Original);
   });
 
-  it('Quality — quality 92, metadata all, outputFormat original', () => {
+  it('Quality — quality 92, metadata strip, outputFormat original', () => {
     const opts = ImageCompressPresetOptions.shippedDefaultsFor(OptimizeFor.Quality);
     // v2.80.0: Quality now ships quality:92 (lossy-only — no more Lossless omission).
     expect(opts.quality).toBe(92);
-    expect(opts.metadata).toBe(ImageMetadataPolicy.All);
+    expect(opts.metadata).toBe(ImageMetadataPolicy.Strip);
     expect(opts.outputFormat).toBe(ImageFormat.Original);
   });
 });
@@ -386,10 +387,13 @@ describe('GislCreateOptions.presetDefaults', () => {
 
 describe('ergonomic enums serialise to wire backing values', () => {
   it('ImageMetadataPolicy / ImageFormat', () => {
-    // v2.80.0: ImageMetadataPolicy collapsed to a single `all` member;
-    // ImageMode + IccProfilePolicy were removed entirely.
+    // v2.80.0: ImageMode + IccProfilePolicy were removed entirely.
+    // v2.107.0 metadata rename: `strip` is the canonical token (default); `keep`
+    // preserves; `all` is now a DEPRECATED alias of `strip` (still serialises to 'all').
     // v2.92.0: compress.image output_format facade pruned to the live set —
     // ImageFormat now carries only Original + Webp.
+    expect(ImageMetadataPolicy.Strip).toBe('strip');
+    expect(ImageMetadataPolicy.Keep).toBe('keep');
     expect(ImageMetadataPolicy.All).toBe('all');
     expect(ImageFormat.Original).toBe('original');
     expect(ImageFormat.Webp).toBe('webp');

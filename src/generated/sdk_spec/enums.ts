@@ -18,15 +18,21 @@ export const ImageFormat = {
 export type ImageFormat = typeof ImageFormat[keyof typeof ImageFormat];
 
 // Image metadata handling (compress.image, optimiser/same_format route):
-//   All  = strip all EXIF/IPTC/XMP (default, smallest file)
-//   Keep = preserve EXIF/ICC/XMP — worker-proven on the libcaesium formats
-//          (JPEG/PNG/WebP/GIF/TIFF; lambdas PR #260, un-parked 2026-06-23).
+//   Strip = remove all EXIF/IPTC/XMP (default, smallest file) — the canonical
+//           strip token (renamed from `all` 2026-06-23; `all` reading as
+//           "strip all" was counterintuitive).
+//   Keep  = preserve EXIF/ICC/XMP — worker-proven on the libcaesium formats
+//           (JPEG/PNG/WebP/GIF/TIFF; lambdas PR #260, un-parked 2026-06-23).
+//   All   = DEPRECATED alias of Strip (still accepted on the wire, emits
+//           Deprecation/Sunset; the API lowers `strip`→`all` at the worker
+//           boundary). Migrate to Strip.
 // Keep is NOT available for AVIF (ravif) / SVG (SVGO) — those re-encode from
 // pixels and cannot preserve metadata, so the worker rejects it there (the
-// `metadata` enum is narrowed to [all] on those groups).
+// `metadata` enum is narrowed to [strip, all] on those groups).
 export const ImageMetadataPolicy = {
-  All: "all",
+  Strip: "strip",
   Keep: "keep",
+  All: "all",
 } as const;
 export type ImageMetadataPolicy = typeof ImageMetadataPolicy[keyof typeof ImageMetadataPolicy];
 

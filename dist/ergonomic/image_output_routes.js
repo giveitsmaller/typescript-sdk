@@ -64,21 +64,21 @@ const EXT_TOKEN = {
  */
 export const IMAGE_OUTPUT_ROUTES = {
     same_format: {
-        avif: { honored: ['avif_speed', 'encoding_mode', 'fit', 'height', 'metadata', 'output_format', 'quality', 'width'], planned: ['target_size_bytes'] },
-        gif: { honored: ['fit', 'height', 'metadata', 'output_format', 'quality', 'width'], planned: [] },
-        jpeg: { honored: ['encoding_mode', 'fit', 'height', 'lossless', 'metadata', 'output_format', 'progressive', 'quality', 'width'], planned: ['target_size_bytes'] },
-        png: { honored: ['fit', 'height', 'metadata', 'optimization_level', 'output_format', 'quality', 'width'], planned: ['lossy'] },
+        avif: { honored: ['avif_speed', 'encoding_mode', 'fit', 'height', 'metadata', 'output_format', 'quality', 'target_size_bytes', 'width'], planned: [] },
+        gif: { honored: ['fit', 'height', 'metadata', 'output_format', 'quality', 'width'], planned: ['keep_metadata'] },
+        jpeg: { honored: ['chroma_subsampling', 'encoding_mode', 'fit', 'height', 'lossless', 'metadata', 'output_format', 'progressive', 'quality', 'target_size_bytes', 'width'], planned: ['keep_metadata'] },
+        png: { honored: ['fit', 'height', 'metadata', 'optimization_level', 'output_format', 'quality', 'width'], planned: ['keep_metadata', 'lossy'] },
         svg: { honored: ['metadata', 'output_format', 'quality'], planned: [] },
-        tiff: { honored: ['fit', 'height', 'metadata', 'output_format', 'quality', 'width'], planned: [] },
-        webp: { honored: ['encoding_mode', 'fit', 'height', 'lossless', 'metadata', 'output_format', 'quality', 'width'], planned: ['target_size_bytes'] },
+        tiff: { honored: ['fit', 'height', 'metadata', 'output_format', 'quality', 'width'], planned: ['keep_metadata'] },
+        webp: { honored: ['encoding_mode', 'fit', 'height', 'lossless', 'metadata', 'output_format', 'quality', 'target_size_bytes', 'width'], planned: ['keep_metadata'] },
     },
     format_change: {
-        avif: { honored: ['fit', 'height', 'output_format', 'quality', 'width'], planned: [] },
-        gif: { honored: ['fit', 'height', 'output_format', 'width'], planned: [] },
-        jpeg: { honored: ['background', 'fit', 'height', 'output_format', 'quality', 'width'], planned: [] },
-        png: { honored: ['fit', 'height', 'output_format', 'width'], planned: [] },
-        tiff: { honored: ['fit', 'height', 'output_format', 'width'], planned: [] },
-        webp: { honored: ['fit', 'height', 'output_format', 'quality', 'width'], planned: [] },
+        avif: { honored: ['fit', 'height', 'output_format', 'quality', 'width'], planned: ['metadata'] },
+        gif: { honored: ['fit', 'height', 'output_format', 'width'], planned: ['metadata'] },
+        jpeg: { honored: ['background', 'fit', 'height', 'output_format', 'quality', 'width'], planned: ['metadata'] },
+        png: { honored: ['fit', 'height', 'output_format', 'width'], planned: ['metadata'] },
+        tiff: { honored: ['fit', 'height', 'output_format', 'width'], planned: ['metadata'] },
+        webp: { honored: ['fit', 'height', 'output_format', 'quality', 'width'], planned: ['metadata'] },
     },
 };
 /** The bare format token for a MIME type, or undefined if not a known image MIME. */
