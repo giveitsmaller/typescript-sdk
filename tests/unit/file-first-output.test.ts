@@ -112,17 +112,30 @@ describe('output() — route-aware option gating', () => {
   });
 });
 
-describe('output() — planned options gated unavailable', () => {
-  it('lossless (planned) throws feature_not_available', () => {
-    try {
-      ops(new Recipe(fileInput.path('photo.jpg')).output('jpeg', { lossless: true }));
-      throw new Error('expected throw');
-    } catch (e) {
-      expect(e).toBeInstanceOf(GislConfigError);
-      expect((e as GislConfigError).reason).toBe('feature_not_available');
-    }
+describe('output() — lossless (stable on jpeg/webp since v2.101.0)', () => {
+  it('lossless honored on same-format jpeg', () => {
+    expect(soleOp(new Recipe(fileInput.path('photo.jpg')).output('jpeg', { lossless: true })).options).toMatchObject({
+      lossless: true,
+    });
   });
 
+  it('lossless honored on same-format webp', () => {
+    expect(soleOp(new Recipe(fileInput.path('photo.webp')).output('webp', { lossless: true })).options).toMatchObject({
+      lossless: true,
+    });
+  });
+
+  it('lossless NOT honored on png (no lossless route) → throws option_not_on_route', () => {
+    try {
+      ops(new Recipe(fileInput.path('photo.png')).output('png', { lossless: true }));
+      throw new Error('expected throw');
+    } catch (e) {
+      expect((e as GislConfigError).reason).toBe('option_not_on_route');
+    }
+  });
+});
+
+describe('output() — still-planned options gated unavailable', () => {
   it('lossy (planned, png) throws feature_not_available', () => {
     try {
       ops(new Recipe(fileInput.path('photo.png')).output('png', { lossy: true }));
@@ -132,16 +145,13 @@ describe('output() — planned options gated unavailable', () => {
     }
   });
 
-  it("metadata: 'all' (live) works; 'keep' (planned per-value) throws", () => {
+  it("metadata 'all' and 'keep' both honored since v2.102.0 (keep/strip un-parked)", () => {
     expect(soleOp(new Recipe(fileInput.path('a.jpg')).output('jpeg', { metadata: 'all' })).options).toMatchObject({
       metadata: 'all',
     });
-    try {
-      ops(new Recipe(fileInput.path('a.jpg')).output('jpeg', { metadata: 'keep' }));
-      throw new Error('expected throw');
-    } catch (e) {
-      expect((e as GislConfigError).reason).toBe('feature_not_available');
-    }
+    expect(soleOp(new Recipe(fileInput.path('a.jpg')).output('jpeg', { metadata: 'keep' })).options).toMatchObject({
+      metadata: 'keep',
+    });
   });
 });
 

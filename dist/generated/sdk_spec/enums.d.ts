@@ -11,6 +11,7 @@ export declare const ImageFormat: {
 export type ImageFormat = typeof ImageFormat[keyof typeof ImageFormat];
 export declare const ImageMetadataPolicy: {
     readonly All: "all";
+    readonly Keep: "keep";
 };
 export type ImageMetadataPolicy = typeof ImageMetadataPolicy[keyof typeof ImageMetadataPolicy];
 export declare const VideoCodec: {
@@ -88,6 +89,7 @@ export declare const ERGONOMIC_ENUMS: {
     };
     readonly ImageMetadataPolicy: {
         readonly All: "all";
+        readonly Keep: "keep";
     };
     readonly VideoCodec: {
         readonly H264: "h264";

@@ -132,7 +132,7 @@ const WATERMARK_OPTION_KEYS = [
 // ---- output (image Output facade; output_format is positional-owned → excluded) ----
 /** Resize mode (contract `fit` enum, v2.97.0). */
 export type OutputFit = 'max' | 'crop' | 'scale';
-/** Metadata policy (contract `metadata` enum, v2.97.0). `keep` is `availability:planned`. */
+/** Metadata policy (contract `metadata` enum). Both values stable since v2.102.0 (keep/strip un-parked). */
 export type OutputMetadata = 'all' | 'keep';
 
 /**
@@ -161,9 +161,9 @@ export interface OutputOptions {
   optimization_level?: number;
   /** AVIF encode speed. Honored: same_format avif only. */
   avif_speed?: number;
-  /** Metadata policy. Honored: same_format routes. (`keep` value is planned.) */
+  /** Metadata policy. Honored: same_format routes (both `all` and `keep` since v2.102.0). */
   metadata?: OutputMetadata;
-  /** JPEG/WebP lossless. PLANNED (gated unavailable). */
+  /** JPEG/WebP lossless. Honored: same_format jpeg/webp (stable since v2.101.0). */
   lossless?: boolean;
   /** Lossy PNG quantization. PLANNED (gated unavailable; licence-gated). */
   lossy?: boolean;

@@ -12,14 +12,16 @@ export const ImageFormat = {
     Original: "original",
     Webp: "webp",
 };
-// Image metadata handling. Single value today (Option B, 2026-06-20):
-//   All = strip all EXIF/IPTC/XMP (smallest file)
-// The compress worker always strips metadata; None/Copyright/Sensitive were
-// removed — they never reached the worker (it hardcodes strip-everything), so
-// advertising metadata preservation was an over-claim. Preservation is a
-// possible future feature (would need worker support).
+// Image metadata handling (compress.image, optimiser/same_format route):
+//   All  = strip all EXIF/IPTC/XMP (default, smallest file)
+//   Keep = preserve EXIF/ICC/XMP — worker-proven on the libcaesium formats
+//          (JPEG/PNG/WebP/GIF/TIFF; lambdas PR #260, un-parked 2026-06-23).
+// Keep is NOT available for AVIF (ravif) / SVG (SVGO) — those re-encode from
+// pixels and cannot preserve metadata, so the worker rejects it there (the
+// `metadata` enum is narrowed to [all] on those groups).
 export const ImageMetadataPolicy = {
     All: "all",
+    Keep: "keep",
 };
 // Video codec. H264 = widest compatibility; H265/Av1 = better compression but slower.
 export const VideoCodec = {
