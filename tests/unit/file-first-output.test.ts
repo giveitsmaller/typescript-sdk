@@ -155,6 +155,49 @@ describe('output() — still-planned options gated unavailable', () => {
   });
 });
 
+describe('output() — target-size (v2.104.0; encoding_mode quality live / target_size planned)', () => {
+  it("encoding_mode 'quality' honored on same-format webp (the live default mode)", () => {
+    expect(
+      soleOp(new Recipe(fileInput.path('a.webp')).output('webp', { encoding_mode: 'quality' })).options,
+    ).toMatchObject({ encoding_mode: 'quality' });
+  });
+
+  it("encoding_mode 'quality' honored on same-format jpeg", () => {
+    expect(
+      soleOp(new Recipe(fileInput.path('a.jpg')).output('jpeg', { encoding_mode: 'quality' })).options,
+    ).toMatchObject({ encoding_mode: 'quality' });
+  });
+
+  it("encoding_mode 'target_size' (planned VALUE) throws feature_not_available", () => {
+    try {
+      ops(new Recipe(fileInput.path('a.jpg')).output('jpeg', { encoding_mode: 'target_size' }));
+      throw new Error('expected throw');
+    } catch (e) {
+      expect((e as GislConfigError).reason).toBe('feature_not_available');
+    }
+  });
+
+  it('target_size_bytes (planned KEY) throws feature_not_available on same-format jpeg', () => {
+    try {
+      ops(new Recipe(fileInput.path('a.jpg')).output('jpeg', { target_size_bytes: 50_000 }));
+      throw new Error('expected throw');
+    } catch (e) {
+      expect((e as GislConfigError).reason).toBe('feature_not_available');
+    }
+  });
+
+  it('encoding_mode NOT honored on a format-change route → option_not_on_route', () => {
+    // encoding_mode is an optimiser (same_format) knob; a format-change routes via
+    // convert, which does not honor it.
+    try {
+      ops(new Recipe(fileInput.path('a.png')).output('webp', { encoding_mode: 'quality' }));
+      throw new Error('expected throw');
+    } catch (e) {
+      expect((e as GislConfigError).reason).toBe('option_not_on_route');
+    }
+  });
+});
+
 describe('output() — unrepresentable routes + svg (vector, no resize)', () => {
   it('converting TO a format with no route throws unsupported_route', () => {
     // svg is not a format_change target (cannot transcode TO svg).

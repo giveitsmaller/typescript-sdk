@@ -29,8 +29,12 @@ export interface ConvertOptions {
     trim_end?: number;
     /** Output frame rate for video → GIF. */
     fps?: number;
-    /** Max output width in pixels (video → GIF downscale cap). */
+    /** Resize width in px. Image convert: resize-on-convert (1-16384, width*height ≤ 16MP, v2.103.0). Video → GIF: downscale cap. */
     width?: number;
+    /** Resize height in px for image convert (1-16384, v2.103.0). Omit for width-only / aspect-preserving resize. Not honored for SVG input. */
+    height?: number;
+    /** Resize mode for image convert (applies when width or height is set, v2.103.0). `max` never upscales. */
+    fit?: 'max' | 'crop' | 'scale';
     /** GIF palette size (2-256). */
     max_colors?: number;
     /** GIF loop count (0 infinite, N>0 N times, -1 once). */
@@ -101,6 +105,13 @@ export type OutputFit = 'max' | 'crop' | 'scale';
 /** Metadata policy (contract `metadata` enum). Both values stable since v2.102.0 (keep/strip un-parked). */
 export type OutputMetadata = 'all' | 'keep';
 /**
+ * Compression mode on the optimiser (same_format) route (contract `encoding_mode`
+ * enum, v2.104.0). `quality` (default) drives the encode by the quality slider and
+ * is live; `target_size` is PLANNED — gated unavailable by `output()` until the
+ * worker's encode-measure loop ships.
+ */
+export type OutputEncodingMode = 'quality' | 'target_size';
+/**
  * Options for the file-first `output()` image transform. The KEY SET is the
  * UNION of every image route's honored + planned option keys (image-output-routes
  * projection); the PER-ROUTE honored/planned narrowing happens in the lowering
@@ -112,6 +123,10 @@ export type OutputMetadata = 'all' | 'keep';
 export interface OutputOptions {
     /** Output quality for lossy formats (1-100). Honored: avif/jpeg/webp routes. */
     quality?: number;
+    /** Compression mode (same_format avif/jpeg/webp). `quality` (default) is live; `target_size` is PLANNED (gated unavailable). v2.104.0. */
+    encoding_mode?: OutputEncodingMode;
+    /** Target output size in bytes (≥1024) for `encoding_mode: 'target_size'`. PLANNED — gated unavailable. v2.104.0. */
+    target_size_bytes?: number;
     /** Resize target width in px (1-16384; width*height <= 16MP). */
     width?: number;
     /** Resize target height in px (optional — width-only resize preserves aspect). */
@@ -139,9 +154,9 @@ export interface OutputOptions {
  * positional-owned keys equals the contract `operationOptionKeys(metadata)`.
  */
 export declare const VERB_OPTION_KEYS: {
-    readonly convert: readonly ["quality", "background", "crf", "trim_start", "trim_end", "fps", "width", "max_colors", "loop", "dither", "bitrate", "pages", "dpi"];
+    readonly convert: readonly ["quality", "background", "crf", "trim_start", "trim_end", "fps", "width", "height", "fit", "max_colors", "loop", "dither", "bitrate", "pages", "dpi"];
     readonly thumbnail: readonly ["width", "height", "fit", "format", "quality", "timestamp", "source", "page"];
     readonly textWatermark: readonly ["font_size", "color", "font_family", "rotation", "watermark_mode", "tile_spacing", "anchor", "margin_x", "margin_y", "opacity"];
     readonly watermark: readonly ["anchor", "margin_x", "margin_y", "opacity", "overlay_width"];
-    readonly output: readonly ["quality", "width", "height", "fit", "background", "progressive", "optimization_level", "avif_speed", "metadata", "lossless", "lossy"];
+    readonly output: readonly ["quality", "encoding_mode", "target_size_bytes", "width", "height", "fit", "background", "progressive", "optimization_level", "avif_speed", "metadata", "lossless", "lossy"];
 };

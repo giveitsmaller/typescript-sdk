@@ -12,11 +12,12 @@
  *
  * Each route cell lists the options the worker HONORS (live) and PLANS (advertised,
  * not yet honored — gated unavailable). Resize (`width`/`height`/`fit`) is
- * **INPUT-keyed**: it lives only on the `same_format[input]` cell but applies on
- * EITHER route, gated by input resizability (raster only — `svg` is vector and
- * carries no resize). So a `png → webp + resize` request reads its resize
- * capability from `same_format.png` and its transcoder options from
- * `format_change.webp`.
+ * **INPUT-gated**: since v2.103.0 convert is the resize engine, so the projection
+ * lists resize on every `format_change` cell too — but resizability is keyed to the
+ * INPUT (raster only — `svg` is vector and carries no resize). The lowering reads
+ * resize capability from `same_format[input]` on BOTH routes, so a `png → webp +
+ * resize` request resizes (png is raster) while an `svg → png + resize` request
+ * does NOT (svg's same_format cell has no resize keys).
  *
  * This hand table MIRRORS the generated projection and is PINNED to it by
  * `output-route-conformance.test.ts` (the watermark-capability-gate precedent) —

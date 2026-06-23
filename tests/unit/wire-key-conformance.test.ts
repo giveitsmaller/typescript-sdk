@@ -177,20 +177,25 @@ describe('wire-key conformance — compress', () => {
   // omitted until a per-call PDF-DPI ergonomic option ships (tracked follow-up).
   // The PDF `colorspace` / `pages` / `flatten_forms` are `planned` and live in
   // PLANNED_OMISSIONS below (drift-guarded), NOT here.
-  // image Output-facade knobs (contracts v2.97.0 tewB37Jg): compress.image* now
-  // also carries width/height/fit (Resize-inside-Output) + lossless/lossy. These
-  // are the image OUTPUT facade surface — exposed/gated by the ergonomic
-  // `output()`/`resize()` verbs (see file-first-output.test.ts), NOT the
-  // preset-driven `compress()` verb, whose resolver emits only quality/metadata/
-  // output_format. Their availability + route gating is pinned by
-  // output-route-conformance.test.ts (the projection honored/planned), so they
-  // are omitted from the compress() KNOWN_WIRE_FIELDS here:
+  // image Output-facade knobs (contracts v2.97.0 tewB37Jg + v2.104.0 target-size):
+  // compress.image* carries width/height/fit (Resize-inside-Output), lossless/lossy,
+  // and the v2.104.0 target-size pair (encoding_mode + target_size_bytes). These are
+  // the image OUTPUT facade surface — exposed/gated by the ergonomic `output()`/
+  // `resize()` verbs (see file-first-output.test.ts), NOT the preset-driven
+  // `compress()` verb, whose resolver emits only quality/metadata/output_format.
+  // Their availability + route gating is pinned by output-route-conformance.test.ts
+  // (the projection honored/planned), so they are omitted from the compress()
+  // KNOWN_WIRE_FIELDS here:
   //   - width / height / fit  (stable resize; output().resize())
-  //   - lossless / lossy      (planned; gated unavailable by output())
+  //   - lossless              (stable since v2.101.0; output())
+  //   - lossy                 (planned; gated unavailable by output())
+  //   - encoding_mode         (v2.104.0; `quality` live, `target_size` value planned — gated by output())
+  //   - target_size_bytes     (v2.104.0; planned; gated unavailable by output())
   const INTENTIONALLY_OMITTED: Readonly<Record<string, ReadonlySet<string>>> = {
     image: new Set([
       'progressive', 'optimization_level', 'avif_speed',
       'width', 'height', 'fit', 'lossless', 'lossy',
+      'encoding_mode', 'target_size_bytes',
     ]),
     audio: new Set(['output_format']),
     video: new Set(['output_format']),

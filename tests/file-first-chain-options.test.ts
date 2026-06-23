@@ -46,6 +46,17 @@ describe('Recipe chain options — explicit options reach the wire', () => {
     ]);
   });
 
+  it('convert(format, { width, height, fit }) carries resize keys to the wire (v2.103.0)', () => {
+    // convert.image is the resize engine since v2.103.0: width/height/fit are
+    // first-class convert options (stable, honored_on format_change).
+    const ops = operations(
+      recipe('photo.png').convert('jpeg', { width: 800, height: 600, fit: 'max', quality: 85 }),
+    );
+    expect(ops).toEqual([
+      { type: 'convert', options: { output_format: 'jpeg', width: 800, height: 600, fit: 'max', quality: 85 } },
+    ]);
+  });
+
   it('thumbnail(options) carries ALL defined keys (not just width/height)', () => {
     // Both dims required (the contract marks them so) — `height` added alongside
     // the incidental fit/format keys this test pins.
