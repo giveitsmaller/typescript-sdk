@@ -57,11 +57,16 @@ describe('Recipe chain options — explicit options reach the wire', () => {
     ]);
   });
 
-  it('convert(format, { metadata }) carries the metadata key to the wire (v2.106.0)', () => {
-    // convert.image gained `metadata` (strip/keep) in v2.106.0 (PLANNED on convert);
-    // convert() is a raw passthrough, so the typed key reaches the wire verbatim.
-    const ops = operations(recipe('photo.png').convert('jpeg', { metadata: 'strip' }));
-    expect(ops).toEqual([{ type: 'convert', options: { output_format: 'jpeg', metadata: 'strip' } }]);
+  it('convert(format, { metadata, color_profile, auto_orient }) carries the planned image keys verbatim (v2.106/v2.112)', () => {
+    // convert.image gained `metadata` (v2.106.0) and `color_profile`/`auto_orient`
+    // (v2.112.0) — all PLANNED on convert. convert() is a raw passthrough, so the
+    // typed keys reach the wire verbatim (the API gates the planned values).
+    const ops = operations(
+      recipe('photo.png').convert('jpeg', { metadata: 'strip', color_profile: 'srgb', auto_orient: true }),
+    );
+    expect(ops).toEqual([
+      { type: 'convert', options: { output_format: 'jpeg', metadata: 'strip', color_profile: 'srgb', auto_orient: true } },
+    ]);
   });
 
   it('thumbnail(options) carries ALL defined keys (not just width/height)', () => {

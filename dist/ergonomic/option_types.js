@@ -16,7 +16,7 @@
  */
 const CONVERT_OPTION_KEYS = [
     'quality', 'background', 'crf', 'trim_start', 'trim_end', 'fps', 'width', 'height', 'fit', 'metadata',
-    'max_colors', 'loop', 'dither', 'bitrate', 'pages', 'dpi',
+    'color_profile', 'auto_orient', 'max_colors', 'loop', 'dither', 'bitrate', 'pages', 'dpi',
 ];
 const THUMBNAIL_OPTION_KEYS = [
     'width', 'height', 'fit', 'format', 'quality', 'timestamp', 'source', 'page',
@@ -31,7 +31,7 @@ const WATERMARK_OPTION_KEYS = [
 const OUTPUT_OPTION_KEYS = [
     'quality', 'encoding_mode', 'target_size_bytes', 'chroma_subsampling', 'width', 'height', 'fit',
     'background', 'progressive', 'optimization_level', 'avif_speed', 'metadata', 'keep_metadata',
-    'lossless', 'lossy',
+    'color_profile', 'auto_orient', 'lossless', 'lossy',
 ];
 const _convertKeysMatch = true;
 const _thumbnailKeysMatch = true;

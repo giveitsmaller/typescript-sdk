@@ -221,6 +221,26 @@ describe('output() — chroma_subsampling (v2.110.0 stable) + keep_metadata (v2.
   });
 });
 
+describe('output() — color_profile + auto_orient (v2.112.0, planned)', () => {
+  it('color_profile (planned) throws feature_not_available on same-format jpeg', () => {
+    try {
+      ops(new Recipe(fileInput.path('a.jpg')).output('jpeg', { color_profile: 'srgb' }));
+      throw new Error('expected throw');
+    } catch (e) {
+      expect((e as GislConfigError).reason).toBe('feature_not_available');
+    }
+  });
+
+  it('auto_orient (planned) throws feature_not_available on a format-change route', () => {
+    try {
+      ops(new Recipe(fileInput.path('a.png')).output('webp', { auto_orient: true }));
+      throw new Error('expected throw');
+    } catch (e) {
+      expect((e as GislConfigError).reason).toBe('feature_not_available');
+    }
+  });
+});
+
 describe('output() — unrepresentable routes + svg (vector, no resize)', () => {
   it('converting TO a format with no route throws unsupported_route', () => {
     // svg is not a format_change target (cannot transcode TO svg).

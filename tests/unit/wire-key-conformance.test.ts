@@ -193,11 +193,14 @@ describe('wire-key conformance — compress', () => {
   //   - target_size_bytes     (STABLE since v2.108.0; honored same_format avif/jpeg/webp; output())
   //   - chroma_subsampling    (v2.110.0; stable, jpeg same_format; output())
   //   - keep_metadata         (v2.106.0; planned; gated unavailable by output())
+  //   - color_profile         (v2.112.0; planned; gated unavailable by output())
+  //   - auto_orient           (v2.112.0; planned; gated unavailable by output())
   const INTENTIONALLY_OMITTED: Readonly<Record<string, ReadonlySet<string>>> = {
     image: new Set([
       'progressive', 'optimization_level', 'avif_speed',
       'width', 'height', 'fit', 'lossless', 'lossy',
       'encoding_mode', 'target_size_bytes', 'chroma_subsampling', 'keep_metadata',
+      'color_profile', 'auto_orient',
     ]),
     audio: new Set(['output_format']),
     video: new Set(['output_format']),

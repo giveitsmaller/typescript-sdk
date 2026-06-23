@@ -37,6 +37,10 @@ export interface ConvertOptions {
     fit?: 'max' | 'crop' | 'scale';
     /** Metadata policy for image convert (`strip` removes EXIF/IPTC/XMP, `keep` preserves). PLANNED on convert.image (v2.106.0). */
     metadata?: 'strip' | 'keep';
+    /** ICC colour-profile handling for image convert (`keep`/`srgb`/`strip`). PLANNED on convert.image (v2.112.0). */
+    color_profile?: 'keep' | 'srgb' | 'strip';
+    /** Auto-rotate per EXIF orientation for image convert. PLANNED on convert.image (v2.112.0). */
+    auto_orient?: boolean;
     /** GIF palette size (2-256). */
     max_colors?: number;
     /** GIF loop count (0 infinite, N>0 N times, -1 once). */
@@ -121,6 +125,8 @@ export type OutputMetadata = 'strip' | 'keep';
 export type OutputEncodingMode = 'quality' | 'target_size';
 /** Chroma subsampling for JPEG output (contract `chroma_subsampling` enum, v2.110.0). `420` smallest → `444` highest fidelity. Honored: same_format jpeg only. */
 export type OutputChromaSubsampling = '420' | '422' | '444';
+/** ICC colour-profile handling (contract `color_profile` enum, v2.112.0). `keep` preserves the embedded profile; `srgb` converts to sRGB; `strip` removes it. PLANNED — gated unavailable. */
+export type OutputColorProfile = 'keep' | 'srgb' | 'strip';
 /**
  * Options for the file-first `output()` image transform. The KEY SET is the
  * UNION of every image route's honored + planned option keys (image-output-routes
@@ -157,6 +163,10 @@ export interface OutputOptions {
     metadata?: OutputMetadata;
     /** Selective per-category metadata keep (`copyright`/`gps`/`date`); refines `metadata: 'strip'`. PLANNED (gated unavailable; v2.106.0). */
     keep_metadata?: string[];
+    /** ICC colour-profile handling (`keep`/`srgb`/`strip`). PLANNED — gated unavailable (v2.112.0). */
+    color_profile?: OutputColorProfile;
+    /** Auto-rotate per EXIF orientation. PLANNED — gated unavailable (v2.112.0). */
+    auto_orient?: boolean;
     /** JPEG/WebP lossless. Honored: same_format jpeg/webp (stable since v2.101.0). */
     lossless?: boolean;
     /** Lossy PNG quantization. PLANNED (gated unavailable; licence-gated). */
@@ -168,9 +178,9 @@ export interface OutputOptions {
  * positional-owned keys equals the contract `operationOptionKeys(metadata)`.
  */
 export declare const VERB_OPTION_KEYS: {
-    readonly convert: readonly ["quality", "background", "crf", "trim_start", "trim_end", "fps", "width", "height", "fit", "metadata", "max_colors", "loop", "dither", "bitrate", "pages", "dpi"];
+    readonly convert: readonly ["quality", "background", "crf", "trim_start", "trim_end", "fps", "width", "height", "fit", "metadata", "color_profile", "auto_orient", "max_colors", "loop", "dither", "bitrate", "pages", "dpi"];
     readonly thumbnail: readonly ["width", "height", "fit", "format", "quality", "timestamp", "source", "page"];
     readonly textWatermark: readonly ["font_size", "color", "font_family", "rotation", "watermark_mode", "tile_spacing", "anchor", "margin_x", "margin_y", "opacity"];
     readonly watermark: readonly ["anchor", "margin_x", "margin_y", "opacity", "overlay_width"];
-    readonly output: readonly ["quality", "encoding_mode", "target_size_bytes", "chroma_subsampling", "width", "height", "fit", "background", "progressive", "optimization_level", "avif_speed", "metadata", "keep_metadata", "lossless", "lossy"];
+    readonly output: readonly ["quality", "encoding_mode", "target_size_bytes", "chroma_subsampling", "width", "height", "fit", "background", "progressive", "optimization_level", "avif_speed", "metadata", "keep_metadata", "color_profile", "auto_orient", "lossless", "lossy"];
 };
