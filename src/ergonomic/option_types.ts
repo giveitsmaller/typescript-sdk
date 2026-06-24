@@ -51,7 +51,7 @@ export interface ConvertOptions {
   metadata?: 'strip' | 'keep';
   /** ICC colour-profile handling for image convert (`keep`/`srgb`/`strip`). PLANNED on convert.image (v2.112.0). */
   color_profile?: 'keep' | 'srgb' | 'strip';
-  /** Auto-rotate per EXIF orientation for image convert. PLANNED on convert.image (v2.112.0). */
+  /** Auto-rotate per EXIF orientation for image convert. STABLE since v2.120.0. */
   auto_orient?: boolean;
   /** GIF palette size (2-256). */
   max_colors?: number;
@@ -83,6 +83,8 @@ export interface ThumbnailOptions {
   format?: 'jpg' | 'png' | 'webp';
   /** Output quality for lossy thumbnail formats (image input). */
   quality?: number;
+  /** Background fill colour (hex) for transparency flattened to JPG output (v2.118.0). */
+  background?: string;
   /** Frame timestamp for video input (e.g. '00:00:01'). */
   timestamp?: string;
   /** Document source: a printed page or the cover. */
@@ -91,7 +93,7 @@ export interface ThumbnailOptions {
   page?: number;
 }
 const THUMBNAIL_OPTION_KEYS = [
-  'width', 'height', 'fit', 'format', 'quality', 'timestamp', 'source', 'page',
+  'width', 'height', 'fit', 'format', 'quality', 'background', 'timestamp', 'source', 'page',
 ] as const;
 
 // ---- textWatermark (text is positional-owned → excluded) ----
@@ -200,7 +202,7 @@ export interface OutputOptions {
   keep_metadata?: string[];
   /** ICC colour-profile handling (`keep`/`srgb`/`strip`). PLANNED — gated unavailable (v2.112.0). */
   color_profile?: OutputColorProfile;
-  /** Auto-rotate per EXIF orientation. PLANNED — gated unavailable (v2.112.0). */
+  /** Auto-rotate per EXIF orientation. STABLE since v2.120.0 (both routes). */
   auto_orient?: boolean;
   /** JPEG/WebP lossless. Honored: same_format jpeg/webp (stable since v2.101.0). */
   lossless?: boolean;

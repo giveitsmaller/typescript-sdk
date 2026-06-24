@@ -39,7 +39,7 @@ export interface ConvertOptions {
     metadata?: 'strip' | 'keep';
     /** ICC colour-profile handling for image convert (`keep`/`srgb`/`strip`). PLANNED on convert.image (v2.112.0). */
     color_profile?: 'keep' | 'srgb' | 'strip';
-    /** Auto-rotate per EXIF orientation for image convert. PLANNED on convert.image (v2.112.0). */
+    /** Auto-rotate per EXIF orientation for image convert. STABLE since v2.120.0. */
     auto_orient?: boolean;
     /** GIF palette size (2-256). */
     max_colors?: number;
@@ -65,6 +65,8 @@ export interface ThumbnailOptions {
     format?: 'jpg' | 'png' | 'webp';
     /** Output quality for lossy thumbnail formats (image input). */
     quality?: number;
+    /** Background fill colour (hex) for transparency flattened to JPG output (v2.118.0). */
+    background?: string;
     /** Frame timestamp for video input (e.g. '00:00:01'). */
     timestamp?: string;
     /** Document source: a printed page or the cover. */
@@ -165,7 +167,7 @@ export interface OutputOptions {
     keep_metadata?: string[];
     /** ICC colour-profile handling (`keep`/`srgb`/`strip`). PLANNED — gated unavailable (v2.112.0). */
     color_profile?: OutputColorProfile;
-    /** Auto-rotate per EXIF orientation. PLANNED — gated unavailable (v2.112.0). */
+    /** Auto-rotate per EXIF orientation. STABLE since v2.120.0 (both routes). */
     auto_orient?: boolean;
     /** JPEG/WebP lossless. Honored: same_format jpeg/webp (stable since v2.101.0). */
     lossless?: boolean;
@@ -179,7 +181,7 @@ export interface OutputOptions {
  */
 export declare const VERB_OPTION_KEYS: {
     readonly convert: readonly ["quality", "background", "crf", "trim_start", "trim_end", "fps", "width", "height", "fit", "metadata", "color_profile", "auto_orient", "max_colors", "loop", "dither", "bitrate", "pages", "dpi"];
-    readonly thumbnail: readonly ["width", "height", "fit", "format", "quality", "timestamp", "source", "page"];
+    readonly thumbnail: readonly ["width", "height", "fit", "format", "quality", "background", "timestamp", "source", "page"];
     readonly textWatermark: readonly ["font_size", "color", "font_family", "rotation", "watermark_mode", "tile_spacing", "anchor", "margin_x", "margin_y", "opacity"];
     readonly watermark: readonly ["anchor", "margin_x", "margin_y", "opacity", "overlay_width"];
     readonly output: readonly ["quality", "encoding_mode", "target_size_bytes", "chroma_subsampling", "width", "height", "fit", "background", "progressive", "optimization_level", "avif_speed", "metadata", "keep_metadata", "color_profile", "auto_orient", "lossless", "lossy"];

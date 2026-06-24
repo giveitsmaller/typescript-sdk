@@ -174,6 +174,14 @@ describe('WatermarkedRecipe — planned-op gate (throws pre-upload)', () => {
     expect(() => recipe('loop.gif').watermark(overlay())).toThrow(/not yet available|planned/);
   });
 
+  it('throws for a TIFF base (image_tiff is planned, v2.123.0)', () => {
+    expect(() => recipe('scan.tiff').watermark(overlay())).toThrow(/not yet available|planned/);
+  });
+
+  it('throws for a BMP base (image_bmp is planned, v2.123.0)', () => {
+    expect(() => recipe('pic.bmp').watermark(overlay())).toThrow(/not yet available|planned/);
+  });
+
   it('throws for an unsupported image subtype (avif)', () => {
     expect(() => recipe('pic.avif').watermark(overlay())).toThrow(/does not support/);
   });

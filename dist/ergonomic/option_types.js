@@ -19,7 +19,7 @@ const CONVERT_OPTION_KEYS = [
     'color_profile', 'auto_orient', 'max_colors', 'loop', 'dither', 'bitrate', 'pages', 'dpi',
 ];
 const THUMBNAIL_OPTION_KEYS = [
-    'width', 'height', 'fit', 'format', 'quality', 'timestamp', 'source', 'page',
+    'width', 'height', 'fit', 'format', 'quality', 'background', 'timestamp', 'source', 'page',
 ];
 const TEXT_WATERMARK_OPTION_KEYS = [
     'font_size', 'color', 'font_family', 'rotation', 'watermark_mode',

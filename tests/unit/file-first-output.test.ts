@@ -221,7 +221,7 @@ describe('output() — chroma_subsampling (v2.110.0 stable) + keep_metadata (v2.
   });
 });
 
-describe('output() — color_profile + auto_orient (v2.112.0, planned)', () => {
+describe('output() — color_profile (v2.112.0 planned) + auto_orient (STABLE since v2.120.0)', () => {
   it('color_profile (planned) throws feature_not_available on same-format jpeg', () => {
     try {
       ops(new Recipe(fileInput.path('a.jpg')).output('jpeg', { color_profile: 'srgb' }));
@@ -231,13 +231,16 @@ describe('output() — color_profile + auto_orient (v2.112.0, planned)', () => {
     }
   });
 
-  it('auto_orient (planned) throws feature_not_available on a format-change route', () => {
-    try {
-      ops(new Recipe(fileInput.path('a.png')).output('webp', { auto_orient: true }));
-      throw new Error('expected throw');
-    } catch (e) {
-      expect((e as GislConfigError).reason).toBe('feature_not_available');
-    }
+  it('auto_orient honored on same-format jpeg (stable since v2.120.0 — emitted, not gated)', () => {
+    expect(
+      soleOp(new Recipe(fileInput.path('a.jpg')).output('jpeg', { auto_orient: true })).options,
+    ).toMatchObject({ auto_orient: true });
+  });
+
+  it('auto_orient honored on a format-change route too (stable on both routes)', () => {
+    expect(
+      soleOp(new Recipe(fileInput.path('a.png')).output('webp', { auto_orient: true })).options,
+    ).toMatchObject({ auto_orient: true });
   });
 });
 

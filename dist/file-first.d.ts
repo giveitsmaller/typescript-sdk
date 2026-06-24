@@ -536,6 +536,14 @@ export declare const WATERMARK_CAPABILITY: {
             readonly mimes: readonly ["image/gif"];
             readonly availability: "planned";
         };
+        readonly image_tiff: {
+            readonly mimes: readonly ["image/tiff"];
+            readonly availability: "planned";
+        };
+        readonly image_bmp: {
+            readonly mimes: readonly ["image/bmp"];
+            readonly availability: "planned";
+        };
     };
     readonly video_watermark: {
         readonly video: {

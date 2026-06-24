@@ -80,6 +80,15 @@ describe('Recipe chain options — explicit options reach the wire', () => {
     ]);
   });
 
+  it('thumbnail({ background }) carries the jpg background fill key (v2.118.0)', () => {
+    const ops = operations(
+      recipe('photo.png').thumbnail({ width: 200, height: 150, format: 'jpg', background: '#ffffff' }),
+    );
+    expect(ops).toEqual([
+      { type: 'thumbnail', options: { width: 200, height: 150, format: 'jpg', background: '#ffffff' } },
+    ]);
+  });
+
   it('thumbnail(options) drops an undefined optional value', () => {
     // TS drops only `undefined` (the absent-key signal); the PHP mirror drops
     // `null` (its absent-key signal). Each language drops its own omission

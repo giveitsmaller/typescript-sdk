@@ -1055,6 +1055,8 @@ export const WATERMARK_CAPABILITY = {
     image_watermark: {
         image: { mimes: ['image/jpeg', 'image/png', 'image/webp'], availability: 'stable' },
         image_gif: { mimes: ['image/gif'], availability: 'planned' },
+        image_tiff: { mimes: ['image/tiff'], availability: 'planned' },
+        image_bmp: { mimes: ['image/bmp'], availability: 'planned' },
     },
     video_watermark: {
         video: { mimes: ['video/mp4', 'video/webm'], availability: 'beta' },
