@@ -221,14 +221,34 @@ describe('output() — chroma_subsampling (v2.110.0 stable) + keep_metadata (v2.
   });
 });
 
-describe('output() — color_profile (v2.112.0 planned) + auto_orient (STABLE since v2.120.0)', () => {
-  it('color_profile (planned) throws feature_not_available on same-format jpeg', () => {
-    try {
-      ops(new Recipe(fileInput.path('a.jpg')).output('jpeg', { color_profile: 'srgb' }));
-      throw new Error('expected throw');
-    } catch (e) {
-      expect((e as GislConfigError).reason).toBe('feature_not_available');
-    }
+describe('output() — color_profile (un-gated v2.128.0) + auto_orient (STABLE since v2.120.0)', () => {
+  it('color_profile keep honored on same-format jpeg (un-gated v2.128.0)', () => {
+    expect(
+      soleOp(new Recipe(fileInput.path('a.jpg')).output('jpeg', { color_profile: 'keep' })).options,
+    ).toMatchObject({ color_profile: 'keep' });
+  });
+
+  it('color_profile srgb honored on same-format jpeg (jpeg srgb is live; only webp srgb stays planned)', () => {
+    expect(
+      soleOp(new Recipe(fileInput.path('a.jpg')).output('jpeg', { color_profile: 'srgb' })).options,
+    ).toMatchObject({ color_profile: 'srgb' });
+  });
+
+  it('color_profile keep honored on same-format webp (keep/strip live)', () => {
+    expect(
+      soleOp(new Recipe(fileInput.path('a.webp')).output('webp', { color_profile: 'keep' })).options,
+    ).toMatchObject({ color_profile: 'keep' });
+  });
+
+  // KNOWN GAP (Trello WSXsczZd): webp same-format `srgb` is contract-`planned`,
+  // but the per-value gate reads the coarse `image` group (compressGroupForToken
+  // maps webp→'image', which lacks the srgb-planned entry that lives under
+  // `image_webp`), so the SDK passes it through pre-upload (the server rejects
+  // it). This locks the current passthrough until the group-mapping fix lands.
+  it('color_profile srgb on webp passes through pre-upload (KNOWN GAP WSXsczZd — server-gated)', () => {
+    expect(
+      soleOp(new Recipe(fileInput.path('a.webp')).output('webp', { color_profile: 'srgb' })).options,
+    ).toMatchObject({ color_profile: 'srgb' });
   });
 
   it('auto_orient honored on same-format jpeg (stable since v2.120.0 — emitted, not gated)', () => {

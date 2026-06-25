@@ -66,11 +66,11 @@ export const IMAGE_OUTPUT_ROUTES = {
     same_format: {
         avif: { honored: ['auto_orient', 'avif_speed', 'encoding_mode', 'fit', 'height', 'metadata', 'output_format', 'quality', 'target_size_bytes', 'width'], planned: ['color_profile'] },
         gif: { honored: ['auto_orient', 'fit', 'height', 'metadata', 'output_format', 'quality', 'width'], planned: ['color_profile', 'keep_metadata'] },
-        jpeg: { honored: ['auto_orient', 'chroma_subsampling', 'encoding_mode', 'fit', 'height', 'lossless', 'metadata', 'output_format', 'progressive', 'quality', 'target_size_bytes', 'width'], planned: ['color_profile', 'keep_metadata'] },
-        png: { honored: ['auto_orient', 'fit', 'height', 'metadata', 'optimization_level', 'output_format', 'quality', 'width'], planned: ['color_profile', 'keep_metadata', 'lossy'] },
+        jpeg: { honored: ['auto_orient', 'chroma_subsampling', 'color_profile', 'encoding_mode', 'fit', 'height', 'lossless', 'metadata', 'output_format', 'progressive', 'quality', 'target_size_bytes', 'width'], planned: ['keep_metadata'] },
+        png: { honored: ['auto_orient', 'color_profile', 'fit', 'height', 'metadata', 'optimization_level', 'output_format', 'quality', 'width'], planned: ['keep_metadata', 'lossy'] },
         svg: { honored: ['metadata', 'output_format', 'quality'], planned: [] },
         tiff: { honored: ['auto_orient', 'fit', 'height', 'metadata', 'output_format', 'quality', 'width'], planned: ['color_profile', 'keep_metadata'] },
-        webp: { honored: ['auto_orient', 'encoding_mode', 'fit', 'height', 'lossless', 'metadata', 'output_format', 'quality', 'target_size_bytes', 'width'], planned: ['color_profile', 'keep_metadata'] },
+        webp: { honored: ['auto_orient', 'color_profile', 'encoding_mode', 'fit', 'height', 'lossless', 'metadata', 'output_format', 'quality', 'target_size_bytes', 'width'], planned: ['keep_metadata'] },
     },
     format_change: {
         avif: { honored: ['auto_orient', 'fit', 'height', 'output_format', 'quality', 'width'], planned: ['color_profile', 'metadata'] },
