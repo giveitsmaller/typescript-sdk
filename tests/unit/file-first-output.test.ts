@@ -228,7 +228,7 @@ describe('output() — color_profile (un-gated v2.128.0) + auto_orient (STABLE s
     ).toMatchObject({ color_profile: 'keep' });
   });
 
-  it('color_profile srgb honored on same-format jpeg (jpeg srgb is live; only webp srgb stays planned)', () => {
+  it('color_profile srgb honored on same-format jpeg (jpeg srgb is live; webp/gif/tiff srgb stay planned)', () => {
     expect(
       soleOp(new Recipe(fileInput.path('a.jpg')).output('jpeg', { color_profile: 'srgb' })).options,
     ).toMatchObject({ color_profile: 'srgb' });
@@ -240,15 +240,18 @@ describe('output() — color_profile (un-gated v2.128.0) + auto_orient (STABLE s
     ).toMatchObject({ color_profile: 'keep' });
   });
 
-  // KNOWN GAP (Trello WSXsczZd): webp same-format `srgb` is contract-`planned`,
-  // but the per-value gate reads the coarse `image` group (compressGroupForToken
-  // maps webp→'image', which lacks the srgb-planned entry that lives under
-  // `image_webp`), so the SDK passes it through pre-upload (the server rejects
-  // it). This locks the current passthrough until the group-mapping fix lands.
-  it('color_profile srgb on webp passes through pre-upload (KNOWN GAP WSXsczZd — server-gated)', () => {
-    expect(
-      soleOp(new Recipe(fileInput.path('a.webp')).output('webp', { color_profile: 'srgb' })).options,
-    ).toMatchObject({ color_profile: 'srgb' });
+  // v2.134 added `srgb: planned` to the generic compress `image` group, so the
+  // coarse per-value gate (compressGroupForToken maps webp/gif/tiff → 'image')
+  // now correctly gates `srgb` pre-upload — resolving the WSXsczZd symptom
+  // contract-side. jpeg/png keep `srgb` live (their own groups carry no
+  // srgb-planned entry).
+  it('color_profile srgb on webp throws feature_not_available (planned per-value)', () => {
+    try {
+      ops(new Recipe(fileInput.path('a.webp')).output('webp', { color_profile: 'srgb' }));
+      throw new Error('expected throw');
+    } catch (e) {
+      expect((e as GislConfigError).reason).toBe('feature_not_available');
+    }
   });
 
   it('auto_orient honored on same-format jpeg (stable since v2.120.0 — emitted, not gated)', () => {
