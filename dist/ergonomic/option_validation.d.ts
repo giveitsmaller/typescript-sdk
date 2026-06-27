@@ -9,8 +9,8 @@ import { type OperationMetadata } from '@giveitsmaller/contracts/operations';
  * sidecars (the same contract-anchored source the wire-key conformance guard
  * uses), so it can never silently drift from the contract.
  *
- * SCOPE: `convert` / `thumbnail` / `textWatermark` / `watermark` only. `compress`
- * is deliberately EXCLUDED — its bag legitimately carries SDK-only keys
+ * SCOPE: `convert` / `thumbnail` / `textWatermark` / `watermark` / `output`
+ * only. `compress` is deliberately EXCLUDED — its bag legitimately carries SDK-only keys
  * (`optimize`, `presetOverrides`) and camelCase resolver aliases (`targetSize`,
  * `outputFormat`) that are not `operationOptionKeys(compressMetadata)`; it has its
  * own `unknown_field` validation through the preset resolver.

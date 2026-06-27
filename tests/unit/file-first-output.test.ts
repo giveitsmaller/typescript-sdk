@@ -135,13 +135,13 @@ describe('output() — lossless (stable on jpeg/webp since v2.101.0)', () => {
   });
 });
 
-describe('output() — still-planned options gated unavailable', () => {
-  it('lossy (planned, png) throws feature_not_available', () => {
+describe('output() — removed and still-planned options gated locally', () => {
+  it('lossy (removed from png output) throws unknown_field', () => {
     try {
-      ops(new Recipe(fileInput.path('photo.png')).output('png', { lossy: true }));
+      new Recipe(fileInput.path('photo.png')).output('png', { lossy: true } as never);
       throw new Error('expected throw');
     } catch (e) {
-      expect((e as GislConfigError).reason).toBe('feature_not_available');
+      expect((e as GislConfigError).reason).toBe('unknown_field');
     }
   });
 
@@ -240,14 +240,27 @@ describe('output() — color_profile (un-gated v2.128.0) + auto_orient (STABLE s
     ).toMatchObject({ color_profile: 'keep' });
   });
 
-  // v2.134 added `srgb: planned` to the generic compress `image` group, so the
-  // coarse per-value gate (compressGroupForToken maps webp/gif/tiff → 'image')
-  // now correctly gates `srgb` pre-upload — resolving the WSXsczZd symptom
-  // contract-side. jpeg/png keep `srgb` live (their own groups carry no
-  // srgb-planned entry).
+  it('color_profile keep honored on same-format avif (un-gated v2.137.0)', () => {
+    expect(
+      soleOp(new Recipe(fileInput.path('a.avif')).output('avif', { color_profile: 'keep' })).options,
+    ).toMatchObject({ color_profile: 'keep' });
+  });
+
+  // v2.134 added `srgb: planned` to the generic compress `image` group, and
+  // v2.137 keeps AVIF `srgb` planned in the image_avif group even while
+  // un-gating the key itself. The per-value gate catches both pre-upload.
   it('color_profile srgb on webp throws feature_not_available (planned per-value)', () => {
     try {
       ops(new Recipe(fileInput.path('a.webp')).output('webp', { color_profile: 'srgb' }));
+      throw new Error('expected throw');
+    } catch (e) {
+      expect((e as GislConfigError).reason).toBe('feature_not_available');
+    }
+  });
+
+  it('color_profile srgb on avif throws feature_not_available (planned per-value)', () => {
+    try {
+      ops(new Recipe(fileInput.path('a.avif')).output('avif', { color_profile: 'srgb' }));
       throw new Error('expected throw');
     } catch (e) {
       expect((e as GislConfigError).reason).toBe('feature_not_available');
@@ -280,6 +293,15 @@ describe('output() — unrepresentable routes + svg (vector, no resize)', () => 
 
   it('svg input has no resize on its route → resize throws not-honored', () => {
     expect(() => ops(new Recipe(fileInput.path('logo.svg')).output('svg').resize(200, 200))).toThrow(/not honored/);
+  });
+
+  it('svg input quality is no longer honored → throws option_not_on_route', () => {
+    try {
+      ops(new Recipe(fileInput.path('logo.svg')).output('svg', { quality: 80 }));
+      throw new Error('expected throw');
+    } catch (e) {
+      expect((e as GislConfigError).reason).toBe('option_not_on_route');
+    }
   });
 });
 

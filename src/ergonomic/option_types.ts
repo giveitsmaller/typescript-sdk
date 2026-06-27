@@ -161,7 +161,7 @@ export type OutputMetadata = 'strip' | 'keep';
 export type OutputEncodingMode = 'quality' | 'target_size';
 /** Chroma subsampling for JPEG output (contract `chroma_subsampling` enum, v2.110.0). `420` smallest → `444` highest fidelity. Honored: same_format jpeg only. */
 export type OutputChromaSubsampling = '420' | '422' | '444';
-/** ICC colour-profile handling (contract `color_profile` enum, v2.112.0). `keep` preserves the embedded profile; `srgb` converts to sRGB; `strip` removes it. PLANNED — gated unavailable. */
+/** ICC colour-profile handling (contract `color_profile` enum, v2.112.0). `keep` preserves the embedded profile; `srgb` converts to sRGB; `strip` removes it. Route/value availability is gated by the output lowering. */
 export type OutputColorProfile = 'keep' | 'srgb' | 'strip';
 
 /**
@@ -174,7 +174,7 @@ export type OutputColorProfile = 'keep' | 'srgb' | 'strip';
  * `fit`) is honored on raster routes; `height` is optional (width-only resize).
  */
 export interface OutputOptions {
-  /** Output quality for lossy formats (1-100). Honored: avif/jpeg/webp routes. */
+  /** Output quality (1-100). Honored on same-format avif/jpeg/png/webp and lossy format-change routes. */
   quality?: number;
   /** Compression mode (same_format avif/jpeg/webp). `quality` (default) or `target_size` — STABLE since v2.108.0. */
   encoding_mode?: OutputEncodingMode;
@@ -200,19 +200,17 @@ export interface OutputOptions {
   metadata?: OutputMetadata;
   /** Selective per-category metadata keep (`copyright`/`gps`/`date`); refines `metadata: 'strip'`. PLANNED (gated unavailable; v2.106.0). */
   keep_metadata?: string[];
-  /** ICC colour-profile handling (`keep`/`srgb`/`strip`). PLANNED — gated unavailable (v2.112.0). */
+  /** ICC colour-profile handling (`keep`/`srgb`/`strip`). Availability depends on route and value. */
   color_profile?: OutputColorProfile;
   /** Auto-rotate per EXIF orientation. STABLE since v2.120.0 (both routes). */
   auto_orient?: boolean;
   /** JPEG/WebP lossless. Honored: same_format jpeg/webp (stable since v2.101.0). */
   lossless?: boolean;
-  /** Lossy PNG quantization. PLANNED (gated unavailable; licence-gated). */
-  lossy?: boolean;
 }
 const OUTPUT_OPTION_KEYS = [
   'quality', 'encoding_mode', 'target_size_bytes', 'chroma_subsampling', 'width', 'height', 'fit',
   'background', 'progressive', 'optimization_level', 'avif_speed', 'metadata', 'keep_metadata',
-  'color_profile', 'auto_orient', 'lossless', 'lossy',
+  'color_profile', 'auto_orient', 'lossless',
 ] as const;
 
 // --- Source-level drift guard: interface keys must equal the key tuple (tsc-enforced). ---

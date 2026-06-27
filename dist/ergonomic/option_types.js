@@ -31,7 +31,7 @@ const WATERMARK_OPTION_KEYS = [
 const OUTPUT_OPTION_KEYS = [
     'quality', 'encoding_mode', 'target_size_bytes', 'chroma_subsampling', 'width', 'height', 'fit',
     'background', 'progressive', 'optimization_level', 'avif_speed', 'metadata', 'keep_metadata',
-    'color_profile', 'auto_orient', 'lossless', 'lossy',
+    'color_profile', 'auto_orient', 'lossless',
 ];
 const _convertKeysMatch = true;
 const _thumbnailKeysMatch = true;

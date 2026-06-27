@@ -178,7 +178,7 @@ describe('wire-key conformance — compress', () => {
   // The PDF `colorspace` / `pages` / `flatten_forms` are `planned` and live in
   // PLANNED_OMISSIONS below (drift-guarded), NOT here.
   // image Output-facade knobs (contracts v2.97.0 tewB37Jg + v2.104.0 target-size):
-  // compress.image* carries width/height/fit (Resize-inside-Output), lossless/lossy,
+  // compress.image* carries width/height/fit (Resize-inside-Output), lossless,
   // and the v2.104.0 target-size pair (encoding_mode + target_size_bytes). These are
   // the image OUTPUT facade surface — exposed/gated by the ergonomic `output()`/
   // `resize()` verbs (see file-first-output.test.ts), NOT the preset-driven
@@ -188,17 +188,16 @@ describe('wire-key conformance — compress', () => {
   // KNOWN_WIRE_FIELDS here:
   //   - width / height / fit  (stable resize; output().resize())
   //   - lossless              (stable since v2.101.0; output())
-  //   - lossy                 (planned; gated unavailable by output())
   //   - encoding_mode         (v2.104.0; `quality`/`target_size` — STABLE since v2.108.0; output())
   //   - target_size_bytes     (STABLE since v2.108.0; honored same_format avif/jpeg/webp; output())
   //   - chroma_subsampling    (v2.110.0; stable, jpeg same_format; output())
   //   - keep_metadata         (v2.106.0; planned; gated unavailable by output())
-  //   - color_profile         (v2.112.0; planned; gated unavailable by output())
-  //   - auto_orient           (v2.112.0; planned; gated unavailable by output())
+  //   - color_profile         (v2.112.0; route/per-value gated by output())
+  //   - auto_orient           (v2.120.0; stable, route-gated by output())
   const INTENTIONALLY_OMITTED: Readonly<Record<string, ReadonlySet<string>>> = {
     image: new Set([
       'progressive', 'optimization_level', 'avif_speed',
-      'width', 'height', 'fit', 'lossless', 'lossy',
+      'width', 'height', 'fit', 'lossless',
       'encoding_mode', 'target_size_bytes', 'chroma_subsampling', 'keep_metadata',
       'color_profile', 'auto_orient',
     ]),
