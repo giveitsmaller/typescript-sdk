@@ -63,7 +63,6 @@ const WIRE_ALIASES = Object.freeze({
     sampleRate: 'sample_rate',
     audioCodec: 'audio_codec',
     audioBitrate: 'audio_bitrate',
-    imageQuality: 'image_quality',
     stripMacros: 'strip_macros',
     stripHiddenData: 'strip_hidden_data',
     stripUnusedFonts: 'strip_unused_fonts',
@@ -254,9 +253,9 @@ const MEDIA_FIELDS = Object.freeze({
     audio: new Set(['bitrate', 'channels', 'sampleRate', 'normalize']),
     video: new Set(['codec', 'targetSize', 'crf', 'preset', 'width', 'height', 'fit', 'fps', 'faststart', 'audioCodec', 'audioBitrate']),
     document_pdf: new Set(['profile', 'grayscale']),
-    document_office: new Set(['imageQuality', 'stripMacros', 'stripHiddenData', 'stripUnusedFonts']),
-    document_odf: new Set(['imageQuality', 'stripMetadata', 'stripUnusedStyles']),
-    document_epub: new Set(['imageQuality', 'fontSubsetting', 'stripUnusedCss']),
+    document_office: new Set(['stripMacros', 'stripHiddenData', 'stripUnusedFonts']),
+    document_odf: new Set(['stripMetadata', 'stripUnusedStyles']),
+    document_epub: new Set(['fontSubsetting', 'stripUnusedCss']),
 });
 function detectMismatchedOverrides(media, overrides) {
     const expected = MEDIA_FIELDS[media];
@@ -323,9 +322,9 @@ export const KNOWN_WIRE_FIELDS = Object.freeze({
     audio: new Set(['bitrate', 'channels', 'sample_rate', 'normalize', 'trim_start', 'trim_end']),
     video: new Set(['codec', 'encoding_mode', 'crf', 'target_size_bytes', 'preset', 'width', 'height', 'fit', 'fps', 'faststart', 'audio_codec', 'audio_bitrate', 'trim_start', 'trim_end']),
     document_pdf: new Set(['profile', 'grayscale']),
-    document_office: new Set(['image_quality', 'strip_macros', 'strip_hidden_data', 'strip_unused_fonts']),
-    document_odf: new Set(['image_quality', 'strip_metadata', 'strip_unused_styles']),
-    document_epub: new Set(['image_quality', 'font_subsetting', 'strip_unused_css']),
+    document_office: new Set(['strip_macros', 'strip_hidden_data', 'strip_unused_fonts']),
+    document_odf: new Set(['strip_metadata', 'strip_unused_styles']),
+    document_epub: new Set(['font_subsetting', 'strip_unused_css']),
 });
 function validateMerged(media, merged, explicitKeys, winners) {
     // Unknown-field defence-in-depth: every key must belong to the

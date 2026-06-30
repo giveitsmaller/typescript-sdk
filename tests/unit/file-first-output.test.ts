@@ -195,7 +195,7 @@ describe('output() — target-size (v2.108.0; encoding_mode + target_size_bytes 
   });
 });
 
-describe('output() — chroma_subsampling (v2.110.0 stable) + keep_metadata (v2.106.0 planned)', () => {
+describe('output() — chroma_subsampling (v2.110.0 stable) + quality_preset (v2.148.0 stable)', () => {
   it('chroma_subsampling honored on same-format jpeg', () => {
     expect(
       soleOp(new Recipe(fileInput.path('a.jpg')).output('jpeg', { chroma_subsampling: '420' })).options,
@@ -211,12 +211,18 @@ describe('output() — chroma_subsampling (v2.110.0 stable) + keep_metadata (v2.
     }
   });
 
-  it('keep_metadata (planned) throws feature_not_available on same-format jpeg', () => {
+  it('quality_preset (v2.148.0) honored on same-format jpeg', () => {
+    expect(
+      soleOp(new Recipe(fileInput.path('a.jpg')).output('jpeg', { quality_preset: 'good' })).options,
+    ).toMatchObject({ quality_preset: 'good' });
+  });
+
+  it('quality_preset NOT honored on same-format png (avif/jpeg/webp-only) → option_not_on_route', () => {
     try {
-      ops(new Recipe(fileInput.path('a.jpg')).output('jpeg', { keep_metadata: ['copyright'] }));
+      ops(new Recipe(fileInput.path('a.png')).output('png', { quality_preset: 'good' }));
       throw new Error('expected throw');
     } catch (e) {
-      expect((e as GislConfigError).reason).toBe('feature_not_available');
+      expect((e as GislConfigError).reason).toBe('option_not_on_route');
     }
   });
 });
@@ -246,9 +252,10 @@ describe('output() — color_profile (un-gated v2.128.0) + auto_orient (STABLE s
     ).toMatchObject({ color_profile: 'keep' });
   });
 
-  // v2.134 added `srgb: planned` to the generic compress `image` group, and
-  // v2.137 keeps AVIF `srgb` planned in the image_avif group even while
-  // un-gating the key itself. The per-value gate catches both pre-upload.
+  // v2.134 added `srgb: planned` to the generic compress `image` group, through
+  // which webp/gif/svg/tiff route — so webp srgb stays gated pre-upload. (AVIF
+  // routes through image_avif, where srgb flipped planned->stable in v2.148 — see
+  // the honored avif test below.)
   it('color_profile srgb on webp throws feature_not_available (planned per-value)', () => {
     try {
       ops(new Recipe(fileInput.path('a.webp')).output('webp', { color_profile: 'srgb' }));
@@ -258,13 +265,10 @@ describe('output() — color_profile (un-gated v2.128.0) + auto_orient (STABLE s
     }
   });
 
-  it('color_profile srgb on avif throws feature_not_available (planned per-value)', () => {
-    try {
-      ops(new Recipe(fileInput.path('a.avif')).output('avif', { color_profile: 'srgb' }));
-      throw new Error('expected throw');
-    } catch (e) {
-      expect((e as GislConfigError).reason).toBe('feature_not_available');
-    }
+  it('color_profile srgb honored on same-format avif (srgb planned->stable v2.148.0)', () => {
+    expect(
+      soleOp(new Recipe(fileInput.path('a.avif')).output('avif', { color_profile: 'srgb' })).options,
+    ).toMatchObject({ color_profile: 'srgb' });
   });
 
   it('auto_orient honored on same-format jpeg (stable since v2.120.0 — emitted, not gated)', () => {

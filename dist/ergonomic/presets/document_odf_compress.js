@@ -1,15 +1,12 @@
 // T4a — DocumentOdfCompressPresetOptions leaf DTO.
 //
-// Field set per ticket VhIj4S7T: ODF = 3 fields
-//   (imageQuality, stripMetadata, stripUnusedStyles). Primitives only.
+// Field set per ticket VhIj4S7T: ODF = 2 fields
+//   (stripMetadata, stripUnusedStyles). Primitives only.
 import { shippedDefaultsFor as f3ShippedDefaultsFor } from '../../generated/sdk_spec/presets.js';
 export class DocumentOdfCompressPresetOptions {
-    imageQuality;
     stripMetadata;
     stripUnusedStyles;
     constructor(input) {
-        if (input.imageQuality !== undefined)
-            this.imageQuality = input.imageQuality;
         if (input.stripMetadata !== undefined)
             this.stripMetadata = input.stripMetadata;
         if (input.stripUnusedStyles !== undefined)
@@ -23,8 +20,6 @@ export class DocumentOdfCompressPresetOptions {
         const cell = f3ShippedDefaultsFor('document_odf_compress', level);
         const input = {};
         const mut = input;
-        if ('imageQuality' in cell)
-            mut.imageQuality = cell.imageQuality;
         if ('stripMetadata' in cell)
             mut.stripMetadata = cell.stripMetadata;
         if ('stripUnusedStyles' in cell)

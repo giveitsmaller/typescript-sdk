@@ -567,11 +567,11 @@ export declare const WATERMARK_CAPABILITY: {
         };
         readonly image_tiff: {
             readonly mimes: readonly ["image/tiff"];
-            readonly availability: "planned";
+            readonly availability: "stable";
         };
         readonly image_bmp: {
             readonly mimes: readonly ["image/bmp"];
-            readonly availability: "planned";
+            readonly availability: "stable";
         };
     };
     readonly video_watermark: {

@@ -66,19 +66,16 @@ export const PRESETS = Object.freeze({
     }),
     "document_office_compress": Object.freeze({
         Size: Object.freeze({
-            "imageQuality": 60,
             "stripMacros": true,
             "stripHiddenData": true,
             "stripUnusedFonts": true,
         }),
         Balanced: Object.freeze({
-            "imageQuality": 80,
             "stripMacros": true,
             "stripHiddenData": false,
             "stripUnusedFonts": false,
         }),
         Quality: Object.freeze({
-            "imageQuality": 92,
             "stripMacros": false,
             "stripHiddenData": false,
             "stripUnusedFonts": false,
@@ -86,34 +83,28 @@ export const PRESETS = Object.freeze({
     }),
     "document_odf_compress": Object.freeze({
         Size: Object.freeze({
-            "imageQuality": 60,
             "stripMetadata": true,
             "stripUnusedStyles": true,
         }),
         Balanced: Object.freeze({
-            "imageQuality": 80,
             "stripMetadata": true,
             "stripUnusedStyles": false,
         }),
         Quality: Object.freeze({
-            "imageQuality": 92,
             "stripMetadata": false,
             "stripUnusedStyles": false,
         }),
     }),
     "document_epub_compress": Object.freeze({
         Size: Object.freeze({
-            "imageQuality": 60,
             "fontSubsetting": true,
             "stripUnusedCss": true,
         }),
         Balanced: Object.freeze({
-            "imageQuality": 80,
             "fontSubsetting": true,
             "stripUnusedCss": false,
         }),
         Quality: Object.freeze({
-            "imageQuality": 92,
             "fontSubsetting": false,
             "stripUnusedCss": false,
         }),

@@ -73,19 +73,16 @@ export const PRESETS: PresetMatrix = Object.freeze({
   } as Readonly<Record<PresetLevel, PresetCell>>),
   "document_office_compress": Object.freeze({
     Size: Object.freeze({
-      "imageQuality": 60,
       "stripMacros": true,
       "stripHiddenData": true,
       "stripUnusedFonts": true,
     } as PresetCell),
     Balanced: Object.freeze({
-      "imageQuality": 80,
       "stripMacros": true,
       "stripHiddenData": false,
       "stripUnusedFonts": false,
     } as PresetCell),
     Quality: Object.freeze({
-      "imageQuality": 92,
       "stripMacros": false,
       "stripHiddenData": false,
       "stripUnusedFonts": false,
@@ -93,34 +90,28 @@ export const PRESETS: PresetMatrix = Object.freeze({
   } as Readonly<Record<PresetLevel, PresetCell>>),
   "document_odf_compress": Object.freeze({
     Size: Object.freeze({
-      "imageQuality": 60,
       "stripMetadata": true,
       "stripUnusedStyles": true,
     } as PresetCell),
     Balanced: Object.freeze({
-      "imageQuality": 80,
       "stripMetadata": true,
       "stripUnusedStyles": false,
     } as PresetCell),
     Quality: Object.freeze({
-      "imageQuality": 92,
       "stripMetadata": false,
       "stripUnusedStyles": false,
     } as PresetCell),
   } as Readonly<Record<PresetLevel, PresetCell>>),
   "document_epub_compress": Object.freeze({
     Size: Object.freeze({
-      "imageQuality": 60,
       "fontSubsetting": true,
       "stripUnusedCss": true,
     } as PresetCell),
     Balanced: Object.freeze({
-      "imageQuality": 80,
       "fontSubsetting": true,
       "stripUnusedCss": false,
     } as PresetCell),
     Quality: Object.freeze({
-      "imageQuality": 92,
       "fontSubsetting": false,
       "stripUnusedCss": false,
     } as PresetCell),

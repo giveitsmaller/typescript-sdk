@@ -150,9 +150,8 @@ describe('DocumentPdfCompressPresetOptions.shippedDefaultsFor', () => {
 });
 
 describe('DocumentOfficeCompressPresetOptions.shippedDefaultsFor', () => {
-  it('Size — image_quality 60 + all strip flags true', () => {
+  it('Size — all strip flags true', () => {
     const opts = DocumentOfficeCompressPresetOptions.shippedDefaultsFor(OptimizeFor.Size);
-    expect(opts.imageQuality).toBe(60);
     expect(opts.stripMacros).toBe(true);
     expect(opts.stripHiddenData).toBe(true);
     expect(opts.stripUnusedFonts).toBe(true);
@@ -160,15 +159,13 @@ describe('DocumentOfficeCompressPresetOptions.shippedDefaultsFor', () => {
 
   it('Balanced — only stripMacros stays true', () => {
     const opts = DocumentOfficeCompressPresetOptions.shippedDefaultsFor(OptimizeFor.Balanced);
-    expect(opts.imageQuality).toBe(80);
     expect(opts.stripMacros).toBe(true);
     expect(opts.stripHiddenData).toBe(false);
     expect(opts.stripUnusedFonts).toBe(false);
   });
 
-  it('Quality — image_quality 92 + every strip flag false', () => {
+  it('Quality — every strip flag false', () => {
     const opts = DocumentOfficeCompressPresetOptions.shippedDefaultsFor(OptimizeFor.Quality);
-    expect(opts.imageQuality).toBe(92);
     expect(opts.stripMacros).toBe(false);
     expect(opts.stripHiddenData).toBe(false);
     expect(opts.stripUnusedFonts).toBe(false);
@@ -178,17 +175,14 @@ describe('DocumentOfficeCompressPresetOptions.shippedDefaultsFor', () => {
 describe('DocumentOdfCompressPresetOptions.shippedDefaultsFor', () => {
   it('Size / Balanced / Quality', () => {
     const size = DocumentOdfCompressPresetOptions.shippedDefaultsFor(OptimizeFor.Size);
-    expect(size.imageQuality).toBe(60);
     expect(size.stripMetadata).toBe(true);
     expect(size.stripUnusedStyles).toBe(true);
 
     const balanced = DocumentOdfCompressPresetOptions.shippedDefaultsFor(OptimizeFor.Balanced);
-    expect(balanced.imageQuality).toBe(80);
     expect(balanced.stripMetadata).toBe(true);
     expect(balanced.stripUnusedStyles).toBe(false);
 
     const quality = DocumentOdfCompressPresetOptions.shippedDefaultsFor(OptimizeFor.Quality);
-    expect(quality.imageQuality).toBe(92);
     expect(quality.stripMetadata).toBe(false);
     expect(quality.stripUnusedStyles).toBe(false);
   });
@@ -197,17 +191,14 @@ describe('DocumentOdfCompressPresetOptions.shippedDefaultsFor', () => {
 describe('DocumentEpubCompressPresetOptions.shippedDefaultsFor', () => {
   it('Size / Balanced / Quality', () => {
     const size = DocumentEpubCompressPresetOptions.shippedDefaultsFor(OptimizeFor.Size);
-    expect(size.imageQuality).toBe(60);
     expect(size.fontSubsetting).toBe(true);
     expect(size.stripUnusedCss).toBe(true);
 
     const balanced = DocumentEpubCompressPresetOptions.shippedDefaultsFor(OptimizeFor.Balanced);
-    expect(balanced.imageQuality).toBe(80);
     expect(balanced.fontSubsetting).toBe(true);
     expect(balanced.stripUnusedCss).toBe(false);
 
     const quality = DocumentEpubCompressPresetOptions.shippedDefaultsFor(OptimizeFor.Quality);
-    expect(quality.imageQuality).toBe(92);
     expect(quality.fontSubsetting).toBe(false);
     expect(quality.stripUnusedCss).toBe(false);
   });
@@ -325,7 +316,7 @@ describe('presetDefaults() / PresetDefaults', () => {
       .videoCompress(OptimizeFor.Quality, { codec: VideoCodec.H264, crf: 18 })
       .audioCompress(OptimizeFor.Balanced, { bitrate: AudioBitrate._192 })
       .pdfCompress(OptimizeFor.Size, { profile: PdfProfile.Printer })
-      .officeCompress(OptimizeFor.Balanced, { imageQuality: 75 })
+      .officeCompress(OptimizeFor.Balanced, { stripHiddenData: true })
       .odfCompress(OptimizeFor.Quality, { stripMetadata: false })
       .epubCompress(OptimizeFor.Size, { fontSubsetting: true });
 
@@ -333,7 +324,7 @@ describe('presetDefaults() / PresetDefaults', () => {
     expect(d.cellFor('video', 'compress', OptimizeFor.Quality)?.crf).toBe(18);
     expect(d.cellFor('audio', 'compress', OptimizeFor.Balanced)?.bitrate).toBe(AudioBitrate._192);
     expect(d.cellFor('document_pdf', 'compress', OptimizeFor.Size)?.profile).toBe(PdfProfile.Printer);
-    expect(d.cellFor('document_office', 'compress', OptimizeFor.Balanced)?.imageQuality).toBe(75);
+    expect(d.cellFor('document_office', 'compress', OptimizeFor.Balanced)?.stripHiddenData).toBe(true);
     expect(d.cellFor('document_odf', 'compress', OptimizeFor.Quality)?.stripMetadata).toBe(false);
     expect(d.cellFor('document_epub', 'compress', OptimizeFor.Size)?.fontSubsetting).toBe(true);
   });

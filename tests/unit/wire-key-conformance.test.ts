@@ -168,7 +168,7 @@ describe('wire-key conformance — compress', () => {
   // Document compress `quality` (contracts v2.83.0 document-compress honesty
   // pass): a stable, real per-document-group quality knob the ergonomic
   // document-compress preset path does not expose yet (the document preset DTOs
-  // carry profile/grayscale/image_quality/strip_* but not `quality`) — omitted
+  // carry profile/grayscale/strip_* but not `quality`) — omitted
   // until a document-quality ergonomic option ships (tracked follow-up).
   //
   // document_pdf `image_dpi` (contracts v2.96.0 Acrobat-PDF realignment
@@ -191,14 +191,14 @@ describe('wire-key conformance — compress', () => {
   //   - encoding_mode         (v2.104.0; `quality`/`target_size` — STABLE since v2.108.0; output())
   //   - target_size_bytes     (STABLE since v2.108.0; honored same_format avif/jpeg/webp; output())
   //   - chroma_subsampling    (v2.110.0; stable, jpeg same_format; output())
-  //   - keep_metadata         (v2.106.0; planned; gated unavailable by output())
+  //   - quality_preset        (v2.148.0; stable, same_format avif/jpeg/webp; output())
   //   - color_profile         (v2.112.0; route/per-value gated by output())
   //   - auto_orient           (v2.120.0; stable, route-gated by output())
   const INTENTIONALLY_OMITTED: Readonly<Record<string, ReadonlySet<string>>> = {
     image: new Set([
       'progressive', 'optimization_level', 'avif_speed',
       'width', 'height', 'fit', 'lossless',
-      'encoding_mode', 'target_size_bytes', 'chroma_subsampling', 'keep_metadata',
+      'encoding_mode', 'target_size_bytes', 'chroma_subsampling', 'quality_preset',
       'color_profile', 'auto_orient',
     ]),
     audio: new Set(['output_format']),

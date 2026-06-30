@@ -39,6 +39,18 @@ describe('WatermarkedRecipe — routing', () => {
     expect(watermarkJobOf(payload).operations[0].type).toBe('image_watermark');
   });
 
+  it('routes a TIFF base to image_watermark (image_tiff stable, v2.148.0)', () => {
+    const wr = recipe('scan.tiff').watermark(overlay());
+    const payload = wr.toWorkflowPayload(['base', 'ovl']);
+    expect(watermarkJobOf(payload).operations[0].type).toBe('image_watermark');
+  });
+
+  it('routes a BMP base to image_watermark (image_bmp stable, v2.148.0)', () => {
+    const wr = recipe('pic.bmp').watermark(overlay());
+    const payload = wr.toWorkflowPayload(['base', 'ovl']);
+    expect(watermarkJobOf(payload).operations[0].type).toBe('image_watermark');
+  });
+
   it('routes a video base to video_watermark', () => {
     const wr = recipe('clip.mp4').watermark(overlay(), { anchor: 'top_right' });
     const payload = wr.toWorkflowPayload(['base', 'ovl']);
@@ -174,14 +186,6 @@ describe('WatermarkedRecipe — planned-op gate (throws pre-upload)', () => {
     expect(() => recipe('loop.gif').watermark(overlay())).toThrow(/not yet available|planned/);
   });
 
-  it('throws for a TIFF base (image_tiff is planned, v2.123.0)', () => {
-    expect(() => recipe('scan.tiff').watermark(overlay())).toThrow(/not yet available|planned/);
-  });
-
-  it('throws for a BMP base (image_bmp is planned, v2.123.0)', () => {
-    expect(() => recipe('pic.bmp').watermark(overlay())).toThrow(/not yet available|planned/);
-  });
-
   it('throws for an unsupported image subtype (avif)', () => {
     expect(() => recipe('pic.avif').watermark(overlay())).toThrow(/does not support/);
   });
@@ -257,6 +261,8 @@ describe('WATERMARK_CAPABILITY table', () => {
   it('exposes the shippable image + beta video routing', () => {
     expect(WATERMARK_CAPABILITY.image_watermark.image.availability).toBe('stable');
     expect(WATERMARK_CAPABILITY.image_watermark.image_gif.availability).toBe('planned');
+    expect(WATERMARK_CAPABILITY.image_watermark.image_tiff.availability).toBe('stable');
+    expect(WATERMARK_CAPABILITY.image_watermark.image_bmp.availability).toBe('stable');
     expect(WATERMARK_CAPABILITY.video_watermark.video.availability).toBe('beta');
   });
 });

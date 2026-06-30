@@ -80,13 +80,13 @@ export const IMAGE_OUTPUT_ROUTES: {
   readonly format_change: Readonly<Record<string, RouteCell>>;
 } = {
   same_format: {
-    avif: { honored: ['auto_orient', 'avif_speed', 'color_profile', 'encoding_mode', 'fit', 'height', 'metadata', 'output_format', 'quality', 'target_size_bytes', 'width'], planned: [] },
-    gif: { honored: ['auto_orient', 'color_profile', 'fit', 'height', 'metadata', 'output_format', 'quality', 'width'], planned: ['keep_metadata'] },
-    jpeg: { honored: ['auto_orient', 'chroma_subsampling', 'color_profile', 'encoding_mode', 'fit', 'height', 'lossless', 'metadata', 'output_format', 'progressive', 'quality', 'target_size_bytes', 'width'], planned: ['keep_metadata'] },
-    png: { honored: ['auto_orient', 'color_profile', 'fit', 'height', 'metadata', 'optimization_level', 'output_format', 'quality', 'width'], planned: ['keep_metadata'] },
+    avif: { honored: ['auto_orient', 'avif_speed', 'color_profile', 'encoding_mode', 'fit', 'height', 'metadata', 'output_format', 'quality', 'quality_preset', 'target_size_bytes', 'width'], planned: [] },
+    gif: { honored: ['auto_orient', 'color_profile', 'fit', 'height', 'metadata', 'output_format', 'quality', 'width'], planned: [] },
+    jpeg: { honored: ['auto_orient', 'chroma_subsampling', 'color_profile', 'encoding_mode', 'fit', 'height', 'lossless', 'metadata', 'output_format', 'progressive', 'quality', 'quality_preset', 'target_size_bytes', 'width'], planned: [] },
+    png: { honored: ['auto_orient', 'color_profile', 'fit', 'height', 'metadata', 'optimization_level', 'output_format', 'quality', 'width'], planned: [] },
     svg: { honored: ['metadata', 'output_format'], planned: [] },
-    tiff: { honored: ['auto_orient', 'color_profile', 'fit', 'height', 'metadata', 'output_format', 'quality', 'width'], planned: ['keep_metadata'] },
-    webp: { honored: ['auto_orient', 'color_profile', 'encoding_mode', 'fit', 'height', 'lossless', 'metadata', 'output_format', 'quality', 'target_size_bytes', 'width'], planned: ['keep_metadata'] },
+    tiff: { honored: ['auto_orient', 'color_profile', 'fit', 'height', 'metadata', 'output_format', 'quality', 'width'], planned: [] },
+    webp: { honored: ['auto_orient', 'color_profile', 'encoding_mode', 'fit', 'height', 'lossless', 'metadata', 'output_format', 'quality', 'quality_preset', 'target_size_bytes', 'width'], planned: [] },
   },
   format_change: {
     avif: { honored: ['auto_orient', 'color_profile', 'fit', 'height', 'output_format', 'quality', 'width'], planned: ['metadata'] },
