@@ -67,7 +67,7 @@ Docs are published in the [giveitsmaller-sdks](https://github.com/AntonioCS/give
 - **Webhooks** — [`docs/typescript/webhook.md`](https://github.com/AntonioCS/giveitsmaller-sdks/blob/main/docs/typescript/webhook.md)
 - **Errors & retry guidance** — [`docs/typescript/errors.md`](https://github.com/AntonioCS/giveitsmaller-sdks/blob/main/docs/typescript/errors.md)
 - **Troubleshooting** — [`docs/typescript/troubleshooting.md`](https://github.com/AntonioCS/giveitsmaller-sdks/blob/main/docs/typescript/troubleshooting.md)
-- **Examples** — compress, thumbnail, convert, merge, archive — [`docs/typescript/examples/`](https://github.com/AntonioCS/giveitsmaller-sdks/tree/main/docs/typescript/examples)
+- **Examples** — compress, thumbnail, convert, merge, archive, watermark, output — [`docs/typescript/examples/`](https://github.com/AntonioCS/giveitsmaller-sdks/tree/main/docs/typescript/examples)
 
 ## Contributing: the committed `dist/`
 
