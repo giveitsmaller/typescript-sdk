@@ -57,6 +57,21 @@ export interface OutputFile {
     readonly filename: string;
     readonly sizeBytes: number;
     readonly operation: string;
+    /**
+     * For a `target_size` encode: the quality the encode-measure loop settled
+     * on. Projected from the generated {@link OperationDownload.chosenQuality};
+     * undefined (omitted) for non-target-size outputs. Pairs with
+     * {@link targetSizeMet}.
+     */
+    readonly chosenQuality?: number;
+    /**
+     * For a `target_size` encode: whether the output landed at or under the
+     * requested byte target. `false` is an honest best-effort outcome (target
+     * unreachable at min quality), NOT a failure. Projected from the generated
+     * {@link OperationDownload.targetSizeMet}; undefined for non-target-size
+     * outputs.
+     */
+    readonly targetSizeMet?: boolean;
 }
 /**
  * One succeeded entry in {@link RunResult.succeeded}: a single input's
@@ -101,6 +116,10 @@ export interface Manifest {
  *  - `ok`: true iff `failed` is empty. (A boolean — the partition lists are
  *    `succeeded`/`failed`; resolves the design doc's `ok` bool-vs-list
  *    contradiction.)
+ *  - `targetSizeMissed`: derived target-size signal — undefined when no output
+ *    reports a target-size outcome (not a target_size run); otherwise true iff
+ *    some artifact has `targetSizeMet === false`. Omitted from the JSON when
+ *    undefined so non-target-size runs keep the common-case shape.
  *  - `state`: lifecycle state (`completed` | `failed` | ...). Named `state`,
  *    NOT `status`, matching the file-first `StatusSnapshot.state`.
  *  - sinks fetch via the injected {@link Downloader}; a result with no
@@ -117,6 +136,14 @@ export declare class RunResult {
     readonly url?: string;
     /** True iff {@link failed} is empty. */
     readonly ok: boolean;
+    /**
+     * Whether any output missed its requested byte target. Derived from the
+     * per-output {@link OutputFile.targetSizeMet}: undefined when NO artifact
+     * reports a target-size outcome (every `targetSizeMet` undefined — not a
+     * target_size run); otherwise true iff some artifact has
+     * `targetSizeMet === false`.
+     */
+    readonly targetSizeMissed?: boolean;
     constructor(workflowId: string, state: string, artifacts: readonly OutputFile[], succeeded: readonly ItemResult[], failed: readonly ItemFailure[], downloader?: Downloader | undefined);
     /**
      * Address a succeeded input by the `key:` given to `file()`. Duplicate keys
@@ -143,16 +170,18 @@ export declare class RunResult {
         failOnPartial?: boolean;
     }): Promise<Manifest>;
     /**
-     * Plain-object projection. Field ORDER (workflowId, state, ok, url?,
-     * artifacts, succeeded, failed) is fixed to match the PHP `toArray()`
-     * reference so JSON-string parity holds (FF1 shape assertion + FF2b harness
-     * fixture). `url` is omitted entirely when undefined — `JSON.stringify`
-     * then produces the identical shape to PHP's omit-when-null `toArray()`.
+     * Plain-object projection. Field ORDER (workflowId, state, ok,
+     * targetSizeMissed?, url?, artifacts, succeeded, failed) is fixed to match
+     * the PHP `toArray()` reference so JSON-string parity holds (FF1 shape
+     * assertion + FF2b harness fixture). `targetSizeMissed` + `url` are omitted
+     * entirely when undefined — `JSON.stringify` then produces the identical
+     * shape to PHP's omit-when-null `toArray()`.
      */
     toJSON(): {
         workflowId: string;
         state: string;
         ok: boolean;
+        targetSizeMissed?: boolean;
         url?: string;
         artifacts: readonly OutputFile[];
         succeeded: readonly {

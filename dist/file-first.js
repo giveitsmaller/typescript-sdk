@@ -40,6 +40,10 @@ import { Handle } from './handle.js';
  *  - `ok`: true iff `failed` is empty. (A boolean — the partition lists are
  *    `succeeded`/`failed`; resolves the design doc's `ok` bool-vs-list
  *    contradiction.)
+ *  - `targetSizeMissed`: derived target-size signal — undefined when no output
+ *    reports a target-size outcome (not a target_size run); otherwise true iff
+ *    some artifact has `targetSizeMet === false`. Omitted from the JSON when
+ *    undefined so non-target-size runs keep the common-case shape.
  *  - `state`: lifecycle state (`completed` | `failed` | ...). Named `state`,
  *    NOT `status`, matching the file-first `StatusSnapshot.state`.
  *  - sinks fetch via the injected {@link Downloader}; a result with no
@@ -56,6 +60,14 @@ export class RunResult {
     url;
     /** True iff {@link failed} is empty. */
     ok;
+    /**
+     * Whether any output missed its requested byte target. Derived from the
+     * per-output {@link OutputFile.targetSizeMet}: undefined when NO artifact
+     * reports a target-size outcome (every `targetSizeMet` undefined — not a
+     * target_size run); otherwise true iff some artifact has
+     * `targetSizeMet === false`.
+     */
+    targetSizeMissed;
     constructor(workflowId, state, artifacts, succeeded, failed, downloader) {
         this.workflowId = workflowId;
         this.state = state;
@@ -65,6 +77,9 @@ export class RunResult {
         this.downloader = downloader;
         this.url = artifacts.length === 1 ? artifacts[0].url : undefined;
         this.ok = failed.length === 0;
+        this.targetSizeMissed = artifacts.every((a) => a.targetSizeMet === undefined)
+            ? undefined
+            : artifacts.some((a) => a.targetSizeMet === false);
     }
     /**
      * Address a succeeded input by the `key:` given to `file()`. Duplicate keys
@@ -134,20 +149,26 @@ export class RunResult {
         return { paths };
     }
     /**
-     * Plain-object projection. Field ORDER (workflowId, state, ok, url?,
-     * artifacts, succeeded, failed) is fixed to match the PHP `toArray()`
-     * reference so JSON-string parity holds (FF1 shape assertion + FF2b harness
-     * fixture). `url` is omitted entirely when undefined — `JSON.stringify`
-     * then produces the identical shape to PHP's omit-when-null `toArray()`.
+     * Plain-object projection. Field ORDER (workflowId, state, ok,
+     * targetSizeMissed?, url?, artifacts, succeeded, failed) is fixed to match
+     * the PHP `toArray()` reference so JSON-string parity holds (FF1 shape
+     * assertion + FF2b harness fixture). `targetSizeMissed` + `url` are omitted
+     * entirely when undefined — `JSON.stringify` then produces the identical
+     * shape to PHP's omit-when-null `toArray()`.
      */
     toJSON() {
-        // Re-project each OutputFile to exactly its four fields so structurally
+        // Re-project each OutputFile to exactly its known fields so structurally
         // compatible inputs carrying extra properties can't leak into the JSON.
+        // The target-size fields (chosenQuality/targetSizeMet) are OMITTED when
+        // undefined, mirroring PHP's omit-when-null so non-target-size outputs
+        // stay byte-identical across languages.
         const file = (o) => ({
             url: o.url,
             filename: o.filename,
             sizeBytes: o.sizeBytes,
             operation: o.operation,
+            ...(o.chosenQuality !== undefined ? { chosenQuality: o.chosenQuality } : {}),
+            ...(o.targetSizeMet !== undefined ? { targetSizeMet: o.targetSizeMet } : {}),
         });
         const rest = {
             artifacts: this.artifacts.map(file),
@@ -164,13 +185,18 @@ export class RunResult {
             }),
         };
         const head = { workflowId: this.workflowId, state: this.state, ok: this.ok };
-        // Insert `url` BETWEEN ok and artifacts when present, matching the PHP
-        // toArray() field order (workflowId, state, ok, url?, artifacts, ...) so
-        // JSON-string parity holds. Omitted entirely when undefined (PHP omits
-        // null), so `JSON.stringify` produces the identical shape.
+        // Insert `targetSizeMissed` immediately after `ok` (before `url`) when
+        // present, then `url` BETWEEN it and artifacts, matching the PHP toArray()
+        // field order (workflowId, state, ok, targetSizeMissed?, url?, artifacts,
+        // ...) so JSON-string parity holds. Both are omitted entirely when
+        // undefined (PHP omits null), so `JSON.stringify` produces the identical
+        // shape.
+        const headWithMissed = this.targetSizeMissed === undefined
+            ? head
+            : { ...head, targetSizeMissed: this.targetSizeMissed };
         return this.url === undefined
-            ? { ...head, ...rest }
-            : { ...head, url: this.url, ...rest };
+            ? { ...headWithMissed, ...rest }
+            : { ...headWithMissed, url: this.url, ...rest };
     }
     requireDownloader() {
         if (this.downloader === undefined) {
@@ -200,6 +226,10 @@ export function projectDownloadsToRunResult(workflowId, finalStatus, jobDownload
                 filename: f.filename,
                 sizeBytes: f.sizeBytes,
                 operation: f.operation,
+                // Omit-when-absent on the LIVE OutputFile too (not just toJSON): a
+                // non-target-size output carries no chosenQuality/targetSizeMet key.
+                ...(f.chosenQuality !== undefined ? { chosenQuality: f.chosenQuality } : {}),
+                ...(f.targetSizeMet !== undefined ? { targetSizeMet: f.targetSizeMet } : {}),
             });
         }
     }
@@ -259,6 +289,10 @@ export function projectMultiJobToRunResult(workflowId, finalStatus, jobDownloads
             filename: f.filename,
             sizeBytes: f.sizeBytes,
             operation: f.operation,
+            // Omit-when-absent on the LIVE OutputFile too (mirrors toJSON + the
+            // single-job projector).
+            ...(f.chosenQuality !== undefined ? { chosenQuality: f.chosenQuality } : {}),
+            ...(f.targetSizeMet !== undefined ? { targetSizeMet: f.targetSizeMet } : {}),
         }));
         // The flat artifacts[] keeps every job's outputs in job order.
         artifacts.push(...outputs);

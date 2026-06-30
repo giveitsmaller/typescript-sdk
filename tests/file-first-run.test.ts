@@ -161,6 +161,84 @@ describe('Recipe.run — happy path via SSE', () => {
   });
 });
 
+describe('Recipe.run — target-size projection (9u4YGZ4V)', () => {
+  it('projects chosenQuality/targetSizeMet off the download and derives targetSizeMissed=true end-to-end', async () => {
+    const mock = makeMockClient();
+    // A target_size encode that landed ABOVE the requested byte target — an
+    // honest best-effort outcome (targetSizeMet:false), NOT a failure, so the
+    // run is still ok:true.
+    mock.getWorkflowDownloads.mockResolvedValueOnce({
+      downloads: [
+        {
+          jobId: 'job_1',
+          ref: 'op',
+          files: [
+            {
+              operation: 'compress',
+              operationId: 'opid_1',
+              filename: 'photo_target.webp',
+              sizeBytes: 51200,
+              downloadUrl: 'https://signed.example.com/photo_target.webp',
+              chosenQuality: 41,
+              targetSizeMet: false,
+            },
+          ],
+        },
+      ],
+    });
+    const result = await recipe(mock).compress().run({ maxWait: '30s' });
+
+    expect(result.ok).toBe(true);
+    expect(result.artifacts[0].chosenQuality).toBe(41);
+    expect(result.artifacts[0].targetSizeMet).toBe(false);
+    expect(result.targetSizeMissed).toBe(true);
+
+    // toJSON re-projection carries the fields in fixed order; targetSizeMissed
+    // sits right after ok, before url.
+    const json = result.toJSON();
+    expect(json.targetSizeMissed).toBe(true);
+    expect(json.artifacts[0]).toMatchObject({ chosenQuality: 41, targetSizeMet: false });
+    expect(Object.keys(json.artifacts[0])).toEqual([
+      'url',
+      'filename',
+      'sizeBytes',
+      'operation',
+      'chosenQuality',
+      'targetSizeMet',
+    ]);
+    expect(Object.keys(json)).toEqual([
+      'workflowId',
+      'state',
+      'ok',
+      'targetSizeMissed',
+      'url',
+      'artifacts',
+      'succeeded',
+      'failed',
+    ]);
+  });
+
+  it('a plain (non-target-size) compress run omits both fields — byte-identical to the old shape', async () => {
+    // Default mock download carries no target-size metadata: the projection must
+    // leave the fields off entirely so the serialised shape is unchanged.
+    const mock = makeMockClient();
+    const result = await recipe(mock).compress().run({ maxWait: '30s' });
+
+    expect(result.artifacts[0].chosenQuality).toBeUndefined();
+    expect(result.artifacts[0].targetSizeMet).toBeUndefined();
+    expect(result.targetSizeMissed).toBeUndefined();
+
+    const json = result.toJSON();
+    expect('targetSizeMissed' in json).toBe(false);
+    expect(json.artifacts[0]).toEqual({
+      url: 'https://signed.example.com/photo_compressed.jpg',
+      filename: 'photo_compressed.jpg',
+      sizeBytes: 512,
+      operation: 'compress',
+    });
+  });
+});
+
 describe('Recipe.run — uploadId arm', () => {
   it('uses the pre-uploaded id verbatim and makes NO upload call', async () => {
     const mock = makeMockClient();
