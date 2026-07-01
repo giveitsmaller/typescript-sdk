@@ -333,9 +333,11 @@ describe('wire-key conformance — merge', () => {
     transition: 'crossfade',
     crossfadeDuration: 1.0,
     normalizeAudio: true,
+    reEncodeMode: 'always',
     codec: 'h264',
     crf: 23,
     preset: 'medium',
+    targetResolution: '1920x1080',
     targetSize: '10MB',
     output: 'video',
   };
@@ -353,6 +355,7 @@ describe('wire-key conformance — merge', () => {
     transitionDuration: 0.5,
     fps: 30,
     durationPerImage: 3.0,
+    delay: 500,
     loopCount: 0,
     videoFormat: 'mp4',
     output: 'video',
@@ -377,6 +380,47 @@ describe('wire-key conformance — merge', () => {
     const keys = mergeKeys({ ...allVideo, allowUnusedAssets: true });
     expect(keys).not.toContain('mediaKind');
     expect(keys).not.toContain('allowUnusedAssets');
+  });
+
+  // Reverse direction (9u5aS8tU): the forward check above only catches an
+  // emitted key that is NOT in the contract. It does NOT catch a contract
+  // operation-level merge option the SDK FAILS to expose — the drift that lets
+  // a new merge option (e.g. the delay/re_encode_mode/target_resolution this
+  // ticket adds) silently go unreachable while CI stays green. For each media
+  // kind, assert every op-level contract merge option (mergeMetadata
+  // mime_groups[kind].options — per-input options excluded because we read
+  // `.options` only) is either EMITTED by the maximal fixture above OR listed in
+  // an explicit per-media omission set below.
+  //
+  // MERGE_INTENTIONALLY_OMITTED: op-level contract merge options the SDK
+  // deliberately does NOT surface as a standalone MergeOptions field. Empty
+  // today — every op-level key is reachable via a builder field:
+  //   - output_type      via `output` / `outputType`
+  //   - encoding_mode +
+  //     target_size_bytes via `targetSize` (both emitted together)
+  // A FUTURE new contract merge option fails this test until it is either
+  // exposed on MergeOptions (+ wireMergeOptions) or documented here.
+  const MERGE_INTENTIONALLY_OMITTED: Readonly<Record<string, ReadonlySet<string>>> = {
+    video: new Set<string>(),
+    audio: new Set<string>(),
+    image: new Set<string>(),
+  };
+
+  it.each([
+    ['video', allVideo],
+    ['audio', allAudio],
+    ['image', allImage],
+  ])('%s merge: every op-level contract merge option is exposed or documented-omitted', (kind, opts) => {
+    const contract = mediaGroupOptionKeys(mergeMetadata, kind as string);
+    const emitted = new Set(mergeKeys(opts as MergeOptions));
+    const allowed = new Set<string>([...emitted, ...(MERGE_INTENTIONALLY_OMITTED[kind as string] ?? [])]);
+    const unexposed = [...contract].filter((k) => !allowed.has(k));
+    expect(
+      unexposed,
+      `merge:${kind}: contract op-level option(s) ${JSON.stringify(unexposed)} are neither emitted by the ` +
+        `SDK's wireMergeOptions nor in MERGE_INTENTIONALLY_OMITTED['${kind}'] — a new merge option would be ` +
+        `silently unreachable. Expose it on MergeOptions (+ wireMergeOptions) or document the omission.`,
+    ).toEqual([]);
   });
 });
 

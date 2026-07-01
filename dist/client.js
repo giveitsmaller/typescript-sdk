@@ -493,6 +493,11 @@ export class GislClient {
                 messageKey: json.message_key,
                 locale: json.locale,
                 messageParams: json.message_params,
+                // The wire-stable machine code (SCREAMING_SNAKE `error`), surfaced as
+                // `error.errorCode` on every dispatched error (PHP parity). Threaded via
+                // this single options object → base GislApiError, GislValidationError,
+                // and every structured subclass (passed through as `extra`).
+                errorCode: typeof json.error === 'string' ? json.error : undefined,
                 responseHeaders,
                 contentLanguage,
             };
@@ -1874,6 +1879,7 @@ export class GislClient {
         }
         if (!response.ok) {
             let errorMessage = 'Unknown error';
+            let errorCode;
             try {
                 const errJson = (await response.json());
                 // Prefer the human `message`; `error` is the machine code (x9Lbf6uy).
@@ -1881,13 +1887,18 @@ export class GislClient {
                     errorMessage = errJson.message;
                 else if (errJson.error)
                     errorMessage = errJson.error;
+                // Surface the machine code as errorCode too (parity with handleResponse
+                // + PHP), even when `message` supplied the human text.
+                if (typeof errJson.error === 'string')
+                    errorCode = errJson.error;
             }
             catch {
-                // Non-JSON body — keep generic message.
+                // Non-JSON body — keep generic message, no machine code.
             }
             // This throw is OUTSIDE handleResponse (rawResponse:true / 304 path), so
             // build the response-header surface from the in-scope `response` here.
             throw new GislApiError(response.status, errorMessage, path, undefined, {
+                errorCode,
                 responseHeaders: headersToRecord(response.headers),
                 contentLanguage: response.headers.get('content-language') ?? undefined,
             });

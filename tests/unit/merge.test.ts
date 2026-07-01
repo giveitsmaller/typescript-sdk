@@ -205,29 +205,76 @@ describe('MergeBuilder — simple concat (no .sequence)', () => {
     expect(opts.codec).toBe('h264');
   });
 
+  it('honours reEncodeMode + targetResolution on a video merge (9u5aS8tU)', async () => {
+    const mock = makeMockClient();
+    await new MergeBuilder(mock.client, [asset('a.mp4'), asset('b.mp4')], {
+      mediaKind: 'video',
+      reEncodeMode: 'always',
+      targetResolution: '1920x1080',
+    }).run({ maxWait: '30s' });
+    const opts = mergeOptions(mock.createWorkflow.mock.calls[0][0]);
+    expect(opts.re_encode_mode).toBe('always');
+    expect(opts.target_resolution).toBe('1920x1080');
+  });
+
+  it('reEncodeMode:"never" still emits (passthrough — server owns dependency validation) (9u5aS8tU)', async () => {
+    const mock = makeMockClient();
+    await new MergeBuilder(mock.client, [asset('a.mp4'), asset('b.mp4')], {
+      mediaKind: 'video',
+      reEncodeMode: 'never',
+      // codec/target_resolution depend_on re_encode_mode auto|always in the
+      // contract, but the SDK is a passthrough allowlist (like codec/crf/preset
+      // already are) — it emits them as-is and lets the server reconcile.
+      codec: 'h264',
+      targetResolution: '1280x720',
+    }).run({ maxWait: '30s' });
+    const opts = mergeOptions(mock.createWorkflow.mock.calls[0][0]);
+    expect(opts.re_encode_mode).toBe('never');
+    expect(opts.codec).toBe('h264');
+    expect(opts.target_resolution).toBe('1280x720');
+  });
+
+  it('honours delay on an image merge (9u5aS8tU)', async () => {
+    const mock = makeMockClient();
+    await new MergeBuilder(mock.client, [asset('a.png'), asset('b.png')], {
+      mediaKind: 'image',
+      output: 'gif',
+      delay: 500,
+    }).run({ maxWait: '30s' });
+    const opts = mergeOptions(mock.createWorkflow.mock.calls[0][0]);
+    expect(opts.output_type).toBe('gif');
+    expect(opts.delay).toBe(500);
+  });
+
   it('drops video-only merge fields on an image merge (parity with PHP)', async () => {
     const mock = makeMockClient();
     await new MergeBuilder(mock.client, [asset('a.png'), asset('b.png')], {
       mediaKind: 'image',
       output: 'video',
       // video-only — must be dropped on an image merge
+      reEncodeMode: 'always',
       codec: 'h264',
       crf: 23,
       preset: 'fast',
+      targetResolution: '1920x1080',
       targetSize: '5MB',
       crossfadeDuration: 1.0,
       normalizeAudio: true,
       // image-allowed
       transitionDuration: 0.5,
       fps: 24,
+      delay: 500,
     }).run({ maxWait: '30s' });
     const opts = mergeOptions(mock.createWorkflow.mock.calls[0][0]);
     expect(opts.output_type).toBe('video');
     expect(opts.transition_duration).toBe(0.5);
     expect(opts.fps).toBe(24);
+    expect(opts.delay).toBe(500);
+    expect(opts.re_encode_mode).toBeUndefined();
     expect(opts.codec).toBeUndefined();
     expect(opts.crf).toBeUndefined();
     expect(opts.preset).toBeUndefined();
+    expect(opts.target_resolution).toBeUndefined();
     expect(opts.target_size_bytes).toBeUndefined();
     expect(opts.encoding_mode).toBeUndefined();
     expect(opts.crossfade_duration).toBeUndefined();
@@ -243,6 +290,7 @@ describe('MergeBuilder — simple concat (no .sequence)', () => {
       transitionDuration: 0.5,
       fps: 24,
       durationPerImage: 2.0,
+      delay: 500,
       loopCount: 1,
       videoFormat: 'webm',
     }).run({ maxWait: '30s' });
@@ -251,6 +299,7 @@ describe('MergeBuilder — simple concat (no .sequence)', () => {
     expect(opts.transition_duration).toBeUndefined();
     expect(opts.fps).toBeUndefined();
     expect(opts.duration_per_image).toBeUndefined();
+    expect(opts.delay).toBeUndefined();
     expect(opts.loop_count).toBeUndefined();
     expect(opts.video_format).toBeUndefined();
   });

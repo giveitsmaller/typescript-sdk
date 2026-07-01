@@ -414,4 +414,95 @@ describe('i18n headers (0kJi8Q0b + QsUQ681l)', () => {
       }
     });
   });
+
+  // -----------------------------------------------------------------------
+  // errorCode — the wire-stable machine code (9u5aS8tU; PHP parity)
+  // -----------------------------------------------------------------------
+  describe('errorCode (machine code, 9u5aS8tU)', () => {
+    let client: GislClient;
+
+    beforeEach(() => {
+      client = new GislClient({ baseUrl: 'https://api.example.com', apiKey: 'test-key' });
+    });
+
+    it('surfaces the wire `error` machine code on a base GislApiError (plain 404)', async () => {
+      // `message` (human) and `error` (machine code) are distinct: errorMessage
+      // takes the human string, errorCode takes the machine code.
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({ success: false, error: 'NOT_FOUND', message: 'File not found' }, 404),
+      );
+
+      try {
+        await client.getMetadata('xyz');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislApiError);
+        const apiErr = err as GislApiError;
+        expect(apiErr.errorCode).toBe('NOT_FOUND');
+        expect(apiErr.errorMessage).toBe('File not found');
+      }
+    });
+
+    it('surfaces errorCode on a typed subclass (GislBalanceExhaustedError)', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'BALANCE_EXHAUSTED',
+            error_type: 'balance_exhausted',
+            required_action: 'add_credits',
+            links: {
+              top_up: 'https://example.com/billing/top-up',
+              upgrade: 'https://example.com/billing/plans',
+              check_balance: '/api/v2/credits/balance',
+            },
+          },
+          402,
+        ),
+      );
+
+      try {
+        await client.resumeWorkflow('wf-1');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislBalanceExhaustedError);
+        // Inherited via the shared options object (proves the extra-path threading).
+        expect((err as GislApiError).errorCode).toBe('BALANCE_EXHAUSTED');
+      }
+    });
+
+    it('leaves errorCode undefined when the wire envelope carries no `error` (non-JSON)', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        new Response('<html>oops</html>', { status: 502, headers: { 'Content-Type': 'text/html' } }),
+      );
+
+      try {
+        await client.getMetadata('xyz');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        const apiErr = err as GislApiError;
+        expect(apiErr.errorMessage).toBe('Non-JSON response');
+        expect(apiErr.errorCode).toBeUndefined();
+      }
+    });
+
+    it('surfaces errorCode on the getSchema raw-response (rawResponse:true) throw path', async () => {
+      // getSchema bypasses handleResponse — its inline throw must also carry the
+      // machine code (parity with the handleResponse path + PHP).
+      fetchSpy.mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: 'SCHEMA_UNAVAILABLE' }), {
+          status: 503,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+
+      try {
+        await client.getSchema();
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislApiError);
+        expect((err as GislApiError).errorCode).toBe('SCHEMA_UNAVAILABLE');
+      }
+    });
+  });
 });

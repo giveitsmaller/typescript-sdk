@@ -7,6 +7,19 @@ export class GislError extends Error {
 export class GislApiError extends GislError {
     statusCode;
     errorMessage;
+    /**
+     * The wire-stable machine error code — the response envelope's `error` field
+     * (SCREAMING_SNAKE, never localised). DISTINCT from {@link errorMessage},
+     * which is the human `message`. Mirrors the PHP `GislApiError.errorCode`.
+     *
+     * Optional here (PHP's is a required field defaulting to `'unknown_error'`):
+     * a DELIBERATE optional-vs-sentinel divergence — `undefined` when the wire
+     * envelope carries no `error` (e.g. a non-JSON / invalid-JSON response). When
+     * the wire DOES carry `error`, both SDKs surface the same value. Machine
+     * dispatch still keys off the typed subclasses (`payload.errorType`); this is
+     * the flat machine code for a base `GislApiError` (e.g. a plain 404).
+     */
+    errorCode;
     path;
     details;
     messageKey;
@@ -41,6 +54,7 @@ export class GislApiError extends GislError {
             this.locale = options.locale;
             this.messageParams = options.messageParams;
             this.payload = options.payload;
+            this.errorCode = options.errorCode;
             this.responseHeaders = options.responseHeaders;
             this.contentLanguage = options.contentLanguage;
         }

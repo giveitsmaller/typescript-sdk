@@ -15,6 +15,11 @@ export interface GislApiErrorOptions {
     readonly messageParams?: Record<string, unknown>;
     readonly payload?: unknown;
     /**
+     * The wire-stable machine error code (the response envelope's `error` field,
+     * SCREAMING_SNAKE, never localised). See {@link GislApiError.errorCode}.
+     */
+    readonly errorCode?: string;
+    /**
      * The response headers from the HTTP response that produced this error.
      * Keys are LOWERCASED (HTTP header names are case-insensitive per RFC 9110,
      * and `Headers.forEach` yields lowercased keys). Multi-value headers (e.g.
@@ -33,6 +38,19 @@ export interface GislApiErrorOptions {
 export declare class GislApiError extends GislError {
     readonly statusCode: number;
     readonly errorMessage: string;
+    /**
+     * The wire-stable machine error code — the response envelope's `error` field
+     * (SCREAMING_SNAKE, never localised). DISTINCT from {@link errorMessage},
+     * which is the human `message`. Mirrors the PHP `GislApiError.errorCode`.
+     *
+     * Optional here (PHP's is a required field defaulting to `'unknown_error'`):
+     * a DELIBERATE optional-vs-sentinel divergence — `undefined` when the wire
+     * envelope carries no `error` (e.g. a non-JSON / invalid-JSON response). When
+     * the wire DOES carry `error`, both SDKs surface the same value. Machine
+     * dispatch still keys off the typed subclasses (`payload.errorType`); this is
+     * the flat machine code for a base `GislApiError` (e.g. a plain 404).
+     */
+    readonly errorCode?: string;
     readonly path?: string;
     readonly details?: unknown;
     readonly messageKey?: string;

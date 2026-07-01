@@ -406,12 +406,16 @@ export class MergeBuilder {
             out.gapDuration = o.gapDuration;
         // Video only.
         if (mediaKind === 'video') {
+            if (o.reEncodeMode !== undefined)
+                out.reEncodeMode = o.reEncodeMode;
             if (o.codec !== undefined)
                 out.codec = o.codec;
             if (o.crf !== undefined)
                 out.crf = o.crf;
             if (o.preset !== undefined)
                 out.preset = o.preset;
+            if (o.targetResolution !== undefined)
+                out.targetResolution = o.targetResolution;
             if (o.targetSize !== undefined)
                 out.targetSize = o.targetSize;
         }
@@ -423,6 +427,8 @@ export class MergeBuilder {
                 out.fps = o.fps;
             if (o.durationPerImage !== undefined)
                 out.durationPerImage = o.durationPerImage;
+            if (o.delay !== undefined)
+                out.delay = o.delay;
             if (o.loopCount !== undefined)
                 out.loopCount = o.loopCount;
             if (o.videoFormat !== undefined)
@@ -519,12 +525,16 @@ export function wireMergeOptions(opts, mediaKind) {
         out.gap_duration = opts.gapDuration;
     // Video only.
     if (mediaKind === 'video') {
+        if (opts.reEncodeMode !== undefined)
+            out.re_encode_mode = opts.reEncodeMode;
         if (opts.codec !== undefined)
             out.codec = opts.codec;
         if (opts.crf !== undefined)
             out.crf = opts.crf;
         if (opts.preset !== undefined)
             out.preset = opts.preset;
+        if (opts.targetResolution !== undefined)
+            out.target_resolution = opts.targetResolution;
         if (opts.targetSize !== undefined) {
             out.target_size_bytes = typeof opts.targetSize === 'number'
                 ? opts.targetSize
@@ -540,6 +550,8 @@ export function wireMergeOptions(opts, mediaKind) {
             out.fps = opts.fps;
         if (opts.durationPerImage !== undefined)
             out.duration_per_image = opts.durationPerImage;
+        if (opts.delay !== undefined)
+            out.delay = opts.delay;
         if (opts.loopCount !== undefined)
             out.loop_count = opts.loopCount;
         if (opts.videoFormat !== undefined)

@@ -90,13 +90,25 @@ export interface MergeOptions {
     readonly crossfadeDuration?: number;
     readonly gapDuration?: number;
     readonly normalizeAudio?: boolean;
+    /**
+     * Video re-encode policy (`auto` | `always` | `never`). Passed through
+     * verbatim — `codec`/`crf`/`preset`/`targetResolution`/`targetSize` are only
+     * honoured by the worker when re-encoding (`auto`/`always`); the server owns
+     * that dependency validation (the SDK is a passthrough allowlist, same as the
+     * pre-existing codec/crf/preset fields). Video merge only.
+     */
+    readonly reEncodeMode?: string;
     readonly codec?: string;
     readonly crf?: number;
     readonly preset?: string;
+    /** Video output dimensions `WxH` (e.g. `"1920x1080"`); omit to inherit from inputs. Video merge only. */
+    readonly targetResolution?: string;
     readonly targetSize?: string | number;
     readonly transitionDuration?: number;
     readonly fps?: number;
     readonly durationPerImage?: number;
+    /** Milliseconds between frames for an animated-GIF image merge (`output_type: gif`). Image merge only. */
+    readonly delay?: number;
     readonly loopCount?: number;
     readonly output?: string;
     readonly videoFormat?: string;
