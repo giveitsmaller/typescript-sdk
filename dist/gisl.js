@@ -20,6 +20,7 @@ import { GislClient } from './client.js';
 import { GislConfigError, GislFeatureRequiresAuthError, GislMissingCredentialsError, } from './errors.js';
 import { resolveApiKey, resolveEndpoint, } from './credentials.js';
 import { OperationBuilder } from './builder.js';
+import { validateVerbOptions, validateSingleOpConvertOptions, assertThumbnailDimensions, } from './ergonomic/option_validation.js';
 import { MergeBuilder, asset } from './merge.js';
 import { PresetDefaults } from './ergonomic/presets/index.js';
 import { Recipe, FilesRecipe, fileInput } from './file-first.js';
@@ -120,6 +121,22 @@ function wrapErgonomic(client, presetDefaults, scopedPresetDefaults) {
             }
             if (prop === 'compress' || prop === 'convert' || prop === 'thumbnail') {
                 return (input, options = {}) => {
+                    // ExVcchMz — validate the option bag pre-upload for the exported
+                    // single-op builder so a bad bag (unknown key / missing thumbnail dims /
+                    // missing convert target) fails locally instead of as a server 422.
+                    // `compress` is EXCLUDED: it validates through the preset resolver
+                    // (resolveCompressOptions / KNOWN_WIRE_FIELDS), not these guards.
+                    // `convert` uses a SINGLE-OP-specific guard (NOT validateVerbOptions):
+                    // the single-op builder has no positional format, so its target rides
+                    // the bag as `output_format` — which the file-first convert guard would
+                    // reject as positional-owned. `thumbnail` reuses the file-first guards
+                    // (it has no positional-owned keys).
+                    if (prop === 'convert')
+                        validateSingleOpConvertOptions(options);
+                    if (prop === 'thumbnail') {
+                        validateVerbOptions('thumbnail', options);
+                        assertThumbnailDimensions(options);
+                    }
                     // T4b — pass client-scope presetDefaults into the builder so
                     // .run()/.submit() consult the preset resolver. The Proxy's
                     // closure carries the same reference for every per-call

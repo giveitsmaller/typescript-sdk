@@ -116,6 +116,36 @@ export function validateVerbOptions(verb, options) {
     }
 }
 /**
+ * Validate the option bag for the SINGLE-OP builder `gisl().convert(input, options)`
+ * (ExVcchMz). DISTINCT from `validateVerbOptions('convert', ...)`, which is for the
+ * file-first `Recipe.convert(format, options)` where `output_format` is set by the
+ * positional `format` arg and is therefore positional-owned (rejected in the bag).
+ * The single-op builder has NO positional format — its target is carried in the bag
+ * as the wire key `output_format` — so this guard ALLOWS `output_format` (and only
+ * that; the SDK alias `format` is NOT accepted, the single-op bag lowers verbatim to
+ * the wire) while still rejecting any other unknown key, AND requires `output_format`
+ * to be present (a convert with no target is a guaranteed server 422). `format`, the
+ * SDK alias, is intentionally excluded so a caller using it gets a clear unknown-key
+ * error rather than a silent wire `format` the server 422s.
+ *
+ * @throws {GislConfigError} reason `unknown_field` for a key outside the convert
+ *   contract set ∪ {output_format}; reason `missing_required_field` when
+ *   `output_format` is absent/nullish.
+ */
+export function validateSingleOpConvertOptions(options) {
+    const o = (options ?? {});
+    const allowed = new Set([...ALLOWED_KEYS.convert, 'output_format']);
+    for (const key of Object.keys(o)) {
+        if (!allowed.has(key)) {
+            throw new GislConfigError(`convert: unknown option '${key}'. Valid options: ${[...allowed].sort().join(', ')}.`, { reason: 'unknown_field', conflictingFields: [key] });
+        }
+    }
+    if (o.output_format === undefined || o.output_format === null) {
+        throw new GislConfigError(`convert requires 'output_format' (the target format) in the options bag; ` +
+            `e.g. gisl().convert(input, { output_format: 'webp' }).`, { reason: 'missing_required_field', conflictingFields: ['output_format'] });
+    }
+}
+/**
  * Assert thumbnail `width` AND `height` are both present and non-nullish (the
  * contract marks both `required` for image/video/document). The typed signature
  * already enforces this at compile time; this RUNTIME guard catches JS callers and

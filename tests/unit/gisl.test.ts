@@ -376,3 +376,89 @@ describe('_internalAnonymous (internal capability behind future gisl.anonymous)'
     expect((thrown as GislFeatureRequiresAuthError).operation).toBe('createWorkflow');
   });
 });
+
+// ExVcchMz — the exported single-op builder (gisl().convert/thumbnail) must
+// validate its option bag PRE-UPLOAD (mirroring the file-first chain) so a bad
+// bag fails locally with a GislConfigError instead of a server 422. These tests
+// drive the PROXY FACTORY (create().convert/thumbnail) — the direct
+// OperationBuilder tests in builder.test.ts bypass the factory, so this is the
+// only coverage of the factory-level guard. Every rejection asserts NO fetch
+// fired, proving the check is pre-upload.
+describe('single-op builder option validation (ExVcchMz)', () => {
+  async function client() {
+    return create({ apiKey: 'k', baseUrl: 'https://api.example.com' });
+  }
+
+  describe('thumbnail', () => {
+    it('rejects an empty bag (missing width + height) pre-upload, no fetch', async () => {
+      const c = await client();
+      expect(() => c.thumbnail('photo.png', {})).toThrow(GislConfigError);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('rejects a width-only bag (missing height) pre-upload, no fetch', async () => {
+      const c = await client();
+      expect(() => c.thumbnail('photo.png', { width: 320 })).toThrow(/height/);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('rejects an unknown option key pre-upload, no fetch', async () => {
+      const c = await client();
+      expect(() => c.thumbnail('photo.png', { width: 100, height: 100, bogus: 1 })).toThrow(
+        /unknown option 'bogus'/,
+      );
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('accepts a valid bag (width + height) at the factory (no throw)', async () => {
+      const c = await client();
+      expect(() => c.thumbnail('photo.png', { width: 100, height: 100, fit: 'crop' })).not.toThrow();
+    });
+  });
+
+  describe('convert', () => {
+    it('rejects a missing output_format (empty bag) pre-upload, no fetch', async () => {
+      const c = await client();
+      expect(() => c.convert('photo.png', {})).toThrow(/output_format/);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('rejects a bag with options but no output_format pre-upload, no fetch', async () => {
+      const c = await client();
+      expect(() => c.convert('photo.png', { quality: 80 })).toThrow(/output_format/);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('rejects a null output_format pre-upload, no fetch', async () => {
+      const c = await client();
+      expect(() => c.convert('photo.png', { output_format: null })).toThrow(/output_format/);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('rejects an unknown option key pre-upload, no fetch', async () => {
+      const c = await client();
+      expect(() => c.convert('photo.png', { output_format: 'webp', bogus: 1 })).toThrow(
+        /unknown option 'bogus'/,
+      );
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('rejects the SDK alias `format` (single-op needs the wire key output_format) pre-upload, no fetch', async () => {
+      const c = await client();
+      expect(() => c.convert('photo.png', { format: 'webp' })).toThrow(/unknown option 'format'/);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('accepts a valid bag (output_format present) at the factory (no throw)', async () => {
+      const c = await client();
+      expect(() => c.convert('photo.png', { output_format: 'webp', quality: 80 })).not.toThrow();
+    });
+  });
+
+  it('does NOT validate compress at the factory (preset resolver owns it) — no throw on an unknown key', async () => {
+    // compress is EXCLUDED from the single-op guards; its options resolve via the
+    // preset resolver at run-time, so an unknown key does not throw at the factory.
+    const c = await client();
+    expect(() => c.compress('photo.png', { bogus: 1 })).not.toThrow();
+  });
+});

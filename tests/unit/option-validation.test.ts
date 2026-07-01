@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 
 import {
   validateVerbOptions,
+  validateSingleOpConvertOptions,
   assertThumbnailDimensions,
   type ValidatedVerb,
 } from '../../src/ergonomic/option_validation.js';
@@ -328,6 +329,43 @@ describe('duplicated verb bodies reject invalid bags too', () => {
 // package builds). These remain as living documentation of the intended caller
 // experience and as the RUNTIME guard's typed counterpart.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// validateSingleOpConvertOptions — the single-op convert guard (ExVcchMz).
+// DISTINCT from validateVerbOptions('convert'): the single-op builder has no
+// positional format, so it ALLOWS + REQUIRES `output_format` in the bag while
+// rejecting unknown keys and the `format` alias. Mirrors the PHP
+// `OptionValidationTest` single-op convert cases — keep in lockstep.
+// ---------------------------------------------------------------------------
+
+describe('validateSingleOpConvertOptions (single-op convert; ExVcchMz)', () => {
+  it('accepts output_format + contract keys', () => {
+    expect(() => validateSingleOpConvertOptions({ output_format: 'webp', quality: 80 })).not.toThrow();
+  });
+
+  it('rejects a missing output_format', () => {
+    const err = captureConfigError(() => validateSingleOpConvertOptions({ quality: 80 }));
+    expect(err.reason).toBe('missing_required_field');
+    expect(err.conflictingFields).toEqual(['output_format']);
+  });
+
+  it('rejects a null output_format', () => {
+    const err = captureConfigError(() => validateSingleOpConvertOptions({ output_format: null }));
+    expect(err.reason).toBe('missing_required_field');
+  });
+
+  it('rejects an unknown key', () => {
+    const err = captureConfigError(() => validateSingleOpConvertOptions({ output_format: 'webp', bogus: 1 }));
+    expect(err.reason).toBe('unknown_field');
+    expect(err.conflictingFields).toEqual(['bogus']);
+  });
+
+  it('rejects the `format` alias (single-op needs the wire key output_format)', () => {
+    const err = captureConfigError(() => validateSingleOpConvertOptions({ format: 'webp' }));
+    expect(err.reason).toBe('unknown_field');
+    expect(err.conflictingFields).toEqual(['format']);
+  });
+});
 
 describe('typed-interface documentation (compile-time intent)', () => {
   it('an unknown convert key is a compile error for typed callers', () => {
