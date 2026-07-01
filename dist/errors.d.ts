@@ -457,7 +457,7 @@ export type GislSinkErrorReason = 'not_single_output' | 'downloader_unavailable'
 /**
  * Thrown by the file-first `RunResult` sinks (`toFile()` / `downloadTo()`,
  * FF1) when they cannot deliver. The machine-readable `reason` discriminates
- * the three cases, mirroring the `reason`-bag convention on
+ * the six cases below, mirroring the `reason`-bag convention on
  * {@link GislConfigError}:
  *
  *  - `not_single_output`      — `toFile()` requires exactly one output but the

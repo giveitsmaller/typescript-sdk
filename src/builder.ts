@@ -349,6 +349,7 @@ export interface UploadProgressEvent {
 export interface ProcessingProgressEvent {
   readonly phase: 'processing';
   readonly status?: SseOperationProgressDataStatusEnum;
+  /** Percent complete, `0-100` (the wire integer) — NOT a 0..1 fraction. */
   readonly progress: number;
   readonly jobRef: string;
   readonly operationId: string;

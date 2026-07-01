@@ -484,8 +484,12 @@ describe('capabilities() (qUhxfDA5)', () => {
       compress: { accepts: ['image/jpeg'], availability: 'stable', sole_op: false },
       text_watermark: { accepts: ['image/png'], availability: 'stable' },
     },
+    // NB: the output_properties BLOCK key is snake_case, but its per-format
+    // sub-object props are camelCase on the wire (hasAudioTrack/isAnimated) — a
+    // deliberate two-level casing asymmetry in the contract, read correctly by
+    // OutputPropertiesFromJSON.
     output_properties: {
-      webp: { has_audio_track: false, is_animated: false },
+      webp: { hasAudioTrack: false, isAnimated: false },
     },
     image_encode_capabilities: { webp_quality_supported: true, background_flatten: 'supported' },
   };
@@ -500,9 +504,8 @@ describe('capabilities() (qUhxfDA5)', () => {
     expect(Object.keys(snapshot.operations).sort()).toEqual(['compress', 'text_watermark']);
     expect(snapshot.operations.compress.soleOp).toBe(false);
     expect(snapshot.operations.compress.availability).toBe('stable');
-    // output-property table surfaced, keyed by output_format. (Deep field
-    // values are the generated FromJSON's concern — this pins the projection.)
-    expect(Object.keys(snapshot.outputProperties)).toContain('webp');
+    // output-property table, keyed by output_format, with camelCase props decoded.
+    expect(snapshot.outputProperties.webp.hasAudioTrack).toBe(false);
     // image-encode matrix.
     expect(snapshot.imageEncode?.webpQualitySupported).toBe(true);
     expect(snapshot.imageEncode?.backgroundFlatten).toBe('supported');
