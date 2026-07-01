@@ -106,6 +106,15 @@ import type { StatusSnapshot, GislResultNotReadyError } from './index.js';
 // callback on `streamEvents` / `parseSseStream`. Imported via `./index.js`
 // so dropping the re-export breaks `tsc --noEmit` here.
 import type { GislSseParseFailure } from './index.js';
+// qUhxfDA5 — capabilities() projection VO + the three contract capability
+// types it exposes. All imported via `./index.js` so dropping either the VO
+// export or the contract-type re-exports breaks `tsc --noEmit` here.
+import type {
+  CapabilitiesSnapshot,
+  OperationCapability,
+  OutputProperties,
+  ImageEncodeCapabilities,
+} from './index.js';
 import type {
   AccountLimits,
   CreditsBalanceResponse,
@@ -347,4 +356,10 @@ export function _runAudit(): void {
   accept<GislResultNotReadyError>();
   // TYNjcjpo — SSE parse-failure diagnostic surface.
   accept<GislSseParseFailure>();
+  // qUhxfDA5 — capabilities() projection surface + the three contract
+  // capability types it exposes.
+  accept<CapabilitiesSnapshot>();
+  accept<OperationCapability>();
+  accept<OutputProperties>();
+  accept<ImageEncodeCapabilities>();
 }

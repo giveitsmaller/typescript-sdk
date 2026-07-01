@@ -462,3 +462,188 @@ describe('single-op builder option validation (ExVcchMz)', () => {
     expect(() => c.compress('photo.png', { bogus: 1 })).not.toThrow();
   });
 });
+
+// ---------------------------------------------------------------------------
+
+// qUhxfDA5 — capabilities() read-projection over getSchema(). The schema
+// endpoint is NOT enveloped: the raw body IS the OperationsSchemaResponse.
+describe('capabilities() (qUhxfDA5)', () => {
+  function schemaResponse(body: Record<string, unknown>): Response {
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  const fullSchema: Record<string, unknown> = {
+    schema_version: '2.0.0',
+    operations: {
+      compress: { description: 'c', input_model: 'single', mime_groups: {}, options: {} },
+    },
+    capabilities: {
+      compress: { accepts: ['image/jpeg'], availability: 'stable', sole_op: false },
+      text_watermark: { accepts: ['image/png'], availability: 'stable' },
+    },
+    output_properties: {
+      webp: { has_audio_track: false, is_animated: false },
+    },
+    image_encode_capabilities: { webp_quality_supported: true, background_flatten: 'supported' },
+  };
+
+  it('projects the three v2.124 capability fields into a CapabilitiesSnapshot', async () => {
+    const client = await create({ apiKey: 'k', baseUrl: 'https://api.example.com' });
+    fetchSpy.mockResolvedValueOnce(schemaResponse(fullSchema));
+
+    const snapshot = await client.capabilities();
+
+    // operations map (tier-scoped), snake_case decoded to camelCase.
+    expect(Object.keys(snapshot.operations).sort()).toEqual(['compress', 'text_watermark']);
+    expect(snapshot.operations.compress.soleOp).toBe(false);
+    expect(snapshot.operations.compress.availability).toBe('stable');
+    // output-property table surfaced, keyed by output_format. (Deep field
+    // values are the generated FromJSON's concern — this pins the projection.)
+    expect(Object.keys(snapshot.outputProperties)).toContain('webp');
+    // image-encode matrix.
+    expect(snapshot.imageEncode?.webpQualitySupported).toBe(true);
+    expect(snapshot.imageEncode?.backgroundFlatten).toBe('supported');
+
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://api.example.com/api/operations/schema');
+    expect(init.method).toBe('GET');
+  });
+
+  it('capabilities(opType) returns just that op\'s OperationCapability', async () => {
+    const client = await create({ apiKey: 'k', baseUrl: 'https://api.example.com' });
+    fetchSpy.mockResolvedValueOnce(schemaResponse(fullSchema));
+
+    const cap = await client.capabilities('compress');
+    expect(cap?.availability).toBe('stable');
+    expect(cap?.soleOp).toBe(false);
+  });
+
+  it('capabilities(opType) returns undefined for an op absent from the matrix', async () => {
+    const client = await create({ apiKey: 'k', baseUrl: 'https://api.example.com' });
+    fetchSpy.mockResolvedValueOnce(schemaResponse(fullSchema));
+
+    const cap = await client.capabilities('no_such_op');
+    expect(cap).toBeUndefined();
+  });
+
+  it('returns empty maps / undefined imageEncode when the server omits the fields', async () => {
+    const client = await create({ apiKey: 'k', baseUrl: 'https://api.example.com' });
+    fetchSpy.mockResolvedValueOnce(
+      schemaResponse({
+        schema_version: '2.0.0',
+        operations: { compress: { description: 'c', input_model: 'single', mime_groups: {}, options: {} } },
+      }),
+    );
+
+    const snapshot = await client.capabilities();
+    expect(snapshot.operations).toEqual({});
+    expect(snapshot.outputProperties).toEqual({});
+    expect(snapshot.imageEncode).toBeUndefined();
+  });
+
+  it('degrades to an empty snapshot on a 304 not-modified response', async () => {
+    // Defensive branch: capabilities() sends no conditional headers, but a
+    // globally-configured static If-None-Match could still 304 (empty body).
+    const client = await create({ apiKey: 'k', baseUrl: 'https://api.example.com' });
+    fetchSpy.mockResolvedValueOnce(
+      new Response(null, { status: 304, headers: { ETag: '"v"' } }),
+    );
+
+    const snapshot = await client.capabilities();
+    expect(snapshot.operations).toEqual({});
+    expect(snapshot.outputProperties).toEqual({});
+    expect(snapshot.imageEncode).toBeUndefined();
+  });
+
+  it('per-op lookup returns undefined on a 304 not-modified response', async () => {
+    const client = await create({ apiKey: 'k', baseUrl: 'https://api.example.com' });
+    fetchSpy.mockResolvedValueOnce(new Response(null, { status: 304, headers: { ETag: '"v"' } }));
+
+    expect(await client.capabilities('compress')).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+// qUhxfDA5 — generic operation() escape hatch. Asserts the ergonomic verb wires
+// opType + input + options into a single-source, single-op createWorkflow
+// payload. Mocks the upload (POST /api/uploads, enveloped) + createWorkflow
+// (POST /api/workflows, enveloped) fetches; submit() does not wait.
+describe('operation() generic escape hatch (qUhxfDA5)', () => {
+  function uploadResponse(fileId: string): Response {
+    return new Response(
+      JSON.stringify({
+        success: true,
+        data: { file_id: fileId, original_name: 'x', mime_type: 'text/plain', size_bytes: 1 },
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    );
+  }
+  function createResponse(): Response {
+    return new Response(
+      JSON.stringify({
+        success: true,
+        data: { workflow_id: 'wf-op', status: 'pending', jobs: [], created_at: '2026-07-01T00:00:00Z', warnings: [] },
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    );
+  }
+
+  it('builds a single-op job carrying the given opType + options on the wire', async () => {
+    const client = await create({ apiKey: 'k', baseUrl: 'https://api.example.com' });
+    fetchSpy.mockResolvedValueOnce(uploadResponse('file-xyz'));
+    fetchSpy.mockResolvedValueOnce(createResponse());
+
+    await client
+      .operation('text_watermark', new Blob(['x']), { text: 'CONFIDENTIAL', position: 'bottom-right' })
+      .submit({ webhook: 'https://example.com/hook' });
+
+    // Second fetch = createWorkflow. Assert the wire payload.
+    const [url, init] = fetchSpy.mock.calls[1] as [string, RequestInit];
+    expect(url).toBe('https://api.example.com/api/workflows');
+    const body = JSON.parse(init.body as string);
+    expect(body.jobs).toHaveLength(1);
+    expect(body.jobs[0].operations).toEqual([
+      { type: 'text_watermark', options: { text: 'CONFIDENTIAL', position: 'bottom-right' } },
+    ]);
+    expect(body.jobs[0].source).toEqual({ type: 'upload', file_id: 'file-xyz' });
+  });
+
+  it('passes options through unchanged for a not-yet-in-contract op type', async () => {
+    const client = await create({ apiKey: 'k', baseUrl: 'https://api.example.com' });
+    fetchSpy.mockResolvedValueOnce(uploadResponse('file-2'));
+    fetchSpy.mockResolvedValueOnce(createResponse());
+
+    await client
+      .operation('some_future_op', new Blob(['y']), { foo: 'bar', n: 1 })
+      .submit({ webhook: 'https://example.com/hook' });
+
+    const [, init] = fetchSpy.mock.calls[1] as [string, RequestInit];
+    const body = JSON.parse(init.body as string);
+    expect(body.jobs[0].operations[0]).toEqual({
+      type: 'some_future_op',
+      options: { foo: 'bar', n: 1 },
+    });
+  });
+
+  it('rejects multi-input op literals at compile time (type-level guard)', async () => {
+    // The generic conditional signature maps a MultiInputOperationType literal to
+    // `never`, so passing one is a type error. The @ts-expect-error lines fail
+    // `tsc` if a regression ever widens the type to accept them. (vitest strips
+    // types, so this asserts nothing at runtime — the value is the compile guard;
+    // we never invoke the builders, so no upload/create fires.)
+    const client = await create({ apiKey: 'k', baseUrl: 'https://api.example.com' });
+    // @ts-expect-error — 'merge' is multi-input; use merge(...).
+    const buildMerge = (): unknown => client.operation('merge', new Blob(['x']), {});
+    // @ts-expect-error — 'archive' is multi-input; use files(...).archive(...).
+    const buildArchive = (): unknown => client.operation('archive', new Blob(['x']), {});
+    // @ts-expect-error — 'image_watermark' is multi-input; use file(a).watermark(b).
+    const buildOverlay = (): unknown => client.operation('image_watermark', new Blob(['x']), {});
+    expect(typeof buildMerge).toBe('function');
+    expect(typeof buildArchive).toBe('function');
+    expect(typeof buildOverlay).toBe('function');
+  });
+});

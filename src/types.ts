@@ -1,6 +1,9 @@
 import type {
   OperationType,
   OperationsSchemaResponse,
+  OperationCapability,
+  OutputProperties,
+  ImageEncodeCapabilities,
   CallbackEventType,
   SseEventType,
   SseOperationProgressData,
@@ -442,6 +445,33 @@ export type GetSchemaResult =
       etag?: string;
       lastModified?: string;
     };
+
+/**
+ * Typed projection of the operation-capability surface returned by
+ * {@link ErgonomicClient.capabilities} (qUhxfDA5). Bundles the three v2.124
+ * capability fields of `OperationsSchemaResponse` — previously typed but with
+ * no ergonomic consumer — so a caller can read them without dropping to
+ * `getSchema()` and its not-modified union.
+ *
+ * Mirrors the PHP `Gisl\Sdk\Ergonomic\CapabilitiesSnapshot` value object.
+ */
+export interface CapabilitiesSnapshot {
+  /**
+   * Tier-scoped operation-capability matrix, keyed by operation type
+   * (`compress`, `convert`, …). Empty when the server omits the field.
+   */
+  readonly operations: Record<string, OperationCapability>;
+  /**
+   * Output-format property table (`hasAudioTrack` / `isAnimated`), keyed by
+   * `output_format`. Tier-invariant. Empty when the server omits the field.
+   */
+  readonly outputProperties: Record<string, OutputProperties>;
+  /**
+   * Pre-flight image-encode capability matrix (`webpQualitySupported`,
+   * `backgroundFlatten`). Tier-invariant. `undefined` when the server omits it.
+   */
+  readonly imageEncode?: ImageEncodeCapabilities;
+}
 
 // ---------------------------------------------------------------------------
 // Credits / billing

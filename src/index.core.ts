@@ -22,6 +22,7 @@ export type {
   ListWorkflowsOptions,
   GetSchemaOptions,
   GetSchemaResult,
+  CapabilitiesSnapshot,
   PreflightClipError,
   PreflightClipsResult,
   ProbeWaitOptions,
@@ -167,7 +168,14 @@ export { Handle, StatusSnapshot } from './handle.js';
 // credential-chain types. `gisl.anonymous()` (public export) lands once
 // the anonymous-capable operation allowlist is non-empty (plan §12).
 export { gisl, create } from './gisl.js';
-export type { GislCreateOptions, Environment, ErgonomicClient } from './gisl.js';
+export type {
+  GislCreateOptions,
+  Environment,
+  ErgonomicClient,
+  // qUhxfDA5 — op-type unions for the generic `operation()` escape hatch.
+  SingleInputOperationType,
+  MultiInputOperationType,
+} from './gisl.js';
 
 // Ergonomic preset defaults (T4a / VhIj4S7T) — typed leaf DTOs + immutable
 // `PresetDefaults` builder + `presetDefaults()` factory + ergonomic enum
@@ -281,6 +289,13 @@ export type {
   MetadataResponseExif,
   MetadataResponseExifGps,
   OperationsSchemaResponse,
+  // Operation-capability projection types (qUhxfDA5) — reachable from the
+  // ergonomic `capabilities()` helper's `CapabilitiesSnapshot` return so
+  // consumers can type against the tier-scoped capability matrix, the
+  // output-property table, and the image-encode capability matrix.
+  OperationCapability,
+  OutputProperties,
+  ImageEncodeCapabilities,
   // Nested schema types reachable from OperationsSchemaResponse.operations
   // — consumers building dynamic UIs that discover available operations
   // type their form-renderer helpers as `(opt: OptionSchema) => …` etc.

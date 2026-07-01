@@ -19,8 +19,8 @@
 import { GislClient } from './client.js';
 import { GislConfigError, GislFeatureRequiresAuthError, GislMissingCredentialsError } from './errors.js';
 import { type ResolveCredentialsOptions, type ResolveEndpointOptions } from './credentials.js';
-import type { CreditsUsageOptions, GislClientConfig } from './types.js';
-import type { AccountLimits, CreditsBalanceResponse, CreditsUsageResponse } from '@giveitsmaller/contracts/openapi';
+import type { CreditsUsageOptions, GislClientConfig, CapabilitiesSnapshot } from './types.js';
+import type { AccountLimits, CreditsBalanceResponse, CreditsUsageResponse, OperationCapability, OperationType } from '@giveitsmaller/contracts/openapi';
 import { OperationBuilder } from './builder.js';
 import { MergeBuilder, type Asset, type MergeOptions } from './merge.js';
 import { PresetDefaults } from './ergonomic/presets/index.js';
@@ -61,6 +61,21 @@ export interface GislCreateOptions extends ResolveCredentialsOptions, ResolveEnd
  * legitimately have no apiKey at construction time.
  */
 export declare function create(opts?: GislCreateOptions): Promise<ErgonomicClient>;
+/**
+ * Operation types that need MORE THAN ONE input source, so they cannot be
+ * driven through the single-input {@link ErgonomicClient.operation} escape
+ * hatch — each has a dedicated multi-input builder (`merge(...)`,
+ * `files(...).archive(...)`, `file(a).watermark(b)`). Excluded from
+ * `operation()`'s op-type autocomplete.
+ */
+export type MultiInputOperationType = 'merge' | 'archive' | 'image_watermark' | 'video_watermark' | 'audio_overlay' | 'audio_to_video';
+/**
+ * Op types reachable via {@link ErgonomicClient.operation}: every
+ * {@link OperationType} except the {@link MultiInputOperationType} ones, widened
+ * with `(string & {})` so a genuinely-unknown (not-yet-in-contract) op type is
+ * still accepted while known single-input ops keep autocomplete.
+ */
+export type SingleInputOperationType = Exclude<OperationType, MultiInputOperationType> | (string & {});
 /**
  * The ergonomic-client surface: `GislClient` (verbatim low-level API)
  * plus three ergonomic op-builder factories. Intersection type — at
@@ -135,6 +150,44 @@ export type ErgonomicClient = GislClient & {
     creditsUsage(options?: CreditsUsageOptions): Promise<CreditsUsageResponse>;
     /** Effective account limits / tier-resolved caps (sugar for `getAccountLimits()`). */
     limits(): Promise<AccountLimits>;
+    /**
+     * Operation-capability read helper (qUhxfDA5). A typed projection over
+     * `getSchema()` that surfaces the tier-scoped operation-capability matrix,
+     * the output-property table, and the image-encode capability matrix —
+     * without dropping to the low-level `getSchema()` and its not-modified union.
+     *
+     * Called with no argument it returns the full {@link CapabilitiesSnapshot};
+     * called with an operation type it returns just that op's
+     * {@link OperationCapability}, or `undefined` when the op is absent from the
+     * server's capability matrix.
+     *
+     * Degraded fallback: if the client is configured to force conditional
+     * revalidation (a static `If-None-Match` in `config.headers`) the schema
+     * fetch may 304 with no body — in that case the snapshot is empty / the
+     * per-op lookup is `undefined`.
+     */
+    capabilities(): Promise<CapabilitiesSnapshot>;
+    capabilities(opType: OperationType | (string & {})): Promise<OperationCapability | undefined>;
+    /**
+     * Generic operation escape hatch (qUhxfDA5). Build + run a SINGLE-input,
+     * SINGLE-operation job for an op type with no first-class verb (e.g.
+     * `text_watermark`, `split`, or a not-yet-in-contract op). `options` reach the
+     * wire unchanged — there is NO pre-upload validation (the server validates) and
+     * NO preset resolution unless `opType` is `compress`. Prefer the typed verbs
+     * (`compress` / `convert` / `thumbnail`) when they exist — they add local
+     * validation.
+     *
+     * Multi-input operations (`merge`, `archive`, overlay watermarks — see
+     * {@link MultiInputOperationType}) are REJECTED at compile time: passing one
+     * of those literals is a type error (its dedicated builder is `merge(...)`,
+     * `files(...).archive(...)`, or `file(a).watermark(b)`). A genuinely-unknown
+     * (not-yet-in-contract) op string is still accepted.
+     *
+     * The generic parameter enforces the exclusion: a known single-input op or an
+     * unknown string maps to itself, while a {@link MultiInputOperationType}
+     * literal maps to `never` (so it cannot be passed).
+     */
+    operation<Op extends SingleInputOperationType>(opType: Op extends MultiInputOperationType ? never : Op, input: string | Blob, options?: Record<string, unknown>): OperationBuilder;
 };
 /**
  * The `gisl` namespace — primary ergonomic-layer entry point.

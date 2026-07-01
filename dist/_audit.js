@@ -151,4 +151,10 @@ export function _runAudit() {
     accept();
     // TYNjcjpo — SSE parse-failure diagnostic surface.
     accept();
+    // qUhxfDA5 — capabilities() projection surface + the three contract
+    // capability types it exposes.
+    accept();
+    accept();
+    accept();
+    accept();
 }

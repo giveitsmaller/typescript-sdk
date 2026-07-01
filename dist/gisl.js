@@ -195,6 +195,47 @@ function wrapErgonomic(client, presetDefaults, scopedPresetDefaults) {
             if (prop === 'limits') {
                 return () => target.getAccountLimits();
             }
+            if (prop === 'capabilities') {
+                // qUhxfDA5 — READ/PROJECTION over getSchema() surfacing the three
+                // v2.124 capability fields (previously typed but with no ergonomic
+                // consumer). No arg → the full CapabilitiesSnapshot; an opType → that
+                // op's OperationCapability (or undefined when absent).
+                return async (opType) => {
+                    const schema = await target.getSchema();
+                    // capabilities() passes no conditional headers, so getSchema()
+                    // normally returns the 200 hit with data. A 304 is only possible if
+                    // the caller globally configured a conditional header (e.g. a static
+                    // `If-None-Match` in `config.headers`) — an unusual, self-inflicted
+                    // case. Rather than throw, degrade to an empty projection (documented
+                    // on the method); a caller who forces revalidation gets no snapshot.
+                    const data = schema.notModified ? undefined : schema.data;
+                    const operations = data?.capabilities ?? {};
+                    if (opType !== undefined) {
+                        return operations[opType];
+                    }
+                    return {
+                        operations,
+                        outputProperties: data?.outputProperties ?? {},
+                        ...(data?.imageEncodeCapabilities !== undefined
+                            ? { imageEncode: data.imageEncodeCapabilities }
+                            : {}),
+                    };
+                };
+            }
+            if (prop === 'operation') {
+                // qUhxfDA5 — generic escape-hatch sibling of the single-op verbs
+                // (compress/convert/thumbnail). Builds a SINGLE-input, SINGLE-operation
+                // job for an op type with no typed verb (e.g. `text_watermark`, `split`,
+                // or a not-yet-in-contract op). Options ride through to the wire
+                // unchanged (no preset resolution unless opType is 'compress'); NO
+                // pre-upload validation — the server validates.
+                //
+                // Multi-input operations (merge, archive, image/video/audio overlay
+                // watermarks) canNOT be expressed here — they need multiple sources and
+                // have dedicated builders (`merge(...)`, `files(...).archive(...)`,
+                // `file(a).watermark(b)`). They are excluded from the op-type param.
+                return (opType, input, options = {}) => new OperationBuilder(target, opType, input, options, presetDefaults, scopedPresetDefaults);
+            }
             return Reflect.get(target, prop, receiver);
         },
     });

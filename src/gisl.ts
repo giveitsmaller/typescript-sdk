@@ -29,11 +29,13 @@ import {
   type ResolveCredentialsOptions,
   type ResolveEndpointOptions,
 } from './credentials.js';
-import type { CreditsUsageOptions, GislClientConfig } from './types.js';
+import type { CreditsUsageOptions, GislClientConfig, CapabilitiesSnapshot } from './types.js';
 import type {
   AccountLimits,
   CreditsBalanceResponse,
   CreditsUsageResponse,
+  OperationCapability,
+  OperationType,
 } from '@giveitsmaller/contracts/openapi';
 import { OperationBuilder } from './builder.js';
 import {
@@ -263,6 +265,54 @@ function wrapErgonomic(
       if (prop === 'limits') {
         return (): Promise<AccountLimits> => target.getAccountLimits();
       }
+      if (prop === 'capabilities') {
+        // qUhxfDA5 — READ/PROJECTION over getSchema() surfacing the three
+        // v2.124 capability fields (previously typed but with no ergonomic
+        // consumer). No arg → the full CapabilitiesSnapshot; an opType → that
+        // op's OperationCapability (or undefined when absent).
+        return async (
+          opType?: OperationType | (string & {}),
+        ): Promise<CapabilitiesSnapshot | OperationCapability | undefined> => {
+          const schema = await target.getSchema();
+          // capabilities() passes no conditional headers, so getSchema()
+          // normally returns the 200 hit with data. A 304 is only possible if
+          // the caller globally configured a conditional header (e.g. a static
+          // `If-None-Match` in `config.headers`) — an unusual, self-inflicted
+          // case. Rather than throw, degrade to an empty projection (documented
+          // on the method); a caller who forces revalidation gets no snapshot.
+          const data = schema.notModified ? undefined : schema.data;
+          const operations: Record<string, OperationCapability> = data?.capabilities ?? {};
+          if (opType !== undefined) {
+            return operations[opType];
+          }
+          return {
+            operations,
+            outputProperties: data?.outputProperties ?? {},
+            ...(data?.imageEncodeCapabilities !== undefined
+              ? { imageEncode: data.imageEncodeCapabilities }
+              : {}),
+          };
+        };
+      }
+      if (prop === 'operation') {
+        // qUhxfDA5 — generic escape-hatch sibling of the single-op verbs
+        // (compress/convert/thumbnail). Builds a SINGLE-input, SINGLE-operation
+        // job for an op type with no typed verb (e.g. `text_watermark`, `split`,
+        // or a not-yet-in-contract op). Options ride through to the wire
+        // unchanged (no preset resolution unless opType is 'compress'); NO
+        // pre-upload validation — the server validates.
+        //
+        // Multi-input operations (merge, archive, image/video/audio overlay
+        // watermarks) canNOT be expressed here — they need multiple sources and
+        // have dedicated builders (`merge(...)`, `files(...).archive(...)`,
+        // `file(a).watermark(b)`). They are excluded from the op-type param.
+        return (
+          opType: SingleInputOperationType,
+          input: string | Blob,
+          options: Record<string, unknown> = {},
+        ): OperationBuilder =>
+          new OperationBuilder(target, opType, input, options, presetDefaults, scopedPresetDefaults);
+      }
       return Reflect.get(target, prop, receiver);
     },
   }) as ErgonomicClient;
@@ -281,6 +331,29 @@ function isMergeOptions(value: unknown): value is MergeOptions {
   if (t === 'handle' || t === 'path' || t === 'clip') return false;
   return true;
 }
+
+/**
+ * Operation types that need MORE THAN ONE input source, so they cannot be
+ * driven through the single-input {@link ErgonomicClient.operation} escape
+ * hatch — each has a dedicated multi-input builder (`merge(...)`,
+ * `files(...).archive(...)`, `file(a).watermark(b)`). Excluded from
+ * `operation()`'s op-type autocomplete.
+ */
+export type MultiInputOperationType =
+  | 'merge'
+  | 'archive'
+  | 'image_watermark'
+  | 'video_watermark'
+  | 'audio_overlay'
+  | 'audio_to_video';
+
+/**
+ * Op types reachable via {@link ErgonomicClient.operation}: every
+ * {@link OperationType} except the {@link MultiInputOperationType} ones, widened
+ * with `(string & {})` so a genuinely-unknown (not-yet-in-contract) op type is
+ * still accepted while known single-input ops keep autocomplete.
+ */
+export type SingleInputOperationType = Exclude<OperationType, MultiInputOperationType> | (string & {});
 
 /**
  * The ergonomic-client surface: `GislClient` (verbatim low-level API)
@@ -356,6 +429,48 @@ export type ErgonomicClient = GislClient & {
   creditsUsage(options?: CreditsUsageOptions): Promise<CreditsUsageResponse>;
   /** Effective account limits / tier-resolved caps (sugar for `getAccountLimits()`). */
   limits(): Promise<AccountLimits>;
+  /**
+   * Operation-capability read helper (qUhxfDA5). A typed projection over
+   * `getSchema()` that surfaces the tier-scoped operation-capability matrix,
+   * the output-property table, and the image-encode capability matrix —
+   * without dropping to the low-level `getSchema()` and its not-modified union.
+   *
+   * Called with no argument it returns the full {@link CapabilitiesSnapshot};
+   * called with an operation type it returns just that op's
+   * {@link OperationCapability}, or `undefined` when the op is absent from the
+   * server's capability matrix.
+   *
+   * Degraded fallback: if the client is configured to force conditional
+   * revalidation (a static `If-None-Match` in `config.headers`) the schema
+   * fetch may 304 with no body — in that case the snapshot is empty / the
+   * per-op lookup is `undefined`.
+   */
+  capabilities(): Promise<CapabilitiesSnapshot>;
+  capabilities(opType: OperationType | (string & {})): Promise<OperationCapability | undefined>;
+  /**
+   * Generic operation escape hatch (qUhxfDA5). Build + run a SINGLE-input,
+   * SINGLE-operation job for an op type with no first-class verb (e.g.
+   * `text_watermark`, `split`, or a not-yet-in-contract op). `options` reach the
+   * wire unchanged — there is NO pre-upload validation (the server validates) and
+   * NO preset resolution unless `opType` is `compress`. Prefer the typed verbs
+   * (`compress` / `convert` / `thumbnail`) when they exist — they add local
+   * validation.
+   *
+   * Multi-input operations (`merge`, `archive`, overlay watermarks — see
+   * {@link MultiInputOperationType}) are REJECTED at compile time: passing one
+   * of those literals is a type error (its dedicated builder is `merge(...)`,
+   * `files(...).archive(...)`, or `file(a).watermark(b)`). A genuinely-unknown
+   * (not-yet-in-contract) op string is still accepted.
+   *
+   * The generic parameter enforces the exclusion: a known single-input op or an
+   * unknown string maps to itself, while a {@link MultiInputOperationType}
+   * literal maps to `never` (so it cannot be passed).
+   */
+  operation<Op extends SingleInputOperationType>(
+    opType: Op extends MultiInputOperationType ? never : Op,
+    input: string | Blob,
+    options?: Record<string, unknown>,
+  ): OperationBuilder;
 };
 
 /**
