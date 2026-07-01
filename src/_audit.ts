@@ -102,6 +102,10 @@ import type { GislNoSuchKeyError, GislSinkError, GislNetworkError, GislItemFaile
 // below). Imported via `./index.js` so dropping the re-export breaks
 // `tsc --noEmit` here.
 import type { StatusSnapshot, GislResultNotReadyError } from './index.js';
+// TYNjcjpo — SSE parse-failure diagnostic surfaced via the `onParseError`
+// callback on `streamEvents` / `parseSseStream`. Imported via `./index.js`
+// so dropping the re-export breaks `tsc --noEmit` here.
+import type { GislSseParseFailure } from './index.js';
 import type {
   AccountLimits,
   CreditsBalanceResponse,
@@ -341,4 +345,6 @@ export function _runAudit(): void {
   // FF5a / Ao8RPVxD — file-first Handle reattach surface.
   accept<StatusSnapshot>();
   accept<GislResultNotReadyError>();
+  // TYNjcjpo — SSE parse-failure diagnostic surface.
+  accept<GislSseParseFailure>();
 }

@@ -1,4 +1,4 @@
-import type { GislSseEvent } from './types.js';
+import type { GislSseEvent, GislSseParseFailure } from './types.js';
 
 /**
  * Parse an SSE stream from a fetch Response into an AsyncIterable of typed events.
@@ -28,7 +28,7 @@ import type { GislSseEvent } from './types.js';
  */
 export async function* parseSseStream(
   response: Response,
-  opts: { signal?: AbortSignal } = {},
+  opts: { signal?: AbortSignal; onParseError?: (diagnostic: GislSseParseFailure) => void } = {},
 ): AsyncGenerator<GislSseEvent> {
   const body = response.body;
   if (!body) {
@@ -85,14 +85,26 @@ export async function* parseSseStream(
           // Empty line = end of event
           if (dataLines.length > 0) {
             const rawData = dataLines.join('\n');
+            const frameEvent = eventType || 'message';
             let parsed: unknown;
             try {
               parsed = JSON.parse(rawData);
-            } catch {
-              parsed = rawData;
+            } catch (err) {
+              // TYNjcjpo — a malformed-JSON frame is SKIPPED (not yielded as a
+              // raw string) so the stream stays resilient, but the failure is
+              // surfaced via the optional onParseError diagnostic rather than
+              // silently lost. Identical to the PHP `flushSseFrame` drop-path.
+              opts.onParseError?.({
+                raw: rawData,
+                event: frameEvent,
+                error: err instanceof Error ? err.message : String(err),
+              });
+              eventType = '';
+              dataLines = [];
+              continue;
             }
             yield {
-              event: eventType || 'message',
+              event: frameEvent,
               data: parsed,
             } as GislSseEvent;
           }
@@ -137,14 +149,22 @@ export async function* parseSseStream(
     // not be yielded once the consumer has abandoned the stream.
     if (!aborted && dataLines.length > 0) {
       const rawData = dataLines.join('\n');
+      const frameEvent = eventType || 'message';
       let parsed: unknown;
       try {
         parsed = JSON.parse(rawData);
-      } catch {
-        parsed = rawData;
+      } catch (err) {
+        // TYNjcjpo — trailing-flush malformed frame: skip + diagnostic (same as
+        // the in-loop path above).
+        opts.onParseError?.({
+          raw: rawData,
+          event: frameEvent,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return;
       }
       yield {
-        event: eventType || 'message',
+        event: frameEvent,
         data: parsed,
       } as GislSseEvent;
     }

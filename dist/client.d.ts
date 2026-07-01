@@ -1,5 +1,5 @@
 import type { AudioWatermarkDecodeRequest, AudioWatermarkDecodeResponse, ExternalImportCreatedResponse, ExternalImportRequest, LoginUserRequest, LoginUser200ResponseData, ContactRequest, AccountLimits, CreditsBalanceResponse, CreditsUsageResponse, UploadResponse, UploadProbeResponse, WorkflowCancelResponse, WorkflowCreateResponse, WorkflowResumeResponse, WorkflowStatusResponse, WorkflowListResponse, WorkflowSummary, WorkflowDownloadResponse, MetadataResponse, RetryResponse } from '@giveitsmaller/contracts/openapi';
-import type { CreditsUsageOptions, ListWorkflowsOptions, GetSchemaOptions, GetSchemaResult, GislClientConfig, GislSseEvent, PreflightClipsResult, ProbeWaitOptions, ProbeWaitResult, ReadCapabilityOptions, UploadOptions, WaitOptions, WorkflowCreatePayload, _Sdk3HandCodedKeepaliveResult, _Sdk3HandCodedMultipartStatusResult, _Sdk3HandCodedPresignPartsResult } from './types.js';
+import type { CreditsUsageOptions, ListWorkflowsOptions, GetSchemaOptions, GetSchemaResult, GislClientConfig, GislSseEvent, GislSseParseFailure, PreflightClipsResult, ProbeWaitOptions, ProbeWaitResult, ReadCapabilityOptions, UploadOptions, WaitOptions, WorkflowCreatePayload, _Sdk3HandCodedKeepaliveResult, _Sdk3HandCodedMultipartStatusResult, _Sdk3HandCodedPresignPartsResult } from './types.js';
 export declare const MULTIPART_CONCURRENCY_DEFAULT: 4;
 export declare const DEFAULT_MULTIPART_FIRST_CHUNK_SIZE: number;
 export interface ValidationDetail {
@@ -199,6 +199,13 @@ export declare class GislClient {
     streamEvents(workflowId: string, opts?: {
         signal?: AbortSignal;
         capability?: string;
+        /**
+         * Observe malformed-JSON SSE frames (TYNjcjpo). A frame whose `data:` body
+         * fails to parse is SKIPPED from the stream (kept resilient) and reported
+         * here as a typed {@link GislSseParseFailure} instead of being silently lost.
+         * Omit to drop malformed frames silently (the default; PHP parity).
+         */
+        onParseError?: (diagnostic: GislSseParseFailure) => void;
     }): Promise<AsyncGenerator<GislSseEvent>>;
     /**
      * Get metadata for an uploaded file.

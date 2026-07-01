@@ -102,13 +102,16 @@ describe('parseSseStream', () => {
     expect(events[0].data).toEqual({ line1: 'hello' });
   });
 
-  it('returns raw string when multi-line data is not valid JSON', async () => {
+  it('skips a malformed multi-line frame instead of yielding a raw string (TYNjcjpo)', async () => {
+    // Pre-TYNjcjpo this yielded the joined raw string as `data`; now a frame
+    // whose joined `data:` body fails to JSON-parse is SKIPPED so the stream
+    // stays resilient (the diagnostic is surfaced via onParseError — see the
+    // dedicated malformed-frame block below).
     const response = makeResponse(
       'event: log\ndata: first line\ndata: second line\n\n',
     );
     const events = await collectEvents(response);
-    expect(events).toHaveLength(1);
-    expect(events[0].data).toBe('first line\nsecond line');
+    expect(events).toHaveLength(0);
   });
 
   it('ignores comment lines', async () => {
@@ -154,11 +157,12 @@ describe('parseSseStream', () => {
     expect(events).toHaveLength(0);
   });
 
-  it('handles non-JSON data as raw string', async () => {
+  it('silently skips a malformed frame when no onParseError callback is set', async () => {
+    // No-callback default: the frame is dropped and nothing is yielded (PHP
+    // parity — `flushSseFrame` returns null on JsonException).
     const response = makeResponse('event: ping\ndata: just a string\n\n');
     const events = await collectEvents(response);
-    expect(events).toHaveLength(1);
-    expect(events[0].data).toBe('just a string');
+    expect(events).toHaveLength(0);
   });
 
   it('flushes trailing event without final double newline', async () => {
@@ -290,6 +294,88 @@ describe('parseSseStream', () => {
       // the contract we assert is that iteration completed without leaking
       // (no hang) and the generator's finally ran to completion.
       expect(cancelledFlag).toBe(false); // already closed → cancel is a no-op
+    });
+  });
+
+  // TYNjcjpo: malformed-frame diagnostic via the optional onParseError callback.
+  describe('onParseError diagnostic (TYNjcjpo)', () => {
+    it('skips the malformed frame and fires onParseError once with {raw, event, error}', async () => {
+      const diagnostics: Array<{ raw: string; event: string; error: string }> = [];
+      const response = makeResponse('event: ping\ndata: not json\n\n');
+      const events = [];
+      for await (const event of parseSseStream(response, {
+        onParseError: (d) => diagnostics.push(d),
+      })) {
+        events.push(event);
+      }
+      expect(events).toHaveLength(0);
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].raw).toBe('not json');
+      expect(diagnostics[0].event).toBe('ping');
+      expect(diagnostics[0].error.length).toBeGreaterThan(0);
+    });
+
+    it('reports "message" as the event when the malformed frame has no event: field', async () => {
+      const diagnostics: Array<{ raw: string; event: string; error: string }> = [];
+      const response = makeResponse('data: nope\n\n');
+      const events = [];
+      for await (const event of parseSseStream(response, {
+        onParseError: (d) => diagnostics.push(d),
+      })) {
+        events.push(event);
+      }
+      expect(events).toHaveLength(0);
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].event).toBe('message');
+    });
+
+    it('keeps yielding valid frames after skipping a malformed one', async () => {
+      const diagnostics: Array<{ raw: string; event: string; error: string }> = [];
+      const text = [
+        'event: operation.progress\ndata: {"progress":10}\n\n',
+        'event: log\ndata: garbage\n\n',
+        'event: workflow.completed\ndata: {"workflow_id":"abc"}\n\n',
+      ].join('');
+      const events = [];
+      for await (const event of parseSseStream(makeResponse(text), {
+        onParseError: (d) => diagnostics.push(d),
+      })) {
+        events.push(event);
+      }
+      // The two valid frames still yield; only the middle garbage is dropped.
+      expect(events).toHaveLength(2);
+      expect(events[0].event).toBe('operation.progress');
+      expect(events[1].event).toBe('workflow.completed');
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].raw).toBe('garbage');
+    });
+
+    it('fires onParseError for a malformed trailing frame (no final blank line)', async () => {
+      const diagnostics: Array<{ raw: string; event: string; error: string }> = [];
+      // Single trailing newline, no blank-line terminator → the frame reaches
+      // the post-loop trailing flush (a `data:` line with NO newline at all
+      // would stay buffered as an incomplete line and never parse).
+      const response = makeResponse('event: final\ndata: broken\n');
+      const events = [];
+      for await (const event of parseSseStream(response, {
+        onParseError: (d) => diagnostics.push(d),
+      })) {
+        events.push(event);
+      }
+      expect(events).toHaveLength(0);
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].event).toBe('final');
+      expect(diagnostics[0].raw).toBe('broken');
+    });
+
+    it('propagates a throw from onParseError (does not swallow it)', async () => {
+      const response = makeResponse('event: ping\ndata: not json\n\n');
+      const gen = parseSseStream(response, {
+        onParseError: () => {
+          throw new Error('boom');
+        },
+      });
+      await expect(gen.next()).rejects.toThrow('boom');
     });
   });
 });

@@ -1752,7 +1752,10 @@ export class GislClient {
                 releaseConsumerSignal();
             }
         }
-        const inner = parseSseStream(response, { signal: controller.signal });
+        const inner = parseSseStream(response, {
+            signal: controller.signal,
+            ...(opts.onParseError !== undefined ? { onParseError: opts.onParseError } : {}),
+        });
         let started = false;
         let settled = false;
         // Idempotent teardown. `abort` only on consumer-driven early

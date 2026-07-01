@@ -111,6 +111,7 @@ import type {
   GetSchemaResult,
   GislClientConfig,
   GislSseEvent,
+  GislSseParseFailure,
   MultipartCheckpointState,
   PreflightClipError,
   PreflightClipsResult,
@@ -2406,7 +2407,17 @@ export class GislClient {
    */
   async streamEvents(
     workflowId: string,
-    opts: { signal?: AbortSignal; capability?: string } = {},
+    opts: {
+      signal?: AbortSignal;
+      capability?: string;
+      /**
+       * Observe malformed-JSON SSE frames (TYNjcjpo). A frame whose `data:` body
+       * fails to parse is SKIPPED from the stream (kept resilient) and reported
+       * here as a typed {@link GislSseParseFailure} instead of being silently lost.
+       * Omit to drop malformed frames silently (the default; PHP parity).
+       */
+      onParseError?: (diagnostic: GislSseParseFailure) => void;
+    } = {},
   ): Promise<AsyncGenerator<GislSseEvent>> {
     const eventsPath = `/api/workflows/${encodeURIComponent(workflowId)}/events`;
 
@@ -2448,7 +2459,10 @@ export class GislClient {
       }
     }
 
-    const inner = parseSseStream(response, { signal: controller.signal });
+    const inner = parseSseStream(response, {
+      signal: controller.signal,
+      ...(opts.onParseError !== undefined ? { onParseError: opts.onParseError } : {}),
+    });
     let started = false;
     let settled = false;
     // Idempotent teardown. `abort` only on consumer-driven early

@@ -76,15 +76,27 @@ export async function* parseSseStream(response, opts = {}) {
                     // Empty line = end of event
                     if (dataLines.length > 0) {
                         const rawData = dataLines.join('\n');
+                        const frameEvent = eventType || 'message';
                         let parsed;
                         try {
                             parsed = JSON.parse(rawData);
                         }
-                        catch {
-                            parsed = rawData;
+                        catch (err) {
+                            // TYNjcjpo — a malformed-JSON frame is SKIPPED (not yielded as a
+                            // raw string) so the stream stays resilient, but the failure is
+                            // surfaced via the optional onParseError diagnostic rather than
+                            // silently lost. Identical to the PHP `flushSseFrame` drop-path.
+                            opts.onParseError?.({
+                                raw: rawData,
+                                event: frameEvent,
+                                error: err instanceof Error ? err.message : String(err),
+                            });
+                            eventType = '';
+                            dataLines = [];
+                            continue;
                         }
                         yield {
-                            event: eventType || 'message',
+                            event: frameEvent,
                             data: parsed,
                         };
                     }
@@ -124,15 +136,23 @@ export async function* parseSseStream(response, opts = {}) {
         // not be yielded once the consumer has abandoned the stream.
         if (!aborted && dataLines.length > 0) {
             const rawData = dataLines.join('\n');
+            const frameEvent = eventType || 'message';
             let parsed;
             try {
                 parsed = JSON.parse(rawData);
             }
-            catch {
-                parsed = rawData;
+            catch (err) {
+                // TYNjcjpo — trailing-flush malformed frame: skip + diagnostic (same as
+                // the in-loop path above).
+                opts.onParseError?.({
+                    raw: rawData,
+                    event: frameEvent,
+                    error: err instanceof Error ? err.message : String(err),
+                });
+                return;
             }
             yield {
-                event: eventType || 'message',
+                event: frameEvent,
                 data: parsed,
             };
         }

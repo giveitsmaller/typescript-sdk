@@ -149,4 +149,6 @@ export function _runAudit() {
     // FF5a / Ao8RPVxD — file-first Handle reattach surface.
     accept();
     accept();
+    // TYNjcjpo — SSE parse-failure diagnostic surface.
+    accept();
 }

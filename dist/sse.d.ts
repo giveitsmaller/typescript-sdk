@@ -1,4 +1,4 @@
-import type { GislSseEvent } from './types.js';
+import type { GislSseEvent, GislSseParseFailure } from './types.js';
 /**
  * Parse an SSE stream from a fetch Response into an AsyncIterable of typed events.
  *
@@ -27,4 +27,5 @@ import type { GislSseEvent } from './types.js';
  */
 export declare function parseSseStream(response: Response, opts?: {
     signal?: AbortSignal;
+    onParseError?: (diagnostic: GislSseParseFailure) => void;
 }): AsyncGenerator<GislSseEvent>;

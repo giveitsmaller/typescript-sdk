@@ -28,6 +28,7 @@ export type {
   ProbeWaitResult,
   GislClientConfig,
   GislSseEvent,
+  GislSseParseFailure,
   UploadOptions,
   WaitOptions,
   WorkflowCreatePayload,

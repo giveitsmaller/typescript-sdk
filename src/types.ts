@@ -601,6 +601,23 @@ export type GislSseEvent =
   | { event: typeof SseEventType.workflow_partially_failed; data: SseWorkflowTerminalData }
   | { event: string; data: unknown };
 
+/**
+ * A typed, non-throwing diagnostic surfaced when an SSE frame's `data:` body fails
+ * to JSON-parse (TYNjcjpo). The malformed frame is SKIPPED from the event stream —
+ * a long-running consumer must not break on one garbled server frame — but the
+ * failure is observable via the `onParseError` callback on `streamEvents` /
+ * `parseSseStream` rather than silently lost. Mirrors the PHP `GislSseParseFailure`
+ * value object; the shape is identical across the two SDKs (cross-SDK parity).
+ */
+export interface GislSseParseFailure {
+  /** The joined `data:` line(s) that failed to parse. */
+  readonly raw: string;
+  /** The frame's event type (or `'message'` when the frame had no `event:` field). */
+  readonly event: string;
+  /** The parse error message (e.g. the `JSON.parse` `SyntaxError` text). */
+  readonly error: string;
+}
+
 // ---------------------------------------------------------------------------
 // Upload options
 // ---------------------------------------------------------------------------

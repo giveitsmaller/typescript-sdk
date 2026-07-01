@@ -2815,6 +2815,56 @@ describe('GislClient', () => {
       expect(events[0].event).toBe('operation.progress');
     });
 
+    it('forwards onParseError so a malformed frame is skipped and the diagnostic surfaces (TYNjcjpo)', async () => {
+      // Guards the public-API threading (client.ts streamEvents → parseSseStream):
+      // a typo in the onParseError forward would let the callback silently never
+      // fire even though the low-level parseSseStream tests still pass.
+      fetchSpy.mockResolvedValueOnce(
+        new Response('event: ping\ndata: not json\n\n', {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        }),
+      );
+
+      const diagnostics: Array<{ raw: string; event: string; error: string }> = [];
+      const eventStream = await client.streamEvents('wf-1', {
+        onParseError: (d) => diagnostics.push(d),
+      });
+      const events: GislSseEvent[] = [];
+      for await (const event of eventStream) {
+        events.push(event);
+      }
+
+      expect(events).toHaveLength(0);
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].raw).toBe('not json');
+      expect(diagnostics[0].event).toBe('ping');
+      expect(diagnostics[0].error.length).toBeGreaterThan(0);
+    });
+
+    it('propagates a throw from onParseError through the public streamEvents wrapper', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        new Response('event: ping\ndata: not json\n\n', {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        }),
+      );
+
+      const eventStream = await client.streamEvents('wf-1', {
+        onParseError: () => {
+          throw new Error('boom');
+        },
+      });
+
+      await expect(
+        (async () => {
+          for await (const _event of eventStream) {
+            // drain — the malformed frame triggers onParseError, which throws
+          }
+        })(),
+      ).rejects.toThrow('boom');
+    });
+
     it('narrows v2 phased ProgressStatus values via the GislSseEvent discriminator', async () => {
       // T9 acceptance: GislSseEvent discrimination still works after the
       // ProgressStatus widening (probing / decoding / encoding + phase_input_index
