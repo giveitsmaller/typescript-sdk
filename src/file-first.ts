@@ -908,7 +908,8 @@ export class Recipe {
    * (beta). Audio/document/animated-GIF/unsupported-subtype/undetectable bases
    * throw locally BEFORE any upload (the planned-op gate). `options` carries the
    * wire watermark options (`anchor`, `opacity`, `margin_x`, `margin_y`,
-   * `overlay_width`). Returns a {@link WatermarkedRecipe} (chain post-watermark
+   * `overlay_width`, or `overlays[]` for the multi-overlay stack). Returns a
+   * {@link WatermarkedRecipe} (chain post-watermark
    * `compress`/`convert`/`thumbnail`, then `run`/`submit`). Distinct from
    * {@link textWatermark} (single-input text overlay).
    */
@@ -1685,8 +1686,9 @@ function _validateWatermarkOverlay(overlay: Recipe): void {
 }
 
 function _lowerWatermarkOp(wireOp: WatermarkWireOp, options: WatermarkOptions): OperationDef {
-  // Watermark options (anchor/opacity/margin_x/margin_y/overlay_width) are
-  // already wire keys; empty options omit the `options` key (byte-identical to PHP).
+  // Watermark options (anchor/opacity/margin_x/margin_y/overlay_width, or the
+  // multi-overlay overlays[] stack) are already wire keys; empty options omit
+  // the `options` key (byte-identical to PHP).
   const wire = { ...options };
   return Object.keys(wire).length === 0 ? { type: wireOp } : { type: wireOp, options: wire };
 }

@@ -26,7 +26,7 @@ const TEXT_WATERMARK_OPTION_KEYS = [
     'tile_spacing', 'anchor', 'margin_x', 'margin_y', 'opacity',
 ];
 const WATERMARK_OPTION_KEYS = [
-    'anchor', 'margin_x', 'margin_y', 'opacity', 'overlay_width',
+    'anchor', 'margin_x', 'margin_y', 'opacity', 'overlay_width', 'overlays',
 ];
 const OUTPUT_OPTION_KEYS = [
     'quality', 'quality_preset', 'encoding_mode', 'target_size_bytes', 'chroma_subsampling', 'width', 'height', 'fit',

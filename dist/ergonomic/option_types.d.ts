@@ -96,6 +96,24 @@ export interface TextWatermarkOptions {
     /** Overlay opacity (0-1). */
     opacity?: number;
 }
+/**
+ * One entry in the multi-overlay stack (contract `overlays[]` items, v2.152.0).
+ * Index-aligned to the overlay-role sources — `overlays[i]` places overlay
+ * source `i` — and mirrors the flat single-overlay option shape. Matches the
+ * generated `ImageWatermarkImageOverlaysItem`.
+ */
+export interface WatermarkOverlay {
+    /** 9-grid anchor position for this overlay. */
+    anchor?: WatermarkAnchor;
+    /** Horizontal offset from the anchor (e.g. '40px' or '5%'). */
+    margin_x?: string;
+    /** Vertical offset from the anchor. */
+    margin_y?: string;
+    /** Overlay opacity (0-1). */
+    opacity?: number;
+    /** Overlay width (e.g. '120px' or '20%'). */
+    overlay_width?: string;
+}
 export interface WatermarkOptions {
     /** 9-grid anchor position. */
     anchor?: WatermarkAnchor;
@@ -107,6 +125,14 @@ export interface WatermarkOptions {
     opacity?: number;
     /** Overlay width (e.g. '120px' or '20%'). */
     overlay_width?: string;
+    /**
+     * Per-overlay placement for the multi-overlay stack (contract `overlays[]`,
+     * v2.152.0) — one entry per overlay source, index-aligned; stacks up to 8
+     * overlays on one base image (z-order = array index). MUTUALLY EXCLUSIVE with
+     * the flat single-overlay options above; the server rejects mixing the two as
+     * `invalid_options`. image_watermark jpeg/png/webp bases only.
+     */
+    overlays?: WatermarkOverlay[];
 }
 /** Resize mode (contract `fit` enum, v2.97.0). */
 export type OutputFit = 'max' | 'crop' | 'scale';
@@ -183,6 +209,6 @@ export declare const VERB_OPTION_KEYS: {
     readonly convert: readonly ["quality", "background", "crf", "trim_start", "trim_end", "fps", "width", "height", "fit", "metadata", "color_profile", "auto_orient", "max_colors", "loop", "dither", "bitrate", "pages", "dpi"];
     readonly thumbnail: readonly ["width", "height", "fit", "format", "quality", "background", "timestamp", "source", "page"];
     readonly textWatermark: readonly ["font_size", "color", "font_family", "rotation", "watermark_mode", "tile_spacing", "anchor", "margin_x", "margin_y", "opacity"];
-    readonly watermark: readonly ["anchor", "margin_x", "margin_y", "opacity", "overlay_width"];
+    readonly watermark: readonly ["anchor", "margin_x", "margin_y", "opacity", "overlay_width", "overlays"];
     readonly output: readonly ["quality", "quality_preset", "encoding_mode", "target_size_bytes", "chroma_subsampling", "width", "height", "fit", "background", "progressive", "optimization_level", "avif_speed", "metadata", "color_profile", "auto_orient", "lossless"];
 };

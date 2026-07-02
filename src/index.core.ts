@@ -655,6 +655,7 @@ export type {
   ThumbnailOptions,
   TextWatermarkOptions,
   WatermarkOptions,
+  WatermarkOverlay,
   WatermarkAnchor,
 } from './ergonomic/option_types.js';
 export type {

@@ -124,6 +124,25 @@ const TEXT_WATERMARK_OPTION_KEYS = [
   'tile_spacing', 'anchor', 'margin_x', 'margin_y', 'opacity',
 ] as const;
 
+/**
+ * One entry in the multi-overlay stack (contract `overlays[]` items, v2.152.0).
+ * Index-aligned to the overlay-role sources — `overlays[i]` places overlay
+ * source `i` — and mirrors the flat single-overlay option shape. Matches the
+ * generated `ImageWatermarkImageOverlaysItem`.
+ */
+export interface WatermarkOverlay {
+  /** 9-grid anchor position for this overlay. */
+  anchor?: WatermarkAnchor;
+  /** Horizontal offset from the anchor (e.g. '40px' or '5%'). */
+  margin_x?: string;
+  /** Vertical offset from the anchor. */
+  margin_y?: string;
+  /** Overlay opacity (0-1). */
+  opacity?: number;
+  /** Overlay width (e.g. '120px' or '20%'). */
+  overlay_width?: string;
+}
+
 // ---- watermark (image/video overlay; union of image_watermark + video_watermark) ----
 export interface WatermarkOptions {
   /** 9-grid anchor position. */
@@ -136,9 +155,17 @@ export interface WatermarkOptions {
   opacity?: number;
   /** Overlay width (e.g. '120px' or '20%'). */
   overlay_width?: string;
+  /**
+   * Per-overlay placement for the multi-overlay stack (contract `overlays[]`,
+   * v2.152.0) — one entry per overlay source, index-aligned; stacks up to 8
+   * overlays on one base image (z-order = array index). MUTUALLY EXCLUSIVE with
+   * the flat single-overlay options above; the server rejects mixing the two as
+   * `invalid_options`. image_watermark jpeg/png/webp bases only.
+   */
+  overlays?: WatermarkOverlay[];
 }
 const WATERMARK_OPTION_KEYS = [
-  'anchor', 'margin_x', 'margin_y', 'opacity', 'overlay_width',
+  'anchor', 'margin_x', 'margin_y', 'opacity', 'overlay_width', 'overlays',
 ] as const;
 
 // ---- output (image Output facade; output_format is positional-owned → excluded) ----

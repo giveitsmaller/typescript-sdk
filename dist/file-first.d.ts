@@ -427,7 +427,8 @@ export declare class Recipe {
      * (beta). Audio/document/animated-GIF/unsupported-subtype/undetectable bases
      * throw locally BEFORE any upload (the planned-op gate). `options` carries the
      * wire watermark options (`anchor`, `opacity`, `margin_x`, `margin_y`,
-     * `overlay_width`). Returns a {@link WatermarkedRecipe} (chain post-watermark
+     * `overlay_width`, or `overlays[]` for the multi-overlay stack). Returns a
+     * {@link WatermarkedRecipe} (chain post-watermark
      * `compress`/`convert`/`thumbnail`, then `run`/`submit`). Distinct from
      * {@link textWatermark} (single-input text overlay).
      */
