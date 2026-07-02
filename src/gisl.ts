@@ -45,7 +45,7 @@ import {
 } from './ergonomic/option_validation.js';
 import { MergeBuilder, asset, type Asset, type MergeOptions } from './merge.js';
 import { PresetDefaults } from './ergonomic/presets/index.js';
-import { Recipe, FilesRecipe, fileInput, type FileInput } from './file-first.js';
+import { Recipe, FilesRecipe, BatchRecipe, fileInput, type FileInput } from './file-first.js';
 import { Handle } from './handle.js';
 
 // ---------------------------------------------------------------------------
@@ -175,6 +175,15 @@ function wrapErgonomic(
           );
           return new FilesRecipe(resolved, [], presetDefaults, scopedPresetDefaults, target);
         };
+      }
+      if (prop === 'batch') {
+        // Keyed multi-recipe batch entry point (FF7). Run N DISTINCT single-input
+        // keyed recipes as ONE workflow; run() partitions the RunResult per entry
+        // by the caller key given at `file(input, key)` time. Client-only ctor —
+        // each entry already captured its own preset defaults at `client.file(...)`
+        // time, so batch never re-plumbs presetDefaults/scopedPresetDefaults.
+        return (recipes: ReadonlyArray<Recipe>): BatchRecipe =>
+          new BatchRecipe(recipes, target);
       }
       if (prop === 'workflow') {
         // Reattach to a previously-created workflow (FF5a). Returns a
@@ -385,6 +394,20 @@ export type ErgonomicClient = GislClient & {
    * returns a {@link Handle} whose `wait()`/`result()` partition per input.
    */
   files(inputs: ReadonlyArray<string | Blob | FileInput>): FilesRecipe;
+  /**
+   * Keyed multi-recipe batch entry point (FF7). Run N DISTINCT single-input
+   * keyed {@link Recipe}s as ONE workflow — build each via
+   * `client.file(input, key).<op>(...)` with a UNIQUE key, then
+   * `client.batch([r1, r2, …]).run()`. The partitioned {@link RunResult}
+   * addresses each entry's outputs by its caller key (`res.byKey('hero')`); one
+   * failed entry lands in `failed` without sinking the rest.
+   *
+   * v1 accepts ONLY single-input {@link Recipe} entries — the multi-input
+   * builders ({@link FilesRecipe} via `files(...)`, `merge(...)`, `archive(...)`,
+   * `watermark(...)`) are rejected pre-upload with a typed {@link GislConfigError}.
+   * `.run()`-only; `.submit()` / reattach are a follow-up.
+   */
+  batch(recipes: ReadonlyArray<Recipe>): BatchRecipe;
   /**
    * Reattach to a previously-created workflow (FF5a). Returns a client-bound
    * {@link Handle} you can `.status()` / `.wait()` / `.result()`. The handle

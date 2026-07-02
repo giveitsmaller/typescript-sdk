@@ -24,7 +24,7 @@ import type { AccountLimits, CreditsBalanceResponse, CreditsUsageResponse, Opera
 import { OperationBuilder } from './builder.js';
 import { MergeBuilder, type Asset, type MergeOptions } from './merge.js';
 import { PresetDefaults } from './ergonomic/presets/index.js';
-import { Recipe, FilesRecipe, type FileInput } from './file-first.js';
+import { Recipe, FilesRecipe, BatchRecipe, type FileInput } from './file-first.js';
 import { Handle } from './handle.js';
 /**
  * Operations that may be invoked on a `gisl.anonymous()` client without
@@ -106,6 +106,20 @@ export type ErgonomicClient = GislClient & {
      * returns a {@link Handle} whose `wait()`/`result()` partition per input.
      */
     files(inputs: ReadonlyArray<string | Blob | FileInput>): FilesRecipe;
+    /**
+     * Keyed multi-recipe batch entry point (FF7). Run N DISTINCT single-input
+     * keyed {@link Recipe}s as ONE workflow — build each via
+     * `client.file(input, key).<op>(...)` with a UNIQUE key, then
+     * `client.batch([r1, r2, …]).run()`. The partitioned {@link RunResult}
+     * addresses each entry's outputs by its caller key (`res.byKey('hero')`); one
+     * failed entry lands in `failed` without sinking the rest.
+     *
+     * v1 accepts ONLY single-input {@link Recipe} entries — the multi-input
+     * builders ({@link FilesRecipe} via `files(...)`, `merge(...)`, `archive(...)`,
+     * `watermark(...)`) are rejected pre-upload with a typed {@link GislConfigError}.
+     * `.run()`-only; `.submit()` / reattach are a follow-up.
+     */
+    batch(recipes: ReadonlyArray<Recipe>): BatchRecipe;
     /**
      * Reattach to a previously-created workflow (FF5a). Returns a client-bound
      * {@link Handle} you can `.status()` / `.wait()` / `.result()`. The handle

@@ -1028,4 +1028,98 @@ export declare class WatermarkedRecipe {
     private lowerPostSteps;
     private withStep;
 }
+/**
+ * The keyed multi-recipe batch builder (FF7 / MFaCjL8d). `client.batch([r1, r2, …])`
+ * runs N DISTINCT single-input keyed {@link Recipe}s as ONE workflow; the
+ * partitioned {@link RunResult} addresses each entry's outputs by the caller key
+ * given at `client.file(input, key)` time (`res.byKey('hero')`), and one failed
+ * entry lands in `failed` without sinking the rest.
+ *
+ * **v1 scope (locked):** `.run()` only (no `submit()` / reattach — a follow-up);
+ * single-input {@link Recipe} entries only — the multi-input builders
+ * ({@link FilesRecipe}, {@link MergedRecipe}, {@link WatermarkedRecipe},
+ * {@link ArchivedRecipe}) are REJECTED pre-upload; no cross-entry upload dedupe
+ * (each entry's input uploads 1:1, exactly like {@link FilesRecipe}).
+ *
+ * **Lowering (one workflow):** for each entry `i`, lower its single job via
+ * {@link Recipe.toWorkflowPayload} and re-id it `b{i}` — a POSITIONAL namespace
+ * DISTINCT from the fan-out `file-{i}` / merge-archive-watermark `src_{i}` refs so
+ * a future reattach can't misdetect the wire as a fan-out / merge. `keyByRef`
+ * maps each `b{i}` ref to that entry's caller key, so
+ * {@link projectMultiJobToRunResult} partitions per entry (1 job ↔ 1 key:
+ * `completed` → `succeeded`, else → `failed` with a {@link GislItemFailedError}).
+ *
+ * **Immutability:** the ctor is CLIENT-ONLY (the ordered entries + the client) —
+ * entries are already-built Recipes that captured their own preset defaults at
+ * `client.file(...)` time, so batch never re-plumbs
+ * presetDefaults/scopedPresetDefaults. Mirrors the PHP `BatchRecipe`.
+ */
+export declare class BatchRecipe {
+    private readonly client?;
+    private readonly recipes;
+    constructor(recipes: ReadonlyArray<Recipe>, client?: GislClient | undefined);
+    /**
+     * Execute the batch end-to-end: validate + lowering-preflight EVERY entry
+     * BEFORE any upload, upload each entry's input, create ONE multi-job workflow
+     * (one `b{i}` job per entry), await a terminal state (SSE with poll fallback,
+     * honouring `useSSE`), then partition the per-job downloads into a keyed
+     * {@link RunResult}. `partially_failed` is a NORMAL terminal state here — the
+     * completed entries land in `succeeded`, the rest in `failed`.
+     *
+     * Requires a client bound at construction time — `gisl().batch([...])` wires
+     * it; a directly-constructed {@link BatchRecipe} (e.g. a lowering-only test)
+     * throws {@link GislConfigError}. Mirrors the fan-out {@link FilesRecipe.run}.
+     */
+    run(options?: {
+        maxWait?: string | number;
+        onProgress?: (event: ProgressEvent) => void;
+        signal?: AbortSignal;
+        /** Force the poll fallback instead of attempting SSE. Default true (SSE-first, poll fallback). */
+        useSSE?: boolean;
+        pollIntervalMs?: number;
+        probeBeforeCreate?: boolean;
+        probeTimeoutMs?: number;
+    }): Promise<RunResult>;
+    /**
+     * Lower the batch to ONE multi-job workflow-create payload against a list of
+     * resolved upload ids (one per entry, in entry order). Each entry `i` becomes
+     * ONE job re-id'd `b{i}` carrying that entry's lowered `source` + `operations`.
+     * Composes the single-file {@link Recipe.toWorkflowPayload} per entry so each
+     * keeps its own media-hint + preset resolution and lowering logic is not
+     * duplicated. `callback_url` is built in ONLY when a webhook is supplied
+     * (batch v1 run() supplies none, so it is omitted).
+     *
+     * @internal Consumed by {@link run} (after uploading) and the cross-language
+     *   golden-payload lowering test (with fixed ids). Not caller-facing.
+     */
+    toWorkflowPayload(fileIds: readonly string[], callbackUrl?: string): WorkflowCreatePayload;
+    /** The number of recipe entries in this batch (introspection / tests). */
+    get recipeCount(): number;
+    /**
+     * Validate the batch AND lowering-preflight every entry BEFORE any upload
+     * fires — an invalid entry costs no bandwidth. TWO PASSES (mirrors PHP
+     * `BatchRecipe`'s structural-loop-then-preflight-loop), throwing
+     * {@link GislConfigError}:
+     *  0. empty batch → `no_recipes` (checked first).
+     *  PASS 1 (structural, ALL entries in order):
+     *    - a KNOWN multi-input builder (checked FIRST — they do NOT extend
+     *      {@link Recipe}, so the not-a-Recipe catch-all would otherwise misreport
+     *      them as plain type errors) → `multi_input_recipe_unsupported`;
+     *    - a non-{@link Recipe} entry → `invalid_recipe`;
+     *    - a missing/empty key → `missing_key`;
+     *    - a duplicate key → `duplicate_key`.
+     *  PASS 2 (lowering preflight, ALL entries): lower each entry (via
+     *    {@link Recipe.toWorkflowPayload}) so an invalid lowering throws BEFORE any
+     *    upload, mirroring what {@link FilesRecipe} lowers pre-create.
+     *
+     * Two passes so a batch with MULTIPLE distinct violations throws the SAME
+     * reason regardless of entry order (a structural error anywhere wins over a
+     * lowering error elsewhere) — converging TS + PHP error reporting. The
+     * offending key/index rides the MESSAGE (not `conflictingFields`, which is
+     * reserved for wire FIELD names).
+     */
+    private validatePreUpload;
+    /** Map each `b{i}` job ref to that entry's caller key (validated non-empty). */
+    private keyByRef;
+}
 export {};

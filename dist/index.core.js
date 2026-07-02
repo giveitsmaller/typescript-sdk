@@ -55,6 +55,11 @@ export { ArchivedRecipe } from './file-first.js';
 // post-watermark ops on, then run()/submit(). Routes image_watermark / video_watermark
 // by base media; gates planned/unsupported bases locally pre-upload.
 export { WatermarkedRecipe } from './file-first.js';
+// File-first keyed multi-recipe batch (FF7 / MFaCjL8d) — `client.batch([r1, r2, …])`
+// runs N DISTINCT single-input keyed recipes as ONE workflow; run() partitions the
+// RunResult by each entry's caller key. v1 = single-input keyed, run()-only; the
+// multi-input builders are rejected pre-upload.
+export { BatchRecipe } from './file-first.js';
 // `HttpDownloader` (Node streaming downloader) is re-exported from the Node-only
 // entry `index.ts`, NOT here — it statically imports node:fs/node:stream.
 // `projectDownloadsToRunResult` is intentionally NOT re-exported here — it is an

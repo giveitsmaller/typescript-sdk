@@ -92,6 +92,8 @@ import type {
   HttpDownloader,
   // FF3a (u0hBt6fl) — homogeneous fan-out builder (`client.files([...])`).
   FilesRecipe,
+  // FF7 (MFaCjL8d) — keyed multi-recipe batch builder (`client.batch([...])`).
+  BatchRecipe,
   // FF4a (Z7zTr789) — multi-input watermark recipe (`file(b).watermark(overlay)`).
   WatermarkedRecipe,
   WatermarkWireOp,
@@ -348,6 +350,8 @@ export function _runAudit(): void {
   accept<HttpDownloader>();
   // FF3a / u0hBt6fl — homogeneous fan-out builder surface.
   accept<FilesRecipe>();
+  // FF7 / MFaCjL8d — keyed multi-recipe batch builder surface.
+  accept<BatchRecipe>();
   // FF4a / Z7zTr789 — multi-input watermark recipe surface.
   accept<WatermarkedRecipe>();
   accept<WatermarkWireOp>();

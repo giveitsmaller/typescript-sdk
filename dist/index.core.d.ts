@@ -16,6 +16,7 @@ export { ArchivedRecipe } from './file-first.js';
 export type { ArchiveRecipeOptions } from './file-first.js';
 export { WatermarkedRecipe } from './file-first.js';
 export type { WatermarkWireOp } from './file-first.js';
+export { BatchRecipe } from './file-first.js';
 export { Handle, StatusSnapshot } from './handle.js';
 export { gisl, create } from './gisl.js';
 export type { GislCreateOptions, Environment, ErgonomicClient, SingleInputOperationType, MultiInputOperationType, } from './gisl.js';

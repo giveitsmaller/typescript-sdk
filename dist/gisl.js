@@ -23,7 +23,7 @@ import { OperationBuilder } from './builder.js';
 import { validateVerbOptions, validateSingleOpConvertOptions, assertThumbnailDimensions, } from './ergonomic/option_validation.js';
 import { MergeBuilder, asset } from './merge.js';
 import { PresetDefaults } from './ergonomic/presets/index.js';
-import { Recipe, FilesRecipe, fileInput } from './file-first.js';
+import { Recipe, FilesRecipe, BatchRecipe, fileInput } from './file-first.js';
 import { Handle } from './handle.js';
 // ---------------------------------------------------------------------------
 // Anonymous-capable operation allowlist (internal)
@@ -112,6 +112,14 @@ function wrapErgonomic(client, presetDefaults, scopedPresetDefaults) {
                             : input);
                     return new FilesRecipe(resolved, [], presetDefaults, scopedPresetDefaults, target);
                 };
+            }
+            if (prop === 'batch') {
+                // Keyed multi-recipe batch entry point (FF7). Run N DISTINCT single-input
+                // keyed recipes as ONE workflow; run() partitions the RunResult per entry
+                // by the caller key given at `file(input, key)` time. Client-only ctor —
+                // each entry already captured its own preset defaults at `client.file(...)`
+                // time, so batch never re-plumbs presetDefaults/scopedPresetDefaults.
+                return (recipes) => new BatchRecipe(recipes, target);
             }
             if (prop === 'workflow') {
                 // Reattach to a previously-created workflow (FF5a). Returns a

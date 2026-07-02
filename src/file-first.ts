@@ -2996,3 +2996,272 @@ export class WatermarkedRecipe {
     );
   }
 }
+
+/**
+ * The keyed multi-recipe batch builder (FF7 / MFaCjL8d). `client.batch([r1, r2, …])`
+ * runs N DISTINCT single-input keyed {@link Recipe}s as ONE workflow; the
+ * partitioned {@link RunResult} addresses each entry's outputs by the caller key
+ * given at `client.file(input, key)` time (`res.byKey('hero')`), and one failed
+ * entry lands in `failed` without sinking the rest.
+ *
+ * **v1 scope (locked):** `.run()` only (no `submit()` / reattach — a follow-up);
+ * single-input {@link Recipe} entries only — the multi-input builders
+ * ({@link FilesRecipe}, {@link MergedRecipe}, {@link WatermarkedRecipe},
+ * {@link ArchivedRecipe}) are REJECTED pre-upload; no cross-entry upload dedupe
+ * (each entry's input uploads 1:1, exactly like {@link FilesRecipe}).
+ *
+ * **Lowering (one workflow):** for each entry `i`, lower its single job via
+ * {@link Recipe.toWorkflowPayload} and re-id it `b{i}` — a POSITIONAL namespace
+ * DISTINCT from the fan-out `file-{i}` / merge-archive-watermark `src_{i}` refs so
+ * a future reattach can't misdetect the wire as a fan-out / merge. `keyByRef`
+ * maps each `b{i}` ref to that entry's caller key, so
+ * {@link projectMultiJobToRunResult} partitions per entry (1 job ↔ 1 key:
+ * `completed` → `succeeded`, else → `failed` with a {@link GislItemFailedError}).
+ *
+ * **Immutability:** the ctor is CLIENT-ONLY (the ordered entries + the client) —
+ * entries are already-built Recipes that captured their own preset defaults at
+ * `client.file(...)` time, so batch never re-plumbs
+ * presetDefaults/scopedPresetDefaults. Mirrors the PHP `BatchRecipe`.
+ */
+export class BatchRecipe {
+  private readonly recipes: readonly Recipe[];
+
+  constructor(recipes: ReadonlyArray<Recipe>, private readonly client?: GislClient) {
+    // DEFENSIVE COPY (TS-only): snapshot the caller's array so a later mutation
+    // of it (splice/push after construction, or during an in-flight run()) can't
+    // desync the uploaded fileIds from the lowered jobs/keys — validation,
+    // upload, lowering + keyByRef all iterate this frozen order. PHP is
+    // value-semantics-safe already (arrays copy on pass).
+    this.recipes = [...recipes];
+  }
+
+  /**
+   * Execute the batch end-to-end: validate + lowering-preflight EVERY entry
+   * BEFORE any upload, upload each entry's input, create ONE multi-job workflow
+   * (one `b{i}` job per entry), await a terminal state (SSE with poll fallback,
+   * honouring `useSSE`), then partition the per-job downloads into a keyed
+   * {@link RunResult}. `partially_failed` is a NORMAL terminal state here — the
+   * completed entries land in `succeeded`, the rest in `failed`.
+   *
+   * Requires a client bound at construction time — `gisl().batch([...])` wires
+   * it; a directly-constructed {@link BatchRecipe} (e.g. a lowering-only test)
+   * throws {@link GislConfigError}. Mirrors the fan-out {@link FilesRecipe.run}.
+   */
+  async run(
+    options: {
+      maxWait?: string | number;
+      onProgress?: (event: ProgressEvent) => void;
+      signal?: AbortSignal;
+      /** Force the poll fallback instead of attempting SSE. Default true (SSE-first, poll fallback). */
+      useSSE?: boolean;
+      pollIntervalMs?: number;
+      probeBeforeCreate?: boolean;
+      probeTimeoutMs?: number;
+    } = {},
+  ): Promise<RunResult> {
+    const signal = options.signal;
+    const onProgress = options.onProgress;
+    if (this.client === undefined) {
+      throw new GislConfigError(
+        'BatchRecipe.run() requires a client; build the batch via gisl().batch([...]) rather than constructing BatchRecipe directly.',
+        { reason: 'no_client' },
+      );
+    }
+
+    // Validate + lowering-preflight EVERY entry BEFORE any upload: a structural
+    // violation (bad type / missing / duplicate key) or an invalid lowering
+    // aborts here so no input uploads. NOTE — like FilesRecipe, TS does NOT
+    // pre-check path readability: a nonexistent/unreadable path surfaces INSIDE
+    // uploadFile during upload, so an earlier entry's input may already be
+    // uploaded when a later entry's path fails. (PHP pre-checks path/resource
+    // uploadability; this TS/PHP difference mirrors each language's existing
+    // FilesRecipe behavior and is intentionally NOT closed here — a TS
+    // path-precheck would diverge batch from FilesRecipe.)
+    this.validatePreUpload();
+
+    const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 300_000);
+
+    // 1+2. Upload each entry's input + create ONE multi-job workflow. batch v1
+    // sends NO webhook (run()-only), so `callback_url` is omitted from the
+    // payload (the closure receives `callbackUrl` undefined).
+    const created = await _uploadInputsAndCreate(
+      this.client,
+      this.recipes.map((entry) => entry.recipeInput),
+      (fileIds, callbackUrl) => this.toWorkflowPayload(fileIds, callbackUrl),
+      {
+        webhook: undefined,
+        deadline,
+        onProgress,
+        signal,
+        probeBeforeCreate: options.probeBeforeCreate,
+        probeTimeoutMs: options.probeTimeoutMs,
+        uploadsLabel: 'batch',
+        workflowLabel: 'the batch workflow',
+      },
+    );
+
+    // 3. Wait to terminal status — SSE first, poll on a genuine SSE error (or
+    // poll-direct when `useSSE: false`). Caller-aborted + deadline errors
+    // propagate (not transient) — see _awaitTerminal.
+    const finalStatus = await _awaitTerminal(this.client, {
+      workflowId: created.workflowId,
+      deadline,
+      signal,
+      onProgress,
+      pollIntervalMs: options.pollIntervalMs,
+      useSSE: options.useSSE ?? true,
+    });
+
+    // 4. Fetch downloads + project per-job into the keyed RunResult.
+    if (Date.now() >= deadline) {
+      throw new GislTimeoutError(
+        `Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`,
+      );
+    }
+    const downloads = await this.client.getWorkflowDownloads(created.workflowId);
+    // TDqmkWpX: re-check AFTER the downloads fetch so a slow getWorkflowDownloads
+    // cannot return a success past the advertised maxWait deadline.
+    if (Date.now() >= deadline) {
+      throw new GislTimeoutError(
+        `Workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`,
+      );
+    }
+
+    const downloader = new LazyHttpDownloader();
+    return projectMultiJobToRunResult(
+      created.workflowId,
+      finalStatus,
+      downloads.downloads,
+      this.keyByRef(),
+      downloader,
+    );
+  }
+
+  /**
+   * Lower the batch to ONE multi-job workflow-create payload against a list of
+   * resolved upload ids (one per entry, in entry order). Each entry `i` becomes
+   * ONE job re-id'd `b{i}` carrying that entry's lowered `source` + `operations`.
+   * Composes the single-file {@link Recipe.toWorkflowPayload} per entry so each
+   * keeps its own media-hint + preset resolution and lowering logic is not
+   * duplicated. `callback_url` is built in ONLY when a webhook is supplied
+   * (batch v1 run() supplies none, so it is omitted).
+   *
+   * @internal Consumed by {@link run} (after uploading) and the cross-language
+   *   golden-payload lowering test (with fixed ids). Not caller-facing.
+   */
+  toWorkflowPayload(fileIds: readonly string[], callbackUrl?: string): WorkflowCreatePayload {
+    const jobs: JobDefinitionPayload[] = this.recipes.map((entry, i) => {
+      const oneJob = entry.toWorkflowPayload(fileIds[i]).jobs[0];
+      // Positional id `b{i}` — a namespace DISTINCT from the fan-out `file-{i}` /
+      // merge `src_{i}` refs. Key order (id, source, operations) matches the PHP
+      // `toWire()` so the JSON serialisation is byte-identical across languages.
+      return { id: `b${i}`, source: oneJob.source, operations: oneJob.operations };
+    });
+    return callbackUrl === undefined ? { jobs } : { jobs, callback_url: callbackUrl };
+  }
+
+  /** The number of recipe entries in this batch (introspection / tests). */
+  get recipeCount(): number {
+    return this.recipes.length;
+  }
+
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Validate the batch AND lowering-preflight every entry BEFORE any upload
+   * fires — an invalid entry costs no bandwidth. TWO PASSES (mirrors PHP
+   * `BatchRecipe`'s structural-loop-then-preflight-loop), throwing
+   * {@link GislConfigError}:
+   *  0. empty batch → `no_recipes` (checked first).
+   *  PASS 1 (structural, ALL entries in order):
+   *    - a KNOWN multi-input builder (checked FIRST — they do NOT extend
+   *      {@link Recipe}, so the not-a-Recipe catch-all would otherwise misreport
+   *      them as plain type errors) → `multi_input_recipe_unsupported`;
+   *    - a non-{@link Recipe} entry → `invalid_recipe`;
+   *    - a missing/empty key → `missing_key`;
+   *    - a duplicate key → `duplicate_key`.
+   *  PASS 2 (lowering preflight, ALL entries): lower each entry (via
+   *    {@link Recipe.toWorkflowPayload}) so an invalid lowering throws BEFORE any
+   *    upload, mirroring what {@link FilesRecipe} lowers pre-create.
+   *
+   * Two passes so a batch with MULTIPLE distinct violations throws the SAME
+   * reason regardless of entry order (a structural error anywhere wins over a
+   * lowering error elsewhere) — converging TS + PHP error reporting. The
+   * offending key/index rides the MESSAGE (not `conflictingFields`, which is
+   * reserved for wire FIELD names).
+   */
+  private validatePreUpload(): void {
+    if (this.recipes.length === 0) {
+      throw new GislConfigError(
+        'batch() requires at least one recipe. Pass an ordered array of ' +
+          'client.file(input, key).<op>(...) recipes, each with a unique key.',
+        { reason: 'no_recipes' },
+      );
+    }
+    // PASS 1 — structural checks across ALL entries in order.
+    const seenKeys = new Set<string>();
+    this.recipes.forEach((rawEntry, i) => {
+      // Treat each entry as unknown for the runtime type guards: the public
+      // signature is ReadonlyArray<Recipe>, but a plain-JS caller can pass
+      // anything, and the multi-input builders are structurally Recipe-adjacent.
+      const entry: unknown = rawEntry;
+      // ORDER MATTERS (codex r2 #1): check the KNOWN multi-input builders FIRST.
+      // They do NOT extend Recipe, so the not-a-Recipe catch-all below would
+      // otherwise misreport them as plain caller type errors.
+      if (
+        entry instanceof FilesRecipe ||
+        entry instanceof MergedRecipe ||
+        entry instanceof WatermarkedRecipe ||
+        entry instanceof ArchivedRecipe
+      ) {
+        throw new GislConfigError(
+          `batch() entry at index ${i} is a multi-input recipe (${entry.constructor.name}), ` +
+            'which is not supported in batch v1 — batch accepts only single-input keyed recipes ' +
+            '(client.file(input, key).<op>(...)). Run the multi-input recipe on its own.',
+          { reason: 'multi_input_recipe_unsupported' },
+        );
+      }
+      // THEN the catch-all: not a Recipe at all (null / string / plain object).
+      if (!(entry instanceof Recipe)) {
+        throw new GislConfigError(
+          `batch() entry at index ${i} is not a recipe. Build each entry via ` +
+            'client.file(input, key).<op>(...) before passing it to batch().',
+          { reason: 'invalid_recipe' },
+        );
+      }
+      // Keys are the result address → each entry needs a unique, non-empty key.
+      const key = entry.key();
+      if (key === undefined || key === '') {
+        throw new GislConfigError(
+          `batch() entry at index ${i} has no key. Every batch entry needs a unique non-empty key ` +
+            "(client.file(input, 'key')) to address its result.",
+          { reason: 'missing_key' },
+        );
+      }
+      if (seenKeys.has(key)) {
+        throw new GislConfigError(
+          `batch() has a duplicate key '${key}' (entry at index ${i}). Every batch entry needs a unique key.`,
+          { reason: 'duplicate_key' },
+        );
+      }
+      seenKeys.add(key);
+    });
+    // PASS 2 — lowering preflight across ALL entries (each is now known to be a
+    // Recipe). Lower each entry now so an invalid lowering (e.g. an undetectable
+    // input + optimize, an unrepresentable output route) throws BEFORE any
+    // upload. The 'preflight' id is a throwaway placeholder — run() re-lowers
+    // against the real upload ids post-upload.
+    this.recipes.forEach((entry) => {
+      entry.toWorkflowPayload('preflight');
+    });
+  }
+
+  /** Map each `b{i}` job ref to that entry's caller key (validated non-empty). */
+  private keyByRef(): Map<string, string | null> {
+    const map = new Map<string, string | null>();
+    this.recipes.forEach((entry, i) => {
+      map.set(`b${i}`, entry.key() ?? null);
+    });
+    return map;
+  }
+}

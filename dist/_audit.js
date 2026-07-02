@@ -139,6 +139,8 @@ export function _runAudit() {
     accept();
     // FF3a / u0hBt6fl — homogeneous fan-out builder surface.
     accept();
+    // FF7 / MFaCjL8d — keyed multi-recipe batch builder surface.
+    accept();
     // FF4a / Z7zTr789 — multi-input watermark recipe surface.
     accept();
     accept();
