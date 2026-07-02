@@ -159,9 +159,10 @@ export class RunResult {
     toJSON() {
         // Re-project each OutputFile to exactly its known fields so structurally
         // compatible inputs carrying extra properties can't leak into the JSON.
-        // The target-size fields (chosenQuality/targetSizeMet) are OMITTED when
-        // undefined, mirroring PHP's omit-when-null so non-target-size outputs
-        // stay byte-identical across languages.
+        // The projected optional fields (chosenQuality/targetSizeMet and the
+        // auto_quality measuredQuality/qualityMetric) are OMITTED when undefined,
+        // mirroring PHP's omit-when-null so outputs lacking them stay
+        // byte-identical across languages.
         const file = (o) => ({
             url: o.url,
             filename: o.filename,
@@ -169,6 +170,8 @@ export class RunResult {
             operation: o.operation,
             ...(o.chosenQuality !== undefined ? { chosenQuality: o.chosenQuality } : {}),
             ...(o.targetSizeMet !== undefined ? { targetSizeMet: o.targetSizeMet } : {}),
+            ...(o.measuredQuality !== undefined ? { measuredQuality: o.measuredQuality } : {}),
+            ...(o.qualityMetric !== undefined ? { qualityMetric: o.qualityMetric } : {}),
         });
         const rest = {
             artifacts: this.artifacts.map(file),
@@ -230,6 +233,8 @@ export function projectDownloadsToRunResult(workflowId, finalStatus, jobDownload
                 // non-target-size output carries no chosenQuality/targetSizeMet key.
                 ...(f.chosenQuality !== undefined ? { chosenQuality: f.chosenQuality } : {}),
                 ...(f.targetSizeMet !== undefined ? { targetSizeMet: f.targetSizeMet } : {}),
+                ...(f.measuredQuality !== undefined ? { measuredQuality: f.measuredQuality } : {}),
+                ...(f.qualityMetric !== undefined ? { qualityMetric: f.qualityMetric } : {}),
             });
         }
     }
@@ -293,6 +298,8 @@ export function projectMultiJobToRunResult(workflowId, finalStatus, jobDownloads
             // single-job projector).
             ...(f.chosenQuality !== undefined ? { chosenQuality: f.chosenQuality } : {}),
             ...(f.targetSizeMet !== undefined ? { targetSizeMet: f.targetSizeMet } : {}),
+            ...(f.measuredQuality !== undefined ? { measuredQuality: f.measuredQuality } : {}),
+            ...(f.qualityMetric !== undefined ? { qualityMetric: f.qualityMetric } : {}),
         }));
         // The flat artifacts[] keeps every job's outputs in job order.
         artifacts.push(...outputs);

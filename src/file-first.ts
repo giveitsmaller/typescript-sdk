@@ -122,6 +122,19 @@ export interface OutputFile {
    * outputs.
    */
   readonly targetSizeMet?: boolean;
+  /**
+   * The measured perceptual quality of an `auto_quality` encode (0-1). Projected
+   * from the generated {@link OperationDownload.measuredQuality}; undefined
+   * (omitted) when the worker reported no measurement. Pairs with
+   * {@link qualityMetric}, which names the metric it was measured on.
+   */
+  readonly measuredQuality?: number;
+  /**
+   * The metric {@link measuredQuality} was measured on (e.g. `ssimulacra2`).
+   * Projected from the generated {@link OperationDownload.qualityMetric};
+   * undefined when no measurement was reported.
+   */
+  readonly qualityMetric?: string;
 }
 
 /**
@@ -317,9 +330,10 @@ export class RunResult {
   } {
     // Re-project each OutputFile to exactly its known fields so structurally
     // compatible inputs carrying extra properties can't leak into the JSON.
-    // The target-size fields (chosenQuality/targetSizeMet) are OMITTED when
-    // undefined, mirroring PHP's omit-when-null so non-target-size outputs
-    // stay byte-identical across languages.
+    // The projected optional fields (chosenQuality/targetSizeMet and the
+    // auto_quality measuredQuality/qualityMetric) are OMITTED when undefined,
+    // mirroring PHP's omit-when-null so outputs lacking them stay
+    // byte-identical across languages.
     const file = (o: OutputFile): OutputFile => ({
       url: o.url,
       filename: o.filename,
@@ -327,6 +341,8 @@ export class RunResult {
       operation: o.operation,
       ...(o.chosenQuality !== undefined ? { chosenQuality: o.chosenQuality } : {}),
       ...(o.targetSizeMet !== undefined ? { targetSizeMet: o.targetSizeMet } : {}),
+      ...(o.measuredQuality !== undefined ? { measuredQuality: o.measuredQuality } : {}),
+      ...(o.qualityMetric !== undefined ? { qualityMetric: o.qualityMetric } : {}),
     });
     const rest = {
       artifacts: this.artifacts.map(file),
@@ -424,6 +440,8 @@ export function projectDownloadsToRunResult(
         // non-target-size output carries no chosenQuality/targetSizeMet key.
         ...(f.chosenQuality !== undefined ? { chosenQuality: f.chosenQuality } : {}),
         ...(f.targetSizeMet !== undefined ? { targetSizeMet: f.targetSizeMet } : {}),
+        ...(f.measuredQuality !== undefined ? { measuredQuality: f.measuredQuality } : {}),
+        ...(f.qualityMetric !== undefined ? { qualityMetric: f.qualityMetric } : {}),
       });
     }
   }
@@ -501,6 +519,8 @@ export function projectMultiJobToRunResult(
       // single-job projector).
       ...(f.chosenQuality !== undefined ? { chosenQuality: f.chosenQuality } : {}),
       ...(f.targetSizeMet !== undefined ? { targetSizeMet: f.targetSizeMet } : {}),
+      ...(f.measuredQuality !== undefined ? { measuredQuality: f.measuredQuality } : {}),
+      ...(f.qualityMetric !== undefined ? { qualityMetric: f.qualityMetric } : {}),
     }));
     // The flat artifacts[] keeps every job's outputs in job order.
     artifacts.push(...outputs);

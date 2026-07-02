@@ -72,6 +72,19 @@ export interface OutputFile {
      * outputs.
      */
     readonly targetSizeMet?: boolean;
+    /**
+     * The measured perceptual quality of an `auto_quality` encode (0-1). Projected
+     * from the generated {@link OperationDownload.measuredQuality}; undefined
+     * (omitted) when the worker reported no measurement. Pairs with
+     * {@link qualityMetric}, which names the metric it was measured on.
+     */
+    readonly measuredQuality?: number;
+    /**
+     * The metric {@link measuredQuality} was measured on (e.g. `ssimulacra2`).
+     * Projected from the generated {@link OperationDownload.qualityMetric};
+     * undefined when no measurement was reported.
+     */
+    readonly qualityMetric?: string;
 }
 /**
  * One succeeded entry in {@link RunResult.succeeded}: a single input's

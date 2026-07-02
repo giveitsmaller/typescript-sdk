@@ -499,16 +499,19 @@ type _ArtifactDriftAssertion = [
 // FF1 / 3BIxEnfR — drift assertion: the file-first `OutputFile` is a lean
 // projection of `OperationDownload` (`url` aliases `downloadUrl`;
 // `filename`/`sizeBytes`/`operation` verbatim; the target-size outcome
-// `chosenQuality`/`targetSizeMet` projected verbatim per 9u4YGZ4V). A contracts
-// regen that renames or drops one of these breaks here at `tsc --noEmit` (same
-// gating pattern as `_ArtifactDriftAssertion` above).
+// `chosenQuality`/`targetSizeMet` projected verbatim per 9u4YGZ4V; the
+// auto_quality metrics `measuredQuality`/`qualityMetric` per pAVd5oC4). A
+// contracts regen that renames or drops one of these breaks here at
+// `tsc --noEmit` (same gating pattern as `_ArtifactDriftAssertion` above).
 import type { OutputFile as _OutputFile } from './file-first.js';
 type _OutputFileFromDownload =
   | 'filename'
   | 'sizeBytes'
   | 'operation'
   | 'chosenQuality'
-  | 'targetSizeMet';
+  | 'targetSizeMet'
+  | 'measuredQuality'
+  | 'qualityMetric';
 type _OperationDownloadHasOutputFileFields =
   Extract<_OutputFileFromDownload, keyof _OperationDownload> extends _OutputFileFromDownload
     ? true
