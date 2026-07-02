@@ -542,6 +542,29 @@ describe('FilesRecipe.run — happy path', () => {
   });
 });
 
+describe('FilesRecipe.run — SSE transport selection (wf133EDR)', () => {
+  it('attempts the SSE stream by default (SSE-first)', async () => {
+    const mock = makeMockClient();
+    await boundFilesRecipe(mock, fileInput.uploadId('id0'), fileInput.uploadId('id1'))
+      .compress()
+      .run({ maxWait: '30s' });
+    // Default threads useSSE:true → the SSE stream is attempted.
+    expect(mock.streamEvents).toHaveBeenCalled();
+  });
+
+  it('useSSE:false polls directly and never opens the SSE stream', async () => {
+    const mock = makeMockClient();
+    const result = await boundFilesRecipe(mock, fileInput.uploadId('id0'), fileInput.uploadId('id1'))
+      .compress()
+      .run({ maxWait: '30s', useSSE: false });
+    // Poll-direct: streamEvents skipped, terminal resolved via getWorkflowStatus.
+    expect(mock.streamEvents).not.toHaveBeenCalled();
+    expect(mock.getWorkflowStatus).toHaveBeenCalled();
+    expect(result.ok).toBe(true);
+    expect(result.succeeded.map((s) => s.key)).toEqual(['0', '1']);
+  });
+});
+
 describe('FilesRecipe.run — partial failure end-to-end', () => {
   it('a partially_failed workflow yields both partitions with ok=false', async () => {
     const mock = makeMockClient();

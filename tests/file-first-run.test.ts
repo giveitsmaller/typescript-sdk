@@ -285,6 +285,23 @@ describe('Recipe.run — poll fallback', () => {
   });
 });
 
+describe('Recipe.run — useSSE opt-out (wf133EDR)', () => {
+  it('useSSE:false polls directly and never opens the SSE stream', async () => {
+    // Mirrors operation-first builder.test.ts: with useSSE:false the run goes
+    // straight to the poll path — streamEvents is never consulted and the
+    // terminal status is resolved via getWorkflowStatus. Default (SSE-first) is
+    // pinned by the "happy path via SSE" case above (streamEvents called once).
+    const mock = makeMockClient();
+    const result = await recipe(mock).compress().run({ maxWait: '30s', useSSE: false });
+
+    expect(mock.streamEvents).not.toHaveBeenCalled();
+    expect(mock.getWorkflowStatus).toHaveBeenCalled();
+    expect(result.state).toBe('completed');
+    expect(result.ok).toBe(true);
+    expect(result.artifacts).toHaveLength(1);
+  });
+});
+
 describe('Recipe.run — timeout', () => {
   it('throws GislTimeoutError when the deadline elapses before terminal', async () => {
     const mock = makeMockClient();

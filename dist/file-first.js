@@ -446,6 +446,48 @@ export const fileInput = {
     },
 };
 /**
+ * Await a workflow to a terminal status — SSE first with a poll fallback, or
+ * poll-direct when `useSSE` is false. The single shared implementation behind
+ * every file-first `run()` (Recipe, FilesRecipe, MergedRecipe, ArchivedRecipe,
+ * WatermarkedRecipe), mirroring the operation-first
+ * `OperationBuilder.awaitTerminal` (in `builder.ts`). Callers pass
+ * `useSSE: options.useSSE ?? true` so the default stays SSE-first (today's
+ * behaviour); `useSSE: false` skips the SSE attempt entirely and polls —
+ * useful when an intermediary proxy blocks SSE.
+ *
+ * @internal Not part of the caller-facing fluent surface.
+ */
+async function _awaitTerminal(client, args) {
+    if (args.useSSE) {
+        try {
+            return await _consumeSseToTerminal(client, {
+                workflowId: args.workflowId,
+                deadline: args.deadline,
+                signal: args.signal,
+                onProgress: args.onProgress,
+            });
+        }
+        catch (err) {
+            // TDqmkWpX: poll-fallback ONLY on a clean SSE stream-end
+            // (SseEndedWithoutTerminal) or a typed transport error (GislNetworkError).
+            // Everything else — caller-deadline, abort, an API error from /events, an
+            // onProgress callback throw (propagates as-is, NOT wrapped), anything
+            // unexpected — MUST propagate; re-issuing the same doomed request via poll
+            // would mask it. Mirrors the PHP BuilderInternals::awaitTerminal sealed-
+            // marker discipline.
+            if (!(err instanceof SseEndedWithoutTerminal || err instanceof GislNetworkError)) {
+                throw err;
+            }
+        }
+    }
+    return await _pollToTerminal(client, {
+        workflowId: args.workflowId,
+        deadline: args.deadline,
+        signal: args.signal,
+        pollIntervalMs: args.pollIntervalMs,
+    });
+}
+/**
  * The file-first builder value. `client.file(path)` returns a `Recipe`;
  * single-input operations called on it (`compress`, `convert`, `thumbnail`,
  * `textWatermark`) chain SEQUENTIALLY — each op feeds the next, and the chain
@@ -681,35 +723,17 @@ export class Recipe {
         // 1+2. Upload (when required) + create the workflow. Shared with submit()
         // (which passes a webhook → callback_url). run() passes no webhook.
         const created = await this._uploadAndCreate(undefined, deadline, onProgress, signal, options.probeBeforeCreate, options.probeTimeoutMs);
-        // 3. Wait to terminal status — SSE first, poll on a genuine SSE error.
-        // Caller-aborted + deadline-elapsed errors MUST propagate (not transient).
-        let finalStatus;
-        try {
-            finalStatus = await _consumeSseToTerminal(this.client, {
-                workflowId: created.workflowId,
-                deadline,
-                signal,
-                onProgress,
-            });
-        }
-        catch (err) {
-            // TDqmkWpX: poll-fallback ONLY on a clean SSE stream-end
-            // (SseEndedWithoutTerminal) or a typed transport error (GislNetworkError).
-            // Everything else — caller-deadline, abort, an API error from /events, an
-            // onProgress callback throw (propagates as-is, NOT wrapped), anything
-            // unexpected — MUST propagate; re-issuing the same doomed request via poll
-            // would mask it. Mirrors the PHP BuilderInternals::awaitTerminal sealed-
-            // marker discipline.
-            if (!(err instanceof SseEndedWithoutTerminal || err instanceof GislNetworkError)) {
-                throw err;
-            }
-            finalStatus = await _pollToTerminal(this.client, {
-                workflowId: created.workflowId,
-                deadline,
-                signal,
-                pollIntervalMs: options.pollIntervalMs,
-            });
-        }
+        // 3. Wait to terminal status — SSE first, poll on a genuine SSE error
+        // (or poll-direct when `useSSE: false`). Caller-aborted + deadline-elapsed
+        // errors MUST propagate (not transient) — see _awaitTerminal.
+        const finalStatus = await _awaitTerminal(this.client, {
+            workflowId: created.workflowId,
+            deadline,
+            signal,
+            onProgress,
+            pollIntervalMs: options.pollIntervalMs,
+            useSSE: options.useSSE ?? true,
+        });
         // 4. Fetch downloads. The maxWait deadline covers upload + create + wait +
         // downloads, so check before issuing the request (mirrors builder.ts).
         if (Date.now() >= deadline) {
@@ -1463,26 +1487,14 @@ export class FilesRecipe {
         // 3. Wait to terminal status — SSE first, poll on a genuine SSE error.
         // `partially_failed` is a normal terminal state here (the helper treats it
         // as terminal); only caller-aborted / deadline / API errors propagate.
-        let finalStatus;
-        try {
-            finalStatus = await _consumeSseToTerminal(this.client, {
-                workflowId: created.workflowId,
-                deadline,
-                signal,
-                onProgress,
-            });
-        }
-        catch (err) {
-            if (!(err instanceof SseEndedWithoutTerminal || err instanceof GislNetworkError)) {
-                throw err;
-            }
-            finalStatus = await _pollToTerminal(this.client, {
-                workflowId: created.workflowId,
-                deadline,
-                signal,
-                pollIntervalMs: options.pollIntervalMs,
-            });
-        }
+        const finalStatus = await _awaitTerminal(this.client, {
+            workflowId: created.workflowId,
+            deadline,
+            signal,
+            onProgress,
+            pollIntervalMs: options.pollIntervalMs,
+            useSSE: options.useSSE ?? true,
+        });
         // 4. Fetch downloads + project per-job into the partitioned RunResult.
         if (Date.now() >= deadline) {
             throw new GislTimeoutError(`Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`);
@@ -1681,26 +1693,14 @@ export class MergedRecipe {
         }
         const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 300_000);
         const created = await this._uploadAllAndCreate(undefined, deadline, onProgress, signal, options.probeBeforeCreate, options.probeTimeoutMs);
-        let finalStatus;
-        try {
-            finalStatus = await _consumeSseToTerminal(this.client, {
-                workflowId: created.workflowId,
-                deadline,
-                signal,
-                onProgress,
-            });
-        }
-        catch (err) {
-            if (!(err instanceof SseEndedWithoutTerminal || err instanceof GislNetworkError)) {
-                throw err;
-            }
-            finalStatus = await _pollToTerminal(this.client, {
-                workflowId: created.workflowId,
-                deadline,
-                signal,
-                pollIntervalMs: options.pollIntervalMs,
-            });
-        }
+        const finalStatus = await _awaitTerminal(this.client, {
+            workflowId: created.workflowId,
+            deadline,
+            signal,
+            onProgress,
+            pollIntervalMs: options.pollIntervalMs,
+            useSSE: options.useSSE ?? true,
+        });
         if (Date.now() >= deadline) {
             throw new GislTimeoutError(`Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`);
         }
@@ -1904,26 +1904,14 @@ export class ArchivedRecipe {
         }
         const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 300_000);
         const created = await this._uploadAllAndCreate(undefined, deadline, onProgress, signal, options.probeBeforeCreate, options.probeTimeoutMs);
-        let finalStatus;
-        try {
-            finalStatus = await _consumeSseToTerminal(this.client, {
-                workflowId: created.workflowId,
-                deadline,
-                signal,
-                onProgress,
-            });
-        }
-        catch (err) {
-            if (!(err instanceof SseEndedWithoutTerminal || err instanceof GislNetworkError)) {
-                throw err;
-            }
-            finalStatus = await _pollToTerminal(this.client, {
-                workflowId: created.workflowId,
-                deadline,
-                signal,
-                pollIntervalMs: options.pollIntervalMs,
-            });
-        }
+        const finalStatus = await _awaitTerminal(this.client, {
+            workflowId: created.workflowId,
+            deadline,
+            signal,
+            onProgress,
+            pollIntervalMs: options.pollIntervalMs,
+            useSSE: options.useSSE ?? true,
+        });
         if (Date.now() >= deadline) {
             throw new GislTimeoutError(`Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`);
         }
@@ -2109,26 +2097,14 @@ export class WatermarkedRecipe {
         }
         const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 300_000);
         const created = await this._uploadAllAndCreate(undefined, deadline, onProgress, signal, options.probeBeforeCreate, options.probeTimeoutMs);
-        let finalStatus;
-        try {
-            finalStatus = await _consumeSseToTerminal(this.client, {
-                workflowId: created.workflowId,
-                deadline,
-                signal,
-                onProgress,
-            });
-        }
-        catch (err) {
-            if (!(err instanceof SseEndedWithoutTerminal || err instanceof GislNetworkError)) {
-                throw err;
-            }
-            finalStatus = await _pollToTerminal(this.client, {
-                workflowId: created.workflowId,
-                deadline,
-                signal,
-                pollIntervalMs: options.pollIntervalMs,
-            });
-        }
+        const finalStatus = await _awaitTerminal(this.client, {
+            workflowId: created.workflowId,
+            deadline,
+            signal,
+            onProgress,
+            pollIntervalMs: options.pollIntervalMs,
+            useSSE: options.useSSE ?? true,
+        });
         if (Date.now() >= deadline) {
             throw new GislTimeoutError(`Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`);
         }

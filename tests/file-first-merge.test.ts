@@ -193,3 +193,91 @@ describe('MergedRecipe.run — timeout label', () => {
     expect(createWorkflow).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// run() — SSE transport selection (wf133EDR). MergedRecipe.run() had no
+// happy-path double-driven test; these drive it end-to-end via vi.fn client
+// doubles (mirrors file-first-archive.test.ts) to pin BOTH the default
+// SSE-first path and the useSSE:false poll-direct opt-out. Mirrors the PHP
+// MergedRecipeTest run cases.
+// ---------------------------------------------------------------------------
+
+interface MockClientHandles {
+  uploadFile: ReturnType<typeof vi.fn>;
+  createWorkflow: ReturnType<typeof vi.fn>;
+  getWorkflowStatus: ReturnType<typeof vi.fn>;
+  getWorkflowDownloads: ReturnType<typeof vi.fn>;
+  streamEvents: ReturnType<typeof vi.fn>;
+  maybeWaitForVideoProbe: ReturnType<typeof vi.fn>;
+  client: GislClient;
+}
+
+function makeMockClient(): MockClientHandles {
+  const uploadFile = vi.fn(async (_input: string | Blob) => ({
+    fileId: 'uploaded',
+    contentType: 'video/mp4',
+    sizeBytes: 1024,
+  }));
+  const createWorkflow = vi.fn(async (_payload: unknown) => ({ workflowId: 'wf_1', status: 'running' }));
+  const getWorkflowStatus = vi.fn(async (_id: string) => ({
+    workflowId: 'wf_1',
+    status: 'completed',
+    jobs: [{ ref: 'merge', status: 'completed', operations: [] }],
+  }));
+  // The downloads carry the src_* passthrough re-exposures of the raw uploads
+  // ALONGSIDE the merge output, so run()'s `ref === 'merge'` filter is exercised.
+  const getWorkflowDownloads = vi.fn(async (_id: string) => ({
+    downloads: [
+      { ref: 'src_0', files: [{ operation: 'passthrough', operationId: 's0', filename: 'a.mp4', sizeBytes: 1, downloadUrl: 'https://signed.example.com/a.mp4' }] },
+      { ref: 'src_1', files: [{ operation: 'passthrough', operationId: 's1', filename: 'b.mp4', sizeBytes: 1, downloadUrl: 'https://signed.example.com/b.mp4' }] },
+      { ref: 'merge', files: [{ operation: 'merge', operationId: 'om', filename: 'merged.mp4', sizeBytes: 99, downloadUrl: 'https://signed.example.com/merged.mp4' }] },
+    ],
+  }));
+  const streamEvents = vi.fn(async function* (_id: string) {
+    yield { event: 'workflow.completed', data: { status: 'completed' } };
+  });
+  const maybeWaitForVideoProbe = vi.fn(async () => undefined);
+  const client = {
+    uploadFile,
+    createWorkflow,
+    getWorkflowStatus,
+    getWorkflowDownloads,
+    streamEvents,
+    maybeWaitForVideoProbe,
+  } as unknown as GislClient;
+  return { uploadFile, createWorkflow, getWorkflowStatus, getWorkflowDownloads, streamEvents, maybeWaitForVideoProbe, client };
+}
+
+/** A client-bound video MergedRecipe (mediaKind video needs no output_type). */
+function boundMergedRecipe(mock: MockClientHandles): MergedRecipe {
+  return new MergedRecipe(
+    [fileInput.path('a.mp4'), fileInput.path('b.mp4')],
+    { mediaKind: 'video' },
+    [],
+    undefined,
+    undefined,
+    mock.client,
+  );
+}
+
+describe('MergedRecipe.run — SSE transport selection (wf133EDR)', () => {
+  it('attempts the SSE stream by default (SSE-first)', async () => {
+    const mock = makeMockClient();
+    const result = await boundMergedRecipe(mock).run({ maxWait: '30s' });
+    expect(mock.streamEvents).toHaveBeenCalled();
+    expect(result.state).toBe('completed');
+    expect(result.artifacts.map((a) => a.filename)).toEqual(['merged.mp4']);
+  });
+
+  it('useSSE:false polls directly and never opens the SSE stream', async () => {
+    const mock = makeMockClient();
+    const result = await boundMergedRecipe(mock).run({ maxWait: '30s', useSSE: false });
+    // Poll-direct: streamEvents skipped, terminal resolved via getWorkflowStatus.
+    expect(mock.streamEvents).not.toHaveBeenCalled();
+    expect(mock.getWorkflowStatus).toHaveBeenCalled();
+    expect(result.state).toBe('completed');
+    // ONLY the merge output is projected — the src_* passthroughs are filtered.
+    expect(result.artifacts.map((a) => a.filename)).toEqual(['merged.mp4']);
+    expect(result.url).toBe('https://signed.example.com/merged.mp4');
+  });
+});

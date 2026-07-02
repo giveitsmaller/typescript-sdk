@@ -369,6 +369,28 @@ describe('WatermarkedRecipe.run — happy path through the shared helper', () =>
   });
 });
 
+describe('WatermarkedRecipe.run — SSE transport selection (wf133EDR)', () => {
+  it('attempts the SSE stream by default (SSE-first)', async () => {
+    const mock = makeMockClient();
+    await boundBase(mock)
+      .watermark(new Recipe(fileInput.path('logo.png')), { anchor: 'center' })
+      .run({ maxWait: '30s' });
+    expect(mock.streamEvents).toHaveBeenCalled();
+  });
+
+  it('useSSE:false polls directly and never opens the SSE stream', async () => {
+    const mock = makeMockClient();
+    const result = await boundBase(mock)
+      .watermark(new Recipe(fileInput.path('logo.png')), { anchor: 'center' })
+      .run({ maxWait: '30s', useSSE: false });
+    // Poll-direct: streamEvents skipped, terminal resolved via getWorkflowStatus.
+    expect(mock.streamEvents).not.toHaveBeenCalled();
+    expect(mock.getWorkflowStatus).toHaveBeenCalled();
+    expect(result.state).toBe('completed');
+    expect(result.artifacts.map((a) => a.filename)).toEqual(['photo_watermarked.jpg']);
+  });
+});
+
 describe('WatermarkedRecipe.run — timeout label', () => {
   // Pin the watermark label noun the shared helper threads into its timeout
   // message. A mid-batch deadline (maxWait 1ms + a slow first upload over the

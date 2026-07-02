@@ -479,6 +479,8 @@ export declare class Recipe {
         maxWait?: string | number;
         onProgress?: (event: ProgressEvent) => void;
         signal?: AbortSignal;
+        /** Force the poll fallback instead of attempting SSE. Default true (SSE-first, poll fallback). */
+        useSSE?: boolean;
         pollIntervalMs?: number;
         probeBeforeCreate?: boolean;
         probeTimeoutMs?: number;
@@ -694,6 +696,8 @@ export declare class FilesRecipe {
         maxWait?: string | number;
         onProgress?: (event: ProgressEvent) => void;
         signal?: AbortSignal;
+        /** Force the poll fallback instead of attempting SSE. Default true (SSE-first, poll fallback). */
+        useSSE?: boolean;
         pollIntervalMs?: number;
         probeBeforeCreate?: boolean;
         probeTimeoutMs?: number;
@@ -801,6 +805,8 @@ export declare class MergedRecipe {
         maxWait?: string | number;
         onProgress?: (event: ProgressEvent) => void;
         signal?: AbortSignal;
+        /** Force the poll fallback instead of attempting SSE. Default true (SSE-first, poll fallback). */
+        useSSE?: boolean;
         pollIntervalMs?: number;
         probeBeforeCreate?: boolean;
         probeTimeoutMs?: number;
@@ -900,6 +906,8 @@ export declare class ArchivedRecipe {
         maxWait?: string | number;
         onProgress?: (event: ProgressEvent) => void;
         signal?: AbortSignal;
+        /** Force the poll fallback instead of attempting SSE. Default true (SSE-first, poll fallback). */
+        useSSE?: boolean;
         pollIntervalMs?: number;
         probeBeforeCreate?: boolean;
         probeTimeoutMs?: number;
@@ -980,6 +988,8 @@ export declare class WatermarkedRecipe {
         maxWait?: string | number;
         onProgress?: (event: ProgressEvent) => void;
         signal?: AbortSignal;
+        /** Force the poll fallback instead of attempting SSE. Default true (SSE-first, poll fallback). */
+        useSSE?: boolean;
         pollIntervalMs?: number;
         probeBeforeCreate?: boolean;
         probeTimeoutMs?: number;
