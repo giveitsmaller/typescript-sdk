@@ -1,4 +1,6 @@
 import type { AuthErrorResponse, AuthRejectionEnvelope, AuthRejectionEnvelopeErrorTypeEnum, BalanceExhaustedResponse, FeatureNotAvailableResponse, FeatureTierRestrictedResponse, ProbePendingResponse, TierRestrictionResponse, UploadDurationExceedsTierResponse, UploadSizeExceedsTierResponse, WorkflowExpiredResponse } from '@giveitsmaller/contracts/openapi';
+import type { ErrorCategory } from './generated/sdk_spec/errors.js';
+import type { RateLimitSnapshot } from './retry-metadata.js';
 export declare class GislError extends Error {
     constructor(message: string);
 }
@@ -71,6 +73,42 @@ export declare class GislApiError extends GislError {
      */
     readonly contentLanguage?: string;
     constructor(statusCode: number, errorMessage: string, path?: string, details?: unknown, options?: GislApiErrorOptions);
+    /**
+     * Resolve the generated `ERROR_CODES` entry for this error, SOURCE-AWARE
+     * (plan D1). ~9 registry codes are keyed by the `error_type` discriminator
+     * rather than the envelope `error` field, so try the typed discriminator
+     * FIRST (camel `errorType`, raw-snake `error_type` fallback), then fall back
+     * to the flat machine {@link errorCode}. Returns `undefined` when neither
+     * resolves — e.g. a bare base error whose payload carries no discriminator.
+     * NEVER throws on a missing payload / discriminator.
+     */
+    private resolveErrorEntry;
+    /**
+     * Whether retrying this request could plausibly succeed. `true` when the HTTP
+     * status is inherently retryable (408 / 429 / 5xx) OR the resolved taxonomy
+     * entry marks the code retryable (e.g. `probe_pending`). Note: logical OR
+     * (not `??`) — a 429 is retryable regardless of the taxonomy, and a
+     * registry-retryable code is retryable regardless of status.
+     */
+    get retryable(): boolean;
+    /**
+     * The taxonomy category for this error's machine code, from the generated
+     * `ERROR_CODES` registry, or `undefined` when the code isn't in the registry
+     * (e.g. a bare base error whose payload carries no discriminator).
+     */
+    get category(): ErrorCategory | undefined;
+    /**
+     * The rate-limit snapshot parsed from the `x-ratelimit-*` response headers,
+     * or `undefined` when they aren't all present as non-negative integers. Read
+     * this after a 429 to schedule a back-off.
+     */
+    get rateLimit(): RateLimitSnapshot | undefined;
+    /**
+     * The server-suggested back-off delay in whole seconds, parsed from the
+     * `Retry-After` response header, or `undefined` when absent / zero / past /
+     * malformed. Mirrors the retry-loop parser's semantics.
+     */
+    get retryAfterSeconds(): number | undefined;
 }
 /**
  * Shape of a single validation detail entry. Mirrors the v2

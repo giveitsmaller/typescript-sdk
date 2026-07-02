@@ -5,6 +5,7 @@ export { uploadSource, jobOutputSource, externalImportSource, connectionSource, 
 export type { GislConfigErrorMetadata } from './errors.js';
 export { GislError, GislApiError, GislValidationError, GislBalanceExhaustedError, GislTierRestrictedError, GislFeatureTierRestrictedError, GislFeatureNotAvailableError, GislWorkflowExpiredError, GislProbePendingError, GislAuthError, GislUploadCapExceededError, GislMultipartPartError, GislMultipartPartCountError, GislMultipartSessionNotFoundError, GislMultipartSessionOwnershipError, GislMultipartSessionAuthRequiredError, GislTimeoutError, GislAbortError, GislNetworkError, GislConfigError, GislMissingCredentialsError, GislFeatureRequiresAuthError, GislUndeclaredAssetError, GislUnusedAssetError, GislPerInputOptionsNotSupportedError, GislChainCardinalityMismatchError, GislBundleAlreadyArchivedError, GislNoSuchKeyError, GislSinkError, GislItemFailedError, GislResultNotReadyError, } from './errors.js';
 export type { GislApiErrorOptions, GislUploadCapKind } from './errors.js';
+export type { ErrorCategory } from './generated/sdk_spec/errors.js';
 export { RunResult } from './file-first.js';
 export type { OutputFile, ItemResult, ItemFailure, Manifest, Downloader, } from './file-first.js';
 export { Recipe, fileInput } from './file-first.js';

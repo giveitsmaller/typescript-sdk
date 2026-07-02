@@ -120,6 +120,12 @@ export {
   GislResultNotReadyError,
 } from './errors.js';
 export type { GislApiErrorOptions, GislUploadCapKind } from './errors.js';
+// W8v4jWzx — the error-taxonomy category union surfaced by
+// `GislApiError.category`. Type-ONLY export (zero-runtime): the generated
+// `ERROR_CODES` / `ERROR_CATEGORIES` runtime VALUES are intentionally NOT
+// re-exported — pulling the full registry into this browser-safe barrel would
+// bloat the bundle. Consumers narrow structurally on the string union.
+export type { ErrorCategory } from './generated/sdk_spec/errors.js';
 
 // File-first result surface (FF1 / 3BIxEnfR) — coexists with the
 // operation-first `Result`/`Artifact` until FF6 removes the old layer.

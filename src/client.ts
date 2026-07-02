@@ -103,6 +103,10 @@ import {
   GislValidationError,
   GislWorkflowExpiredError,
 } from './errors.js';
+// The `Retry-After` millisecond parser lives in the shared retry-metadata
+// module (extracted to break the client ↔ errors circular import); re-imported
+// here so the retry-loop timing stays byte-identical.
+import { parseRetryAfterMs } from './retry-metadata.js';
 import { parseSseStream } from './sse.js';
 import type {
   CreditsUsageOptions,
@@ -305,28 +309,6 @@ function isRetryableStatus(status: number): boolean {
 // before reaching here by the dedicated isAbortError guard in the catch.
 function isRetryableNetworkError(err: unknown): boolean {
   return err instanceof TypeError;
-}
-
-// Parse an HTTP `Retry-After` header into milliseconds. Accepts the two RFC
-// 9110 forms: delta-seconds (e.g. "5") or an HTTP-date. Returns `undefined`
-// for an absent / unparseable / negative value (caller falls back to its own
-// backoff). A past HTTP-date clamps to 0.
-function parseRetryAfterMs(headerValue: string | undefined): number | undefined {
-  if (headerValue === undefined) return undefined;
-  const trimmed = headerValue.trim();
-  if (trimmed === '') return undefined;
-  let ms: number;
-  if (/^\d+$/.test(trimmed)) {
-    ms = Number(trimmed) * 1000;
-  } else {
-    const when = Date.parse(trimmed);
-    if (Number.isNaN(when)) return undefined;
-    ms = when - Date.now();
-  }
-  // A non-positive Retry-After (e.g. "0" or a past HTTP-date) must NOT short-
-  // circuit the backoff to zero — treat it as absent so the caller falls back
-  // to jitter and the loop can't busy-poll until timeout.
-  return ms > 0 ? ms : undefined;
 }
 
 // Cancellable sleep for poll loops. Resolves after `ms`, or rejects with

@@ -6,6 +6,10 @@
 import { open, stat, basename } from './node-fs.js';
 import { AudioWatermarkDecodeRequestToJSON, AudioWatermarkDecodeResponseFromJSON, ExternalImportCreatedResponseFromJSON, ExternalImportRequestToJSON, LoginUser200ResponseDataFromJSON, AccountLimitsFromJSON, CreditsBalanceResponseFromJSON, CreditsUsageResponseFromJSON, UploadResponseFromJSON, UploadProbeResponseFromJSON, MultipartInitiateResponseFromJSON, MultipartInitiateRequestMetadataHintToJSON, MultipartCompleteResponseFromJSON, MultipartCompleteRequestToJSON, WorkflowCancelResponseFromJSON, WorkflowCreateResponseFromJSON, WorkflowResumeResponseFromJSON, WorkflowStatusResponseFromJSON, WorkflowListResponseFromJSON, WorkflowDownloadResponseFromJSON, MetadataResponseFromJSON, OperationsSchemaResponseFromJSON, RetryResponseFromJSON, WorkflowStatus, AuthErrorResponseFromJSON, AuthErrorType, AuthRejectionEnvelopeFromJSON, AuthRejectionEnvelopeErrorTypeEnum, BalanceExhaustedResponseFromJSON, BalanceExhaustedResponseRequiredActionEnum, FeatureNotAvailableResponseFromJSON, FeatureTierRestrictedResponseFromJSON, TierRestrictionKind, TierRestrictionResponseFromJSON, UserTier, WorkflowExpiredResponseFromJSON, ProbePendingResponseFromJSON, UploadSizeExceedsTierResponseFromJSON, UploadDurationExceedsTierResponseFromJSON, UploadConstraintsAppliedProcessingClassPreAssignmentEnum, UploadThresholdsSingleShotMaxBytesEnum, UploadThresholdsMultipartChunkSizeEnum, UploadThresholdsMultipartConcurrencyDefaultEnum, } from '@giveitsmaller/contracts/openapi';
 import { GislAbortError, GislApiError, GislAuthError, GislAuthRejectionError, GislBalanceExhaustedError, GislError, GislFeatureNotAvailableError, GislFeatureTierRestrictedError, GislMultipartPartCountError, GislMultipartPartError, GislMultipartSessionNotFoundError, GislMultipartSessionOwnershipError, GislMultipartSessionAuthRequiredError, GislTierRestrictedError, GislTimeoutError, GislProbePendingError, GislUploadCapExceededError, GislValidationError, GislWorkflowExpiredError, } from './errors.js';
+// The `Retry-After` millisecond parser lives in the shared retry-metadata
+// module (extracted to break the client ↔ errors circular import); re-imported
+// here so the retry-loop timing stays byte-identical.
+import { parseRetryAfterMs } from './retry-metadata.js';
 import { parseSseStream } from './sse.js';
 const DEFAULT_TIMEOUT_MS = 30_000;
 // SDK-internal aliases derived from the contract-pinned UploadThresholds enums
@@ -122,31 +126,6 @@ function isRetryableStatus(status) {
 // before reaching here by the dedicated isAbortError guard in the catch.
 function isRetryableNetworkError(err) {
     return err instanceof TypeError;
-}
-// Parse an HTTP `Retry-After` header into milliseconds. Accepts the two RFC
-// 9110 forms: delta-seconds (e.g. "5") or an HTTP-date. Returns `undefined`
-// for an absent / unparseable / negative value (caller falls back to its own
-// backoff). A past HTTP-date clamps to 0.
-function parseRetryAfterMs(headerValue) {
-    if (headerValue === undefined)
-        return undefined;
-    const trimmed = headerValue.trim();
-    if (trimmed === '')
-        return undefined;
-    let ms;
-    if (/^\d+$/.test(trimmed)) {
-        ms = Number(trimmed) * 1000;
-    }
-    else {
-        const when = Date.parse(trimmed);
-        if (Number.isNaN(when))
-            return undefined;
-        ms = when - Date.now();
-    }
-    // A non-positive Retry-After (e.g. "0" or a past HTTP-date) must NOT short-
-    // circuit the backoff to zero — treat it as absent so the caller falls back
-    // to jitter and the loop can't busy-poll until timeout.
-    return ms > 0 ? ms : undefined;
 }
 // Cancellable sleep for poll loops. Resolves after `ms`, or rejects with
 // `GislAbortError` if `signal` aborts. Resolves immediately for ms <= 0.

@@ -121,6 +121,10 @@ import type {
   CreditsUsageResponse,
   CreditsUsageOptions,
 } from './index.js';
+// W8v4jWzx — the error-taxonomy category union surfaced by
+// `GislApiError.category`. Imported via `./index.js` so dropping the type-only
+// re-export breaks `tsc --noEmit` here.
+import type { ErrorCategory } from './index.js';
 
 // Ergonomic-layer entry points (T1 / wVU4xHx3) — `gisl.create()` factory
 // + credential-chain types + the new local-error tree (GislConfigError +
@@ -362,4 +366,6 @@ export function _runAudit(): void {
   accept<OperationCapability>();
   accept<OutputProperties>();
   accept<ImageEncodeCapabilities>();
+  // W8v4jWzx — error-taxonomy category union surfaced by GislApiError.category.
+  accept<ErrorCategory>();
 }

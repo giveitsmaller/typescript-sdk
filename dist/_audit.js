@@ -157,4 +157,6 @@ export function _runAudit() {
     accept();
     accept();
     accept();
+    // W8v4jWzx — error-taxonomy category union surfaced by GislApiError.category.
+    accept();
 }

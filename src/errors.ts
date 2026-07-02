@@ -11,6 +11,22 @@ import type {
   UploadSizeExceedsTierResponse,
   WorkflowExpiredResponse,
 } from '@giveitsmaller/contracts/openapi';
+// W8v4jWzx — the generated error-taxonomy registry stays INTERNAL to this
+// module (only the `ErrorCategory` TYPE is re-exported from the public barrel).
+import { ERROR_CODES } from './generated/sdk_spec/errors.js';
+import type { ErrorCategory, ErrorCode, ErrorEntry } from './generated/sdk_spec/errors.js';
+import {
+  isApiRetryableStatus,
+  rateLimitFromHeaders,
+  retryAfterSecondsFromHeaders,
+} from './retry-metadata.js';
+import type { RateLimitSnapshot } from './retry-metadata.js';
+
+// Registry keys are lowercase_snake; normalise the wire code / discriminator
+// (trim + lowercase) before looking it up in ERROR_CODES.
+function normalizeErrorCode(rawCode: string): string {
+  return rawCode.trim().toLowerCase();
+}
 
 export class GislError extends Error {
   constructor(message: string) {
@@ -114,6 +130,73 @@ export class GislApiError extends GislError {
       this.responseHeaders = options.responseHeaders;
       this.contentLanguage = options.contentLanguage;
     }
+  }
+
+  /**
+   * Resolve the generated `ERROR_CODES` entry for this error, SOURCE-AWARE
+   * (plan D1). ~9 registry codes are keyed by the `error_type` discriminator
+   * rather than the envelope `error` field, so try the typed discriminator
+   * FIRST (camel `errorType`, raw-snake `error_type` fallback), then fall back
+   * to the flat machine {@link errorCode}. Returns `undefined` when neither
+   * resolves — e.g. a bare base error whose payload carries no discriminator.
+   * NEVER throws on a missing payload / discriminator.
+   */
+  private resolveErrorEntry(): ErrorEntry | undefined {
+    const payload = this.payload as
+      | { errorType?: unknown; error_type?: unknown }
+      | undefined;
+    const rawErrorType = payload?.errorType ?? payload?.error_type;
+    if (typeof rawErrorType === 'string') {
+      const byType: ErrorEntry | undefined =
+        ERROR_CODES[normalizeErrorCode(rawErrorType) as ErrorCode];
+      if (byType !== undefined) return byType;
+    }
+    if (this.errorCode !== undefined) {
+      const byCode: ErrorEntry | undefined =
+        ERROR_CODES[normalizeErrorCode(this.errorCode) as ErrorCode];
+      if (byCode !== undefined) return byCode;
+    }
+    return undefined;
+  }
+
+  /**
+   * Whether retrying this request could plausibly succeed. `true` when the HTTP
+   * status is inherently retryable (408 / 429 / 5xx) OR the resolved taxonomy
+   * entry marks the code retryable (e.g. `probe_pending`). Note: logical OR
+   * (not `??`) — a 429 is retryable regardless of the taxonomy, and a
+   * registry-retryable code is retryable regardless of status.
+   */
+  get retryable(): boolean {
+    return (
+      isApiRetryableStatus(this.statusCode) || (this.resolveErrorEntry()?.retryable ?? false)
+    );
+  }
+
+  /**
+   * The taxonomy category for this error's machine code, from the generated
+   * `ERROR_CODES` registry, or `undefined` when the code isn't in the registry
+   * (e.g. a bare base error whose payload carries no discriminator).
+   */
+  get category(): ErrorCategory | undefined {
+    return this.resolveErrorEntry()?.category;
+  }
+
+  /**
+   * The rate-limit snapshot parsed from the `x-ratelimit-*` response headers,
+   * or `undefined` when they aren't all present as non-negative integers. Read
+   * this after a 429 to schedule a back-off.
+   */
+  get rateLimit(): RateLimitSnapshot | undefined {
+    return rateLimitFromHeaders(this.responseHeaders);
+  }
+
+  /**
+   * The server-suggested back-off delay in whole seconds, parsed from the
+   * `Retry-After` response header, or `undefined` when absent / zero / past /
+   * malformed. Mirrors the retry-loop parser's semantics.
+   */
+  get retryAfterSeconds(): number | undefined {
+    return retryAfterSecondsFromHeaders(this.responseHeaders);
   }
 }
 
