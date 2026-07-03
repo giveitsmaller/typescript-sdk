@@ -483,14 +483,23 @@ type _OperationResultOutputEntryDriftAssertion = _AssertTrue<_OperationResultOut
 // initially missing).
 import type { OperationDownload as _OperationDownload } from '@giveitsmaller/contracts/openapi';
 import type { Artifact as _Artifact } from './builder.js';
+// Shared drift primitive: assert every field name in the union `F` is a key of
+// the source type `S`. `Exclude<F, keyof S>` is the set of `F` members NOT
+// backed by `S`; the 1-tuple wrap (`[X] extends [never]`) makes the check
+// non-distributive so `F` is tested as a whole (and sidesteps naked-parameter
+// distribution). Resolves to `true` when all backed, else a DRIFT tuple naming
+// the offending field(s). Both positive guards below AND the negative control
+// at the end of this block instantiate this ONE generic, so a regression that
+// neuters it (e.g. reverting to a `keyof`-superset tautology) fails the negative
+// control's `@ts-expect-error` too — not merely its own private copy.
+type _AllBackedBy<F extends string, S> = [Exclude<F, keyof S>] extends [never]
+  ? true
+  : ['DRIFT: field(s) not backed by source', Exclude<F, keyof S>];
 // The Artifact fields that MUST be backed by OperationDownload:
 type _ArtifactFromDownload = 'filename' | 'sizeBytes' | 'operation' | 'operationId' | 'pageIndex' | 'position';
-// Confirm each of these exists on OperationDownload. If a field is
-// renamed/dropped upstream, the Extract becomes `never` and the assert
-// below fires.
-type _OperationDownloadHasFields = Extract<_ArtifactFromDownload, keyof _OperationDownload> extends _ArtifactFromDownload
-  ? true
-  : ['DRIFT: OperationDownload missing one of', _ArtifactFromDownload];
+// Confirm each exists on OperationDownload; a renamed/dropped field upstream
+// makes this resolve to the DRIFT tuple and fires the assert below.
+type _OperationDownloadHasFields = _AllBackedBy<_ArtifactFromDownload, _OperationDownload>;
 // Confirm OperationDownload.downloadUrl exists (the `url` alias source):
 type _OperationDownloadHasDownloadUrl = 'downloadUrl' extends keyof _OperationDownload
   ? true
@@ -523,10 +532,7 @@ type _OutputFileFromDownload =
   | 'targetSizeMet'
   | 'measuredQuality'
   | 'qualityMetric';
-type _OperationDownloadHasOutputFileFields =
-  Extract<_OutputFileFromDownload, keyof _OperationDownload> extends _OutputFileFromDownload
-    ? true
-    : ['DRIFT: OperationDownload missing one of', _OutputFileFromDownload];
+type _OperationDownloadHasOutputFileFields = _AllBackedBy<_OutputFileFromDownload, _OperationDownload>;
 type _OutputFileHasUrl = 'url' extends keyof _OutputFile
   ? true
   : ['DRIFT: OutputFile.url missing'];
@@ -535,6 +541,20 @@ type _OutputFileDriftAssertion = [
   _AssertTrue<_OperationDownloadHasOutputFileFields>,
   _AssertTrue<_OutputFileHasUrl>,
 ];
+
+// Negative control — coupled to the guards above via the shared `_AllBackedBy`.
+// `'__drift_probe__'` is not a key of OperationDownload, so `_AllBackedBy`
+// resolves to the DRIFT tuple and `_AssertTrue` must reject it; the
+// `@ts-expect-error` asserts exactly that failure. If `_AllBackedBy` ever
+// regresses to always-`true`, both positive guards silently pass AND
+// `_AssertTrue<true>` compiles here, leaving the directive unused → tsc errors
+// ("unused '@ts-expect-error'"), re-surfacing the regression at build time.
+// (No `eslint-disable-next-line` here: it must not sit between the directive and
+// the asserted line, and eslint is not wired into this repo's CI anyway. Caveat:
+// the directive suppresses the first error on the next line, so renaming
+// `_AssertTrue` could mask a real failure — acceptable.)
+// @ts-expect-error — '__drift_probe__' is not a key of OperationDownload, so the guard must fail to compile
+type _DriftGuardNegativeControl = _AssertTrue<_AllBackedBy<'__drift_probe__', _OperationDownload>>;
 
 // Re-export all operation option types
 export type {
