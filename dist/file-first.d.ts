@@ -1039,8 +1039,12 @@ export declare class WatermarkedRecipe {
  * **v1 scope (locked):** `.run()` only (no `submit()` / reattach — a follow-up);
  * single-input {@link Recipe} entries only — the multi-input builders
  * ({@link FilesRecipe}, {@link MergedRecipe}, {@link WatermarkedRecipe},
- * {@link ArchivedRecipe}) are REJECTED pre-upload; no cross-entry upload dedupe
- * (each entry's input uploads 1:1, exactly like {@link FilesRecipe}).
+ * {@link ArchivedRecipe}) are REJECTED pre-upload. Cross-entry upload dedupe
+ * IS applied (1LwSJcz1): two entries sourcing the SAME input (by
+ * {@link inputIdentity}) upload ONCE and share the resulting fileId —
+ * correctness-neutral (same bytes → same per-job output), it only elides
+ * redundant uploads. Observable caveat: `onProgress` upload-phase events drop
+ * to one-per-UNIQUE input rather than one-per-entry.
  *
  * **Lowering (one workflow):** for each entry `i`, lower its single job via
  * {@link Recipe.toWorkflowPayload} and re-id it `b{i}` — a POSITIONAL namespace
@@ -1120,6 +1124,15 @@ export declare class BatchRecipe {
      * reserved for wire FIELD names).
      */
     private validatePreUpload;
+    /**
+     * Collapse the entry inputs to a first-appearance-unique list for cross-entry
+     * upload dedupe: two entries sourcing the SAME input (by {@link inputIdentity})
+     * upload ONCE and share the fileId. Returns the ordered `uniqueInputs` plus an
+     * `entryToUnique` index map (length N, entry order) so {@link run} can expand
+     * the unique fileIds back to one-per-entry before {@link toWorkflowPayload} —
+     * keeping the b{i} refs + {@link keyByRef} N-length and correctness-neutral.
+     */
+    private planUploads;
     /** Map each `b{i}` job ref to that entry's caller key (validated non-empty). */
     private keyByRef;
 }

@@ -112,6 +112,25 @@ function boundBatch(mock: MockClientHandles, recipes: readonly Recipe[]): BatchR
   return new BatchRecipe(recipes, mock.client);
 }
 
+/** N all-completed `b{i}` jobs — terminal-status double for an N-entry batch. */
+function completedStatus(n: number) {
+  return {
+    workflowId: 'wf_1',
+    status: 'completed',
+    jobs: Array.from({ length: n }, (_unused, i) => ({ ref: `b${i}`, status: 'completed', operations: [] })),
+  };
+}
+
+/** N `b{i}` downloads, one thumbnail output each — pairs with {@link completedStatus}. */
+function completedDownloads(n: number) {
+  return {
+    downloads: Array.from({ length: n }, (_unused, i) => ({
+      ref: `b${i}`,
+      files: [{ operation: 'thumbnail', operationId: `o${i}`, filename: `out${i}.png`, sizeBytes: 1, downloadUrl: `https://cdn/out${i}.png` }],
+    })),
+  };
+}
+
 beforeEach(() => {
   (globalThis as unknown as { fetch: typeof fetch }).fetch = vi.fn(
     async () => new Response('{}', { status: 200 }),
@@ -163,7 +182,7 @@ describe('BatchRecipe.run — happy path (keyed partition)', () => {
     const avatar = keyedThumb(fileInput.path('avatar.jpg'), 'avatar', 256, 256);
     const result = await boundBatch(mock, [hero, avatar]).run({ maxWait: '30s' });
 
-    // Each entry's input uploaded 1:1 (no dedupe in v1).
+    // Distinct path inputs → dedupe does not apply; each uploads once (2 total).
     expect(mock.uploadFile).toHaveBeenCalledTimes(2);
     expect(mock.createWorkflow).toHaveBeenCalledOnce();
     const payload = mock.createWorkflow.mock.calls[0][0];
@@ -175,6 +194,117 @@ describe('BatchRecipe.run — happy path (keyed partition)', () => {
     ]);
     expect(result.ok).toBe(true);
     expect(result.succeeded.map((s) => s.key)).toEqual(['hero', 'avatar']);
+  });
+});
+
+describe('BatchRecipe.run — cross-entry upload dedupe (1LwSJcz1)', () => {
+  it('uploads a shared path input ONCE and points every job at the shared fileId', async () => {
+    const mock = makeMockClient();
+    mock.uploadFile.mockResolvedValue({ fileId: 'shared', contentType: 'image/jpeg', sizeBytes: 1 });
+    // Two entries, byte-identical caller path string → ONE upload, both jobs
+    // share the resulting fileId (correctness-neutral: same bytes → same output).
+    const a = keyedThumb(fileInput.path('same.jpg'), 'a', 100, 100);
+    const b = keyedThumb(fileInput.path('same.jpg'), 'b', 200, 200);
+
+    const result = await boundBatch(mock, [a, b]).run({ maxWait: '30s' });
+
+    expect(mock.uploadFile).toHaveBeenCalledOnce();
+    expect(mock.createWorkflow).toHaveBeenCalledOnce();
+    const payload = mock.createWorkflow.mock.calls[0][0];
+    // N-length jobs preserved; both b0 + b1 carry the ONE shared upload id.
+    expect(payload.jobs.map((j: { id: string }) => j.id)).toEqual(['b0', 'b1']);
+    expect(payload.jobs.map((j: { source: { file_id: string } }) => j.source.file_id)).toEqual([
+      'shared',
+      'shared',
+    ]);
+    // Per-entry RunResult keys stay independent despite the shared source.
+    expect(result.succeeded.map((s) => s.key)).toEqual(['a', 'b']);
+  });
+
+  it('does NOT dedupe paths that differ by string (exact-string identity, no normalisation)', async () => {
+    const mock = makeMockClient();
+    mock.uploadFile
+      .mockResolvedValueOnce({ fileId: 'up0', contentType: 'image/jpeg', sizeBytes: 1 })
+      .mockResolvedValueOnce({ fileId: 'up1', contentType: 'image/jpeg', sizeBytes: 1 });
+    // `'./same.jpg'` and `'same.jpg'` reference the same file but are DISTINCT
+    // strings → two uploads (dedupe is exact-string, never path-normalised).
+    const a = keyedThumb(fileInput.path('./same.jpg'), 'a', 100, 100);
+    const b = keyedThumb(fileInput.path('same.jpg'), 'b', 200, 200);
+
+    await boundBatch(mock, [a, b]).run({ maxWait: '30s' });
+
+    expect(mock.uploadFile).toHaveBeenCalledTimes(2);
+    const payload = mock.createWorkflow.mock.calls[0][0];
+    expect(payload.jobs.map((j: { source: { file_id: string } }) => j.source.file_id)).toEqual([
+      'up0',
+      'up1',
+    ]);
+  });
+
+  it('dedupes ONLY the shared input in a mixed batch (shared + distinct paths)', async () => {
+    const mock = makeMockClient();
+    mock.uploadFile
+      .mockResolvedValueOnce({ fileId: 'upShared', contentType: 'image/jpeg', sizeBytes: 1 })
+      .mockResolvedValueOnce({ fileId: 'upDistinct', contentType: 'image/jpeg', sizeBytes: 1 });
+    mock.getWorkflowStatus.mockResolvedValue(completedStatus(3));
+    mock.getWorkflowDownloads.mockResolvedValue(completedDownloads(3));
+    // `shared.jpg` appears at index 0 AND 2; `distinct.jpg` only at 1.
+    const first = keyedThumb(fileInput.path('shared.jpg'), 'first', 100, 100);
+    const middle = keyedThumb(fileInput.path('distinct.jpg'), 'middle', 150, 150);
+    const last = keyedThumb(fileInput.path('shared.jpg'), 'last', 200, 200);
+
+    const result = await boundBatch(mock, [first, middle, last]).run({ maxWait: '30s' });
+
+    // 3 entries, 2 unique inputs → exactly 2 uploads (first-appearance order).
+    expect(mock.uploadFile).toHaveBeenCalledTimes(2);
+    const payload = mock.createWorkflow.mock.calls[0][0];
+    expect(payload.jobs.map((j: { id: string }) => j.id)).toEqual(['b0', 'b1', 'b2']);
+    // b0 + b2 (the shared input) share the first upload; b1 (distinct) its own.
+    // The expand map yields an N-length file_id list with no undefined holes.
+    expect(payload.jobs.map((j: { source: { file_id: string } }) => j.source.file_id)).toEqual([
+      'upShared',
+      'upDistinct',
+      'upShared',
+    ]);
+    expect(result.succeeded.map((s) => s.key)).toEqual(['first', 'middle', 'last']);
+  });
+
+  it('dedupes the SAME Blob by reference but uploads distinct-but-equal Blobs separately', async () => {
+    const mock = makeMockClient();
+    mock.uploadFile.mockResolvedValue({ fileId: 'up', contentType: 'image/jpeg', sizeBytes: 1 });
+    mock.getWorkflowStatus.mockResolvedValue(completedStatus(4));
+    mock.getWorkflowDownloads.mockResolvedValue(completedDownloads(4));
+    const shared = new Blob(['pixels'], { type: 'image/jpeg' });
+    const twinA = new Blob(['pixels'], { type: 'image/jpeg' }); // distinct object, equal bytes
+    const twinB = new Blob(['pixels'], { type: 'image/jpeg' });
+    // shared appears twice (same ref → 1 upload); twinA + twinB are distinct
+    // objects (referential identity → 2 uploads) → 3 unique uploads for 4 entries.
+    const e0 = keyedThumb(fileInput.blob(shared), 'e0', 10, 10);
+    const e1 = keyedThumb(fileInput.blob(shared), 'e1', 20, 20);
+    const e2 = keyedThumb(fileInput.blob(twinA), 'e2', 30, 30);
+    const e3 = keyedThumb(fileInput.blob(twinB), 'e3', 40, 40);
+
+    const result = await boundBatch(mock, [e0, e1, e2, e3]).run({ maxWait: '30s' });
+
+    expect(mock.uploadFile).toHaveBeenCalledTimes(3);
+    expect(result.succeeded.map((s) => s.key)).toEqual(['e0', 'e1', 'e2', 'e3']);
+  });
+
+  it('collapses two identical uploadId entries to ZERO uploads (a pure no-op)', async () => {
+    const mock = makeMockClient();
+    const a = keyedThumb(fileInput.uploadId('pre'), 'a', 100, 100);
+    const b = keyedThumb(fileInput.uploadId('pre'), 'b', 200, 200);
+
+    const result = await boundBatch(mock, [a, b]).run({ maxWait: '30s' });
+
+    // uploadId inputs never upload; deduping them is a no-op, both jobs keep the id.
+    expect(mock.uploadFile).not.toHaveBeenCalled();
+    const payload = mock.createWorkflow.mock.calls[0][0];
+    expect(payload.jobs.map((j: { source: { file_id: string } }) => j.source.file_id)).toEqual([
+      'pre',
+      'pre',
+    ]);
+    expect(result.succeeded.map((s) => s.key)).toEqual(['a', 'b']);
   });
 });
 
