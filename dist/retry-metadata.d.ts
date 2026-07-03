@@ -13,9 +13,10 @@ export interface RateLimitSnapshot {
  * timeout (408), rate-limit (429), or any 5xx (500–599). BOUNDED at 599 — a
  * non-standard 6xx-and-up status is NOT classified retryable.
  *
- * DISTINCT from the S3-PUT retry predicate (`isRetryableStatus`) in `client.ts`,
- * which omits 408. The two predicates cover different retry paths and must NOT
- * be merged.
+ * Now value-identical to the S3-PUT retry predicate (`isRetryableStatus`) in
+ * `client.ts` (both are `408 || 429 || 500-599` after qz7MjNTy), but kept
+ * DELIBERATELY SEPARATE: they guard different retry paths (S3-PUT chunk uploads
+ * vs the API-error taxonomy) and may diverge again, so they must NOT be merged.
  */
 export declare function isApiRetryableStatus(status: number): boolean;
 export declare function parseRetryAfterMs(headerValue: string | undefined): number | undefined;

@@ -295,12 +295,14 @@ function isAbortError(err: unknown): boolean {
   );
 }
 
-// Retryable S3 PUT response statuses: 429 throttling, 503 slow-down, and any
-// other 5xx (502/504 are common transients behind CloudFront/S3). 4xx other
-// than 429 (403 signed-URL expiry, 400 SignatureDoesNotMatch, etc.) are
-// configuration / authority issues — retrying just delays the real failure.
+// Retryable S3 PUT response statuses: 408 request timeout, 429 throttling, 503
+// slow-down, and any other 5xx (502/504 are common transients behind
+// CloudFront/S3). 408 is a transient timeout on the PUT itself, so it is retried
+// (matching the PHP SDK's S3-PUT predicate — qz7MjNTy cross-SDK alignment). Other
+// 4xx (403 signed-URL expiry, 400 SignatureDoesNotMatch, etc.) are configuration
+// / authority issues — retrying just delays the real failure.
 function isRetryableStatus(status: number): boolean {
-  return status === 429 || (status >= 500 && status <= 599);
+  return status === 408 || status === 429 || (status >= 500 && status <= 599);
 }
 
 // fetch surfaces network failures (DNS, TLS, TCP reset, mid-body disconnect)

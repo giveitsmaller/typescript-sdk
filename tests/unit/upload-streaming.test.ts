@@ -377,6 +377,63 @@ describe('streaming upload (string-path branch)', () => {
       expect((err as GislMultipartPartError).partNumber).toBe(2);
       expect((err as GislMultipartPartError).uploadId).toBe('mp-fail');
     });
+
+    it('retries an S3 PUT 408 (request timeout) and succeeds on the next attempt (TS<->PHP parity, qz7MjNTy)', async () => {
+      const client2 = new GislClient({
+        baseUrl: 'https://api.example.com',
+        apiKey: 'k',
+        multipartMaxAttempts: 2,
+        multipartRetryBaseMs: 0,
+      });
+      const FILE_SIZE = 20 * 1024 * 1024;
+      installFakeFile(FILE_SIZE, 64 * 1024 * 1024);
+      let s3Puts = 0;
+      fetchSpy.mockImplementation(async (url: string) => {
+        if (url.endsWith('/multipart/initiate')) {
+          return jsonResponse({
+            success: true,
+            data: {
+              upload_id: 'mp-408',
+              mime_type: 'application/octet-stream',
+              first_chunk_etag: '"e1"',
+              first_chunk_size_bytes: DEFAULT_MULTIPART_FIRST_CHUNK_SIZE,
+              total_parts: 2,
+              recommended_chunk_size: 16 * 1024 * 1024,
+              presigned_urls: [
+                {
+                  part_number: 2,
+                  url: 'https://s3.example.com/up?part=2',
+                  expires_at: '2026-04-18T09:00:00.000Z',
+                },
+              ],
+              constraints_applied: {
+                processing_class_pre_assignment: 'short_form',
+              },
+            },
+          });
+        }
+        if (url.startsWith('https://s3.example.com/up')) {
+          s3Puts += 1;
+          // First S3 PUT 408 (request timeout) -> retryable; the retry succeeds.
+          return s3Puts === 1
+            ? new Response('request timeout', { status: 408 })
+            : new Response('', { status: 200, headers: { etag: '"e2"' } });
+        }
+        if (url.endsWith('/multipart/complete')) {
+          return jsonResponse(
+            { success: true, data: { upload_id: 'mp-408', status: 'completed' } },
+            201,
+          );
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      });
+
+      const result = await client2.uploadFile('/tmp/x.bin');
+      expect(result.fileId).toBe('mp-408');
+      // The 408 forced a second PUT for part 2 — proves 408 is retryable (a
+      // non-retryable status would have thrown on the first attempt).
+      expect(s3Puts).toBe(2);
+    });
   });
 
   describe('upload cap typed errors', () => {
