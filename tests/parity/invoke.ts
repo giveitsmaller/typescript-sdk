@@ -259,6 +259,7 @@ export async function runRecipeFixture(fixture: Fixture): Promise<unknown> {
   const result = await recipe.run({
     ...(spec.maxWait !== undefined ? { maxWait: spec.maxWait } : {}),
     ...(spec.pollIntervalMs !== undefined ? { pollIntervalMs: spec.pollIntervalMs } : {}),
+    ...(spec.useSSE !== undefined ? { useSSE: spec.useSSE } : {}),
   });
   // RunResult.toJSON() is the canonical DATA projection (mirrors PHP toArray()).
   return result.toJSON();
@@ -412,6 +413,7 @@ export async function runFilesFixture(fixture: Fixture): Promise<unknown> {
   const result = await recipe.run({
     ...(spec.maxWait !== undefined ? { maxWait: spec.maxWait } : {}),
     ...(spec.pollIntervalMs !== undefined ? { pollIntervalMs: spec.pollIntervalMs } : {}),
+    ...(spec.useSSE !== undefined ? { useSSE: spec.useSSE } : {}),
   });
   return result.toJSON();
 }

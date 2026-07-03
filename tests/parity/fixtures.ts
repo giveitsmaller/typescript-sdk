@@ -145,6 +145,9 @@ export interface FixtureRun {
   readonly operations: readonly FixtureLoweringOp[];
   readonly maxWait?: string | number;
   readonly pollIntervalMs?: number;
+  // Fo4R0v4j — transport opt-out threaded into `run()`. Omitted => SDK default
+  // (SSE-first); `false` forces the poll path (no SSE events stream).
+  readonly useSSE?: boolean;
 }
 
 /**
@@ -197,6 +200,9 @@ export interface FixtureFiles {
   readonly merge?: FixtureFilesMerge;
   readonly maxWait?: string | number;
   readonly pollIntervalMs?: number;
+  // Fo4R0v4j — transport opt-out threaded into FilesRecipe `run()`. Omitted =>
+  // SDK default (SSE-first); `false` forces the poll path.
+  readonly useSSE?: boolean;
   // uUnCtVAr (FF3a-submit): when present, the files fixture is a fire-and-forget
   // `FilesRecipe.submit(webhook?)` (NOT run/lowering) — the runner drives submit
   // against the canned responses, asserts the create `callback_url` request, and
@@ -893,8 +899,8 @@ const WATERMARK_KEYS = new Set(['overlay', 'options', 'post']);
 const WATERMARK_OVERLAY_KEYS = new Set(['file', 'resolvedFileId', 'operations']);
 const WATERMARK_POST_OPS = new Set(['compress', 'convert', 'thumbnail']);
 // FF2b (tywwynmN) — run-mode block keys: lowering's file + operations plus the
-// run-only maxWait / pollIntervalMs.
-const RUN_KEYS = new Set(['file', 'operations', 'maxWait', 'pollIntervalMs']);
+// run-only maxWait / pollIntervalMs / useSSE (Fo4R0v4j — transport opt-out).
+const RUN_KEYS = new Set(['file', 'operations', 'maxWait', 'pollIntervalMs', 'useSSE']);
 // FF5b (u8M49LU2) — submit block keys: lowering's file + operations plus the
 // submit-only optional webhook.
 const SUBMIT_KEYS = new Set(['file', 'operations', 'webhook']);
@@ -909,6 +915,8 @@ const FILES_KEYS = new Set([
   'merge',
   'maxWait',
   'pollIntervalMs',
+  // Fo4R0v4j — run-variant transport opt-out.
+  'useSSE',
   'webhook',
 ]);
 // aQMm5khm — keys allowed inside a `files.merge` sub-block.
@@ -986,12 +994,16 @@ function validateRun(value: unknown, ctx: string): FixtureRun {
   if (v.pollIntervalMs !== undefined && !Number.isInteger(v.pollIntervalMs)) {
     throw new Error(`${ctx} pollIntervalMs must be an integer when present`);
   }
+  if (v.useSSE !== undefined && typeof v.useSSE !== 'boolean') {
+    throw new Error(`${ctx} useSSE must be a boolean when present`);
+  }
 
   const result: FixtureRun = {
     file: file as unknown as FixtureLoweringFile,
     operations,
     ...(v.maxWait !== undefined ? { maxWait: v.maxWait as string | number } : {}),
     ...(v.pollIntervalMs !== undefined ? { pollIntervalMs: v.pollIntervalMs as number } : {}),
+    ...(v.useSSE !== undefined ? { useSSE: v.useSSE as boolean } : {}),
   };
   return result;
 }
@@ -1144,6 +1156,9 @@ function validateFiles(value: unknown, ctx: string): FixtureFiles {
   if (v.pollIntervalMs !== undefined && !Number.isInteger(v.pollIntervalMs)) {
     throw new Error(`${ctx} pollIntervalMs must be an integer when present`);
   }
+  if (v.useSSE !== undefined && typeof v.useSSE !== 'boolean') {
+    throw new Error(`${ctx} useSSE must be a boolean when present`);
+  }
   if (v.webhook !== undefined && typeof v.webhook !== 'string') {
     throw new Error(`${ctx} webhook must be a string when present (submit variant)`);
   }
@@ -1155,6 +1170,7 @@ function validateFiles(value: unknown, ctx: string): FixtureFiles {
     ...(merge !== undefined ? { merge } : {}),
     ...(v.maxWait !== undefined ? { maxWait: v.maxWait as string | number } : {}),
     ...(v.pollIntervalMs !== undefined ? { pollIntervalMs: v.pollIntervalMs as number } : {}),
+    ...(v.useSSE !== undefined ? { useSSE: v.useSSE as boolean } : {}),
     ...(v.webhook !== undefined ? { webhook: v.webhook as string } : {}),
   };
 }
