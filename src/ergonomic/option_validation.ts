@@ -1,6 +1,7 @@
 import {
   convertMetadata,
   thumbnailMetadata,
+  transformMetadata,
   textWatermarkMetadata,
   imageWatermarkMetadata,
   videoWatermarkMetadata,
@@ -45,7 +46,7 @@ export function operationOptionKeys(metadata: OperationMetadata): ReadonlySet<st
 }
 
 /** The ergonomic verbs whose option bags this module key-validates. */
-export type ValidatedVerb = 'convert' | 'thumbnail' | 'textWatermark' | 'watermark' | 'output';
+export type ValidatedVerb = 'convert' | 'thumbnail' | 'transform' | 'textWatermark' | 'watermark' | 'output';
 
 function union(...sets: ReadonlySet<string>[]): ReadonlySet<string> {
   const out = new Set<string>();
@@ -62,6 +63,9 @@ function union(...sets: ReadonlySet<string>[]): ReadonlySet<string> {
 const ALLOWED_KEYS: Readonly<Record<ValidatedVerb, ReadonlySet<string>>> = {
   convert: operationOptionKeys(convertMetadata),
   thumbnail: operationOptionKeys(thumbnailMetadata),
+  // transform is a passthrough verb (rotate/flip). The generic allowed set is
+  // the op-wide union {rotate, flip}; `flip`-on-PDF is narrowed server-side.
+  transform: operationOptionKeys(transformMetadata),
   textWatermark: operationOptionKeys(textWatermarkMetadata),
   watermark: union(operationOptionKeys(imageWatermarkMetadata), operationOptionKeys(videoWatermarkMetadata)),
   // `output` is the image Output facade — its allowed keys are the UNION of every

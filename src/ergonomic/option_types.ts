@@ -96,6 +96,21 @@ const THUMBNAIL_OPTION_KEYS = [
   'width', 'height', 'fit', 'format', 'quality', 'background', 'timestamp', 'source', 'page',
 ] as const;
 
+// ---- transform (geometric: rotate/flip; no positional-owned key) ----
+// Passthrough verb (like thumbnail): the SDK accepts the op-wide union of
+// keys. `flip` is honored on image/video groups but NOT on document_pdf
+// (rotate only) — that per-media narrowing is server-side (a `flip` on a PDF
+// 422s), matching thumbnail's coarse per-op-union validation. The whole op is
+// `availability: planned` today, so a lowered transform 422s (feature_not_available)
+// until the per-media Lambdas ship.
+export interface TransformOptions {
+  /** Clockwise rotation in degrees. document_pdf honors `rotate` only. */
+  rotate?: 0 | 90 | 180 | 270;
+  /** Mirror axis (applied after `rotate`). Not honored on document_pdf input. */
+  flip?: 'none' | 'horizontal' | 'vertical' | 'both';
+}
+const TRANSFORM_OPTION_KEYS = ['rotate', 'flip'] as const;
+
 // ---- textWatermark (text is positional-owned → excluded) ----
 export interface TextWatermarkOptions {
   /** Font size in pixels (8-512). */
@@ -251,12 +266,14 @@ type Equal<A, B> =
 
 const _convertKeysMatch: Equal<keyof ConvertOptions, (typeof CONVERT_OPTION_KEYS)[number]> = true;
 const _thumbnailKeysMatch: Equal<keyof ThumbnailOptions, (typeof THUMBNAIL_OPTION_KEYS)[number]> = true;
+const _transformKeysMatch: Equal<keyof TransformOptions, (typeof TRANSFORM_OPTION_KEYS)[number]> = true;
 const _textWatermarkKeysMatch: Equal<keyof TextWatermarkOptions, (typeof TEXT_WATERMARK_OPTION_KEYS)[number]> = true;
 const _watermarkKeysMatch: Equal<keyof WatermarkOptions, (typeof WATERMARK_OPTION_KEYS)[number]> = true;
 const _outputKeysMatch: Equal<keyof OutputOptions, (typeof OUTPUT_OPTION_KEYS)[number]> = true;
 // Reference the assertions so `noUnusedLocals` doesn't strip them.
 void _convertKeysMatch;
 void _thumbnailKeysMatch;
+void _transformKeysMatch;
 void _textWatermarkKeysMatch;
 void _watermarkKeysMatch;
 void _outputKeysMatch;
@@ -269,6 +286,7 @@ void _outputKeysMatch;
 export const VERB_OPTION_KEYS = {
   convert: CONVERT_OPTION_KEYS,
   thumbnail: THUMBNAIL_OPTION_KEYS,
+  transform: TRANSFORM_OPTION_KEYS,
   textWatermark: TEXT_WATERMARK_OPTION_KEYS,
   watermark: WATERMARK_OPTION_KEYS,
   output: OUTPUT_OPTION_KEYS,

@@ -575,6 +575,12 @@ export type {
   ThumbnailImageOptions,
   ThumbnailVideoOptions,
   ThumbnailDocumentOptions,
+  // Generated per-media transform option types (T4) — consistent with the other ops'
+  // per-media option-type re-exports (the hand-written ergonomic bag is `TransformOptions`).
+  TransformImageOptions,
+  TransformImageGifOptions,
+  TransformVideoOptions,
+  TransformDocumentPdfOptions,
   ConvertImageOptions,
   ConvertVideoOptions,
   ConvertAudioOptions,
@@ -668,11 +674,15 @@ export {
   videoWatermarkMetadata,
   videoTextWatermarkMetadata,
   splitMetadata,
+  // transform is `availability: planned` — consumers can inspect this sidecar to
+  // gate UI before submitting (the API otherwise returns feature_not_available/422). T4.
+  transformMetadata,
 } from '@giveitsmaller/contracts/operations';
 // Typed per-op option interfaces for the ergonomic verbs (card Dhje3Faq).
 export type {
   ConvertOptions,
   ThumbnailOptions,
+  TransformOptions,
   TextWatermarkOptions,
   WatermarkOptions,
   WatermarkOverlay,

@@ -572,6 +572,27 @@ export class Recipe {
         return this.withStep({ opType: 'thumbnail', options: wire });
     }
     /**
+     * Geometric transform: rotate (0/90/180/270°) and/or flip. Chainable — the
+     * canonical single-job order is `transform → convert → compress → thumbnail`,
+     * so downstream size options refer to the final (post-transform) frame.
+     *
+     * Passthrough: `rotate`/`flip` are forwarded as-is; the SDK does NOT narrow
+     * per media (a `flip` on a PDF input passes SDK validation but the server
+     * rejects it — documents rotate only). The transform op is `availability:
+     * planned` today, so workflow-create returns `feature_not_available` (422)
+     * until the per-media Lambdas ship. A no-op (`rotate:0` + `flip:none`) is
+     * rejected server-side as `invalid_options`.
+     */
+    transform(options = {}) {
+        validateVerbOptions('transform', options);
+        const wire = {};
+        for (const [key, value] of Object.entries(options)) {
+            if (value !== undefined)
+                wire[key] = value;
+        }
+        return this.withStep({ opType: 'transform', options: wire });
+    }
+    /**
      * Produce ONE transformed image: keep or change format, plus quality, resize
      * and route-honored controls. The single user-facing image transform — the SDK
      * resolves the route from `(input format, output_format)` against the contract's
@@ -1394,6 +1415,10 @@ export class FilesRecipe {
     thumbnail(options) {
         return this.withStep(this.baseRecipe().thumbnail(options));
     }
+    /** Apply the same geometric transform (rotate/flip) to every input. Validated via the base {@link Recipe}. */
+    transform(options = {}) {
+        return this.withStep(this.baseRecipe().transform(options));
+    }
     /** Apply the same text watermark to every input. Option keys validated via the base {@link Recipe}. */
     textWatermark(text, options = {}) {
         return this.withStep(this.baseRecipe().textWatermark(text, options));
@@ -1641,6 +1666,16 @@ export class MergedRecipe {
                 wire[key] = value;
         }
         return this.withStep({ opType: 'thumbnail', options: wire });
+    }
+    /** Geometric transform (rotate/flip) of the merged output. Passthrough; see {@link Recipe.transform}. */
+    transform(options = {}) {
+        validateVerbOptions('transform', options);
+        const wire = {};
+        for (const [key, value] of Object.entries(options)) {
+            if (value !== undefined)
+                wire[key] = value;
+        }
+        return this.withStep({ opType: 'transform', options: wire });
     }
     /**
      * Lower to the merge DAG: one `passthrough` source job per input + one
@@ -2042,6 +2077,16 @@ export class WatermarkedRecipe {
                 wire[key] = value;
         }
         return this.withStep({ opType: 'thumbnail', options: wire });
+    }
+    /** Geometric transform (rotate/flip) of the watermarked output. Passthrough; see {@link Recipe.transform}. */
+    transform(options = {}) {
+        validateVerbOptions('transform', options);
+        const wire = {};
+        for (const [key, value] of Object.entries(options)) {
+            if (value !== undefined)
+                wire[key] = value;
+        }
+        return this.withStep({ opType: 'transform', options: wire });
     }
     /**
      * Lower to the watermark DAG: a `src_0` passthrough/base-steps job + a `src_1`

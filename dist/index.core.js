@@ -114,4 +114,7 @@ AudioToVideoAudioOutputResolution, AudioToVideoAudioImageFit, AudioToVideoAudioO
 // surfaces as `GislFeatureNotAvailableError`).
 export { archiveMetadata, audioOverlayMetadata, audioWatermarkMetadata, compressMetadata, convertMetadata, customLumaMetadata, imageWatermarkMetadata, mergeMetadata, textWatermarkMetadata, thumbnailMetadata, 
 // New planned operation metadata sidecars — contracts v2.15 (AJCLLGaG).
-audioToVideoMetadata, videoWatermarkMetadata, videoTextWatermarkMetadata, splitMetadata, } from '@giveitsmaller/contracts/operations';
+audioToVideoMetadata, videoWatermarkMetadata, videoTextWatermarkMetadata, splitMetadata, 
+// transform is `availability: planned` — consumers can inspect this sidecar to
+// gate UI before submitting (the API otherwise returns feature_not_available/422). T4.
+transformMetadata, } from '@giveitsmaller/contracts/operations';

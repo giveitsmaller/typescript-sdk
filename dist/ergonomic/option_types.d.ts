@@ -74,6 +74,12 @@ export interface ThumbnailOptions {
     /** 1-based page index for document input. */
     page?: number;
 }
+export interface TransformOptions {
+    /** Clockwise rotation in degrees. document_pdf honors `rotate` only. */
+    rotate?: 0 | 90 | 180 | 270;
+    /** Mirror axis (applied after `rotate`). Not honored on document_pdf input. */
+    flip?: 'none' | 'horizontal' | 'vertical' | 'both';
+}
 export interface TextWatermarkOptions {
     /** Font size in pixels (8-512). */
     font_size?: number;
@@ -208,6 +214,7 @@ export interface OutputOptions {
 export declare const VERB_OPTION_KEYS: {
     readonly convert: readonly ["quality", "background", "crf", "trim_start", "trim_end", "fps", "width", "height", "fit", "metadata", "color_profile", "auto_orient", "max_colors", "loop", "dither", "bitrate", "pages", "dpi"];
     readonly thumbnail: readonly ["width", "height", "fit", "format", "quality", "background", "timestamp", "source", "page"];
+    readonly transform: readonly ["rotate", "flip"];
     readonly textWatermark: readonly ["font_size", "color", "font_family", "rotation", "watermark_mode", "tile_spacing", "anchor", "margin_x", "margin_y", "opacity"];
     readonly watermark: readonly ["anchor", "margin_x", "margin_y", "opacity", "overlay_width", "overlays"];
     readonly output: readonly ["quality", "quality_preset", "encoding_mode", "target_size_bytes", "chroma_subsampling", "width", "height", "fit", "background", "progressive", "optimization_level", "avif_speed", "metadata", "color_profile", "auto_orient", "lossless"];

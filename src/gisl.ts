@@ -191,7 +191,7 @@ function wrapErgonomic(
         // its RunResult is therefore keyless (succeeded[].key === null).
         return (id: string): Handle => new Handle(id, undefined, target);
       }
-      if (prop === 'compress' || prop === 'convert' || prop === 'thumbnail') {
+      if (prop === 'compress' || prop === 'convert' || prop === 'thumbnail' || prop === 'transform') {
         return (input: string | Blob, options: Record<string, unknown> = {}): OperationBuilder => {
           // ExVcchMz — validate the option bag pre-upload for the exported
           // single-op builder so a bad bag (unknown key / missing thumbnail dims /
@@ -208,6 +208,9 @@ function wrapErgonomic(
             validateVerbOptions('thumbnail', options);
             assertThumbnailDimensions(options);
           }
+          // `transform` is a passthrough (rotate/flip); no positional-owned keys
+          // and no required dims — just the generic key-validation.
+          if (prop === 'transform') validateVerbOptions('transform', options);
           // T4b — pass client-scope presetDefaults into the builder so
           // .run()/.submit() consult the preset resolver. The Proxy's
           // closure carries the same reference for every per-call
@@ -419,6 +422,8 @@ export type ErgonomicClient = GislClient & {
   compress(input: string | Blob, options?: Record<string, unknown>): OperationBuilder;
   convert(input: string | Blob, options?: Record<string, unknown>): OperationBuilder;
   thumbnail(input: string | Blob, options?: Record<string, unknown>): OperationBuilder;
+  /** Geometric transform (rotate/flip). Passthrough; the op is `planned` (server 422s until Lambdas ship). */
+  transform(input: string | Blob, options?: Record<string, unknown>): OperationBuilder;
   /**
    * Merge ordered-sequence factory (T3). Accepts a variadic list of assets
    * (strings/Blobs/`handle()`/`asset()`) optionally terminated by a

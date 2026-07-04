@@ -127,7 +127,7 @@ function wrapErgonomic(client, presetDefaults, scopedPresetDefaults) {
                 // its RunResult is therefore keyless (succeeded[].key === null).
                 return (id) => new Handle(id, undefined, target);
             }
-            if (prop === 'compress' || prop === 'convert' || prop === 'thumbnail') {
+            if (prop === 'compress' || prop === 'convert' || prop === 'thumbnail' || prop === 'transform') {
                 return (input, options = {}) => {
                     // ExVcchMz — validate the option bag pre-upload for the exported
                     // single-op builder so a bad bag (unknown key / missing thumbnail dims /
@@ -145,6 +145,10 @@ function wrapErgonomic(client, presetDefaults, scopedPresetDefaults) {
                         validateVerbOptions('thumbnail', options);
                         assertThumbnailDimensions(options);
                     }
+                    // `transform` is a passthrough (rotate/flip); no positional-owned keys
+                    // and no required dims — just the generic key-validation.
+                    if (prop === 'transform')
+                        validateVerbOptions('transform', options);
                     // T4b — pass client-scope presetDefaults into the builder so
                     // .run()/.submit() consult the preset resolver. The Proxy's
                     // closure carries the same reference for every per-call

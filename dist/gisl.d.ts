@@ -131,6 +131,8 @@ export type ErgonomicClient = GislClient & {
     compress(input: string | Blob, options?: Record<string, unknown>): OperationBuilder;
     convert(input: string | Blob, options?: Record<string, unknown>): OperationBuilder;
     thumbnail(input: string | Blob, options?: Record<string, unknown>): OperationBuilder;
+    /** Geometric transform (rotate/flip). Passthrough; the op is `planned` (server 422s until Lambdas ship). */
+    transform(input: string | Blob, options?: Record<string, unknown>): OperationBuilder;
     /**
      * Merge ordered-sequence factory (T3). Accepts a variadic list of assets
      * (strings/Blobs/`handle()`/`asset()`) optionally terminated by a

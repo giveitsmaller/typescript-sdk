@@ -36,6 +36,7 @@ import { validateVerbOptions, assertThumbnailDimensions } from './ergonomic/opti
 import type {
   ConvertOptions,
   ThumbnailOptions,
+  TransformOptions,
   TextWatermarkOptions,
   WatermarkOptions,
   OutputOptions,
@@ -693,7 +694,7 @@ interface RecipeStep {
   // `output` is an INTERNAL step kind (the image Output facade); it lowers to a
   // `compress` (same_format) or `convert` (format_change) wire op per the route
   // projection — see lowerOutputStep. The others lower 1:1 to their wire op.
-  readonly opType: 'compress' | 'convert' | 'thumbnail' | 'text_watermark' | 'output';
+  readonly opType: 'compress' | 'convert' | 'thumbnail' | 'text_watermark' | 'output' | 'transform';
   readonly options: Readonly<Record<string, unknown>>;
 }
 
@@ -831,6 +832,27 @@ export class Recipe {
       if (value !== undefined) wire[key] = value;
     }
     return this.withStep({ opType: 'thumbnail', options: wire });
+  }
+
+  /**
+   * Geometric transform: rotate (0/90/180/270°) and/or flip. Chainable — the
+   * canonical single-job order is `transform → convert → compress → thumbnail`,
+   * so downstream size options refer to the final (post-transform) frame.
+   *
+   * Passthrough: `rotate`/`flip` are forwarded as-is; the SDK does NOT narrow
+   * per media (a `flip` on a PDF input passes SDK validation but the server
+   * rejects it — documents rotate only). The transform op is `availability:
+   * planned` today, so workflow-create returns `feature_not_available` (422)
+   * until the per-media Lambdas ship. A no-op (`rotate:0` + `flip:none`) is
+   * rejected server-side as `invalid_options`.
+   */
+  transform(options: TransformOptions = {}): Recipe {
+    validateVerbOptions('transform', options);
+    const wire: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(options)) {
+      if (value !== undefined) wire[key] = value;
+    }
+    return this.withStep({ opType: 'transform', options: wire });
   }
 
   /**
@@ -1852,6 +1874,11 @@ export class FilesRecipe {
     return this.withStep(this.baseRecipe().thumbnail(options));
   }
 
+  /** Apply the same geometric transform (rotate/flip) to every input. Validated via the base {@link Recipe}. */
+  transform(options: TransformOptions = {}): FilesRecipe {
+    return this.withStep(this.baseRecipe().transform(options));
+  }
+
   /** Apply the same text watermark to every input. Option keys validated via the base {@link Recipe}. */
   textWatermark(text: string, options: TextWatermarkOptions = {}): FilesRecipe {
     return this.withStep(this.baseRecipe().textWatermark(text, options));
@@ -2201,6 +2228,16 @@ export class MergedRecipe {
       if (value !== undefined) wire[key] = value;
     }
     return this.withStep({ opType: 'thumbnail', options: wire });
+  }
+
+  /** Geometric transform (rotate/flip) of the merged output. Passthrough; see {@link Recipe.transform}. */
+  transform(options: TransformOptions = {}): MergedRecipe {
+    validateVerbOptions('transform', options);
+    const wire: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(options)) {
+      if (value !== undefined) wire[key] = value;
+    }
+    return this.withStep({ opType: 'transform', options: wire });
   }
 
   /**
@@ -2771,6 +2808,16 @@ export class WatermarkedRecipe {
       if (value !== undefined) wire[key] = value;
     }
     return this.withStep({ opType: 'thumbnail', options: wire });
+  }
+
+  /** Geometric transform (rotate/flip) of the watermarked output. Passthrough; see {@link Recipe.transform}. */
+  transform(options: TransformOptions = {}): WatermarkedRecipe {
+    validateVerbOptions('transform', options);
+    const wire: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(options)) {
+      if (value !== undefined) wire[key] = value;
+    }
+    return this.withStep({ opType: 'transform', options: wire });
   }
 
   /**

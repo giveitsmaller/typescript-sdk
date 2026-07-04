@@ -1,4 +1,4 @@
-import { convertMetadata, thumbnailMetadata, textWatermarkMetadata, imageWatermarkMetadata, videoWatermarkMetadata, } from '@giveitsmaller/contracts/operations';
+import { convertMetadata, thumbnailMetadata, transformMetadata, textWatermarkMetadata, imageWatermarkMetadata, videoWatermarkMetadata, } from '@giveitsmaller/contracts/operations';
 import { GislConfigError } from '../errors.js';
 import { VERB_OPTION_KEYS } from './option_types.js';
 /**
@@ -51,6 +51,9 @@ function union(...sets) {
 const ALLOWED_KEYS = {
     convert: operationOptionKeys(convertMetadata),
     thumbnail: operationOptionKeys(thumbnailMetadata),
+    // transform is a passthrough verb (rotate/flip). The generic allowed set is
+    // the op-wide union {rotate, flip}; `flip`-on-PDF is narrowed server-side.
+    transform: operationOptionKeys(transformMetadata),
     textWatermark: operationOptionKeys(textWatermarkMetadata),
     watermark: union(operationOptionKeys(imageWatermarkMetadata), operationOptionKeys(videoWatermarkMetadata)),
     // `output` is the image Output facade — its allowed keys are the UNION of every

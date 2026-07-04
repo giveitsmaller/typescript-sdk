@@ -6,6 +6,7 @@ import {
   mergeMetadata,
   textWatermarkMetadata,
   thumbnailMetadata,
+  transformMetadata,
   videoWatermarkMetadata,
   type OperationMetadata,
 } from '@giveitsmaller/contracts/operations';
@@ -128,6 +129,35 @@ describe('wire-key conformance — thumbnail', () => {
     // Drive every documented contract key to prove none is renamed/dropped.
     const ops = recipeOps(new Recipe(fileInput.path('photo.png')).thumbnail({ width: 320, height: 240, fit: 'crop', format: 'png' }));
     assertKeysConform('thumbnail', optionKeysOf(ops, 'thumbnail'), contract);
+  });
+});
+
+describe('wire-key conformance — transform', () => {
+  it('emitted keys (passthrough rotate/flip) conform to the transform contract', () => {
+    const contract = operationOptionKeys(transformMetadata);
+    // transform is an open passthrough — callers supply contract keys directly.
+    const ops = recipeOps(new Recipe(fileInput.path('photo.jpg')).transform({ rotate: 90, flip: 'horizontal' }));
+    assertKeysConform('transform', optionKeysOf(ops, 'transform'), contract);
+  });
+
+  // Non-tautological key pin (codex T4 r2): the contract's transform option-key set is
+  // exactly {rotate, flip}. A future contract key add/remove fails CI here (the
+  // `verbs`-array typed-interface arm pins the reverse; this is the explicit forward pin).
+  it('exposes exactly the {rotate, flip} contract keys', () => {
+    expect([...operationOptionKeys(transformMetadata)].sort()).toEqual(['flip', 'rotate']);
+  });
+
+  // Availability drift tripwire (karen Gap B / codex T4 r2): transform is exposed AHEAD of
+  // the worker — the op AND every option are `availability: planned` today. If a future
+  // re-vendor flips it live, this fails, forcing a re-review of the "planned → server 422
+  // until Lambdas ship" docstring and the passthrough-vs-gate decision.
+  it('is still availability:planned (op-level) — exposed-ahead tripwire', () => {
+    // Op-level `availability` is the reliable, cross-language-consistent signal (per-option
+    // availability is null; the PHP generator also leaves mime_group availability null while
+    // TS emits it — so op-level is the parity-safe pin). A live op omits this field entirely
+    // (a live op like thumbnail has no op-level `availability`), so when a re-vendor flips
+    // transform live this fails, forcing a re-review of the passthrough gating decision.
+    expect(transformMetadata.availability).toBe('planned');
   });
 });
 
@@ -270,6 +300,7 @@ describe('option-key validation conformance — validator + typed interfaces vs 
   const expectedContract: Record<MetadataVerb, ReadonlySet<string>> = {
     convert: operationOptionKeys(convertMetadata),
     thumbnail: operationOptionKeys(thumbnailMetadata),
+    transform: operationOptionKeys(transformMetadata),
     textWatermark: operationOptionKeys(textWatermarkMetadata),
     // watermark routes image_watermark | video_watermark; the base media may be
     // undetectable at the verb call, so the validator accepts the UNION.
@@ -287,7 +318,7 @@ describe('option-key validation conformance — validator + typed interfaces vs 
     textWatermark: ['text'],
   };
 
-  const verbs: MetadataVerb[] = ['convert', 'thumbnail', 'textWatermark', 'watermark'];
+  const verbs: MetadataVerb[] = ['convert', 'thumbnail', 'transform', 'textWatermark', 'watermark'];
 
   it.each(verbs)('%s: runtime validator allowed-key set equals the contract option set', (verb) => {
     expect([...allowedKeysFor(verb)].sort()).toEqual([...expectedContract[verb]].sort());

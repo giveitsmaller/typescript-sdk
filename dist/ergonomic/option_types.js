@@ -21,6 +21,7 @@ const CONVERT_OPTION_KEYS = [
 const THUMBNAIL_OPTION_KEYS = [
     'width', 'height', 'fit', 'format', 'quality', 'background', 'timestamp', 'source', 'page',
 ];
+const TRANSFORM_OPTION_KEYS = ['rotate', 'flip'];
 const TEXT_WATERMARK_OPTION_KEYS = [
     'font_size', 'color', 'font_family', 'rotation', 'watermark_mode',
     'tile_spacing', 'anchor', 'margin_x', 'margin_y', 'opacity',
@@ -35,12 +36,14 @@ const OUTPUT_OPTION_KEYS = [
 ];
 const _convertKeysMatch = true;
 const _thumbnailKeysMatch = true;
+const _transformKeysMatch = true;
 const _textWatermarkKeysMatch = true;
 const _watermarkKeysMatch = true;
 const _outputKeysMatch = true;
 // Reference the assertions so `noUnusedLocals` doesn't strip them.
 void _convertKeysMatch;
 void _thumbnailKeysMatch;
+void _transformKeysMatch;
 void _textWatermarkKeysMatch;
 void _watermarkKeysMatch;
 void _outputKeysMatch;
@@ -52,6 +55,7 @@ void _outputKeysMatch;
 export const VERB_OPTION_KEYS = {
     convert: CONVERT_OPTION_KEYS,
     thumbnail: THUMBNAIL_OPTION_KEYS,
+    transform: TRANSFORM_OPTION_KEYS,
     textWatermark: TEXT_WATERMARK_OPTION_KEYS,
     watermark: WATERMARK_OPTION_KEYS,
     output: OUTPUT_OPTION_KEYS,

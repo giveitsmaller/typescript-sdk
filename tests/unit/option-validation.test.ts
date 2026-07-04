@@ -315,6 +315,26 @@ describe('duplicated verb bodies reject invalid bags too', () => {
     expect(err.reason).toBe('unknown_field');
     expect(err.conflictingFields).toEqual(['bogus']);
   });
+
+  it('Recipe.transform rejects an unknown key at the verb call', () => {
+    const err = captureConfigError(() => recipe('photo.jpg').transform({ bogus: 1 } as never));
+    expect(err.reason).toBe('unknown_field');
+    expect(err.conflictingFields).toEqual(['bogus']);
+  });
+
+  it('MergedRecipe.transform rejects an unknown key at the verb call', () => {
+    const err = captureConfigError(() => videoMerge().transform({ bogus: 1 } as never));
+    expect(err.reason).toBe('unknown_field');
+    expect(err.conflictingFields).toEqual(['bogus']);
+  });
+
+  it('WatermarkedRecipe.transform rejects an unknown key at the verb call', () => {
+    const err = captureConfigError(() =>
+      recipe('photo.jpg').watermark(overlay()).transform({ bogus: 1 } as never),
+    );
+    expect(err.reason).toBe('unknown_field');
+    expect(err.conflictingFields).toEqual(['bogus']);
+  });
 });
 
 // ---------------------------------------------------------------------------

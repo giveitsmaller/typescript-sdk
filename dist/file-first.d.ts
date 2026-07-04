@@ -13,7 +13,7 @@ import { GislItemFailedError } from './errors.js';
 import { type ProgressEvent } from './builder.js';
 import type { GislClient } from './client.js';
 import type { OperationDownload, WorkflowStatusResponse } from '@giveitsmaller/contracts/openapi';
-import type { ConvertOptions, ThumbnailOptions, TextWatermarkOptions, WatermarkOptions, OutputOptions, OutputFit } from './ergonomic/option_types.js';
+import type { ConvertOptions, ThumbnailOptions, TransformOptions, TextWatermarkOptions, WatermarkOptions, OutputOptions, OutputFit } from './ergonomic/option_types.js';
 import { OptimizeFor } from './generated/sdk_spec/enums.js';
 import type { PresetDefaults } from './ergonomic/presets/index.js';
 import type { WorkflowCreatePayload } from './types.js';
@@ -337,7 +337,7 @@ export declare const fileInput: {
 };
 /** One step in a {@link Recipe}'s chain — an op kind + captured ergonomic args. */
 interface RecipeStep {
-    readonly opType: 'compress' | 'convert' | 'thumbnail' | 'text_watermark' | 'output';
+    readonly opType: 'compress' | 'convert' | 'thumbnail' | 'text_watermark' | 'output' | 'transform';
     readonly options: Readonly<Record<string, unknown>>;
 }
 /**
@@ -391,6 +391,19 @@ export declare class Recipe {
      * dropped from the wire options (not sent as `undefined`).
      */
     thumbnail(options: ThumbnailOptions): Recipe;
+    /**
+     * Geometric transform: rotate (0/90/180/270°) and/or flip. Chainable — the
+     * canonical single-job order is `transform → convert → compress → thumbnail`,
+     * so downstream size options refer to the final (post-transform) frame.
+     *
+     * Passthrough: `rotate`/`flip` are forwarded as-is; the SDK does NOT narrow
+     * per media (a `flip` on a PDF input passes SDK validation but the server
+     * rejects it — documents rotate only). The transform op is `availability:
+     * planned` today, so workflow-create returns `feature_not_available` (422)
+     * until the per-media Lambdas ship. A no-op (`rotate:0` + `flip:none`) is
+     * rejected server-side as `invalid_options`.
+     */
+    transform(options?: TransformOptions): Recipe;
     /**
      * Produce ONE transformed image: keep or change format, plus quality, resize
      * and route-honored controls. The single user-facing image transform — the SDK
@@ -641,6 +654,8 @@ export declare class FilesRecipe {
     convert(format: string, options?: ConvertOptions): FilesRecipe;
     /** Generate a preview of every input. `width` AND `height` are required; validated via the base {@link Recipe} before any upload. */
     thumbnail(options: ThumbnailOptions): FilesRecipe;
+    /** Apply the same geometric transform (rotate/flip) to every input. Validated via the base {@link Recipe}. */
+    transform(options?: TransformOptions): FilesRecipe;
     /** Apply the same text watermark to every input. Option keys validated via the base {@link Recipe}. */
     textWatermark(text: string, options?: TextWatermarkOptions): FilesRecipe;
     /**
@@ -779,6 +794,8 @@ export declare class MergedRecipe {
     convert(format: string, options?: ConvertOptions): MergedRecipe;
     /** Thumbnail the merged output. `width` AND `height` are required; validated pre-upload. */
     thumbnail(options: ThumbnailOptions): MergedRecipe;
+    /** Geometric transform (rotate/flip) of the merged output. Passthrough; see {@link Recipe.transform}. */
+    transform(options?: TransformOptions): MergedRecipe;
     /**
      * Lower to the merge DAG: one `passthrough` source job per input + one
      * `merge` job whose `operations[]` is `[merge, ...post-combine ops]`. The
@@ -966,6 +983,8 @@ export declare class WatermarkedRecipe {
     convert(format: string, options?: ConvertOptions): WatermarkedRecipe;
     /** Thumbnail the watermarked output. `width` AND `height` are required; validated pre-upload. */
     thumbnail(options: ThumbnailOptions): WatermarkedRecipe;
+    /** Geometric transform (rotate/flip) of the watermarked output. Passthrough; see {@link Recipe.transform}. */
+    transform(options?: TransformOptions): WatermarkedRecipe;
     /**
      * Lower to the watermark DAG: a `src_0` passthrough/base-steps job + a `src_1`
      * passthrough/overlay-steps job + one `watermark` job whose `inputs[]` consume
