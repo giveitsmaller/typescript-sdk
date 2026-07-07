@@ -392,19 +392,22 @@ describe('single-op builder option validation (ExVcchMz)', () => {
   describe('thumbnail', () => {
     it('rejects an empty bag (missing width + height) pre-upload, no fetch', async () => {
       const c = await client();
-      expect(() => c.thumbnail('photo.png', {})).toThrow(GislConfigError);
+      // `as never` — the tightened compile-time type rejects this bag (uFbM31dC);
+      // this test exercises the RUNTIME guard (vitest strips types), so it bypasses
+      // the compile check. Compile-time rejection is asserted separately below.
+      expect(() => c.thumbnail('photo.png', {} as never)).toThrow(GislConfigError);
       expect(fetchSpy).not.toHaveBeenCalled();
     });
 
     it('rejects a width-only bag (missing height) pre-upload, no fetch', async () => {
       const c = await client();
-      expect(() => c.thumbnail('photo.png', { width: 320 })).toThrow(/height/);
+      expect(() => c.thumbnail('photo.png', { width: 320 } as never)).toThrow(/height/);
       expect(fetchSpy).not.toHaveBeenCalled();
     });
 
     it('rejects an unknown option key pre-upload, no fetch', async () => {
       const c = await client();
-      expect(() => c.thumbnail('photo.png', { width: 100, height: 100, bogus: 1 })).toThrow(
+      expect(() => c.thumbnail('photo.png', { width: 100, height: 100, bogus: 1 } as never)).toThrow(
         /unknown option 'bogus'/,
       );
       expect(fetchSpy).not.toHaveBeenCalled();
@@ -419,25 +422,25 @@ describe('single-op builder option validation (ExVcchMz)', () => {
   describe('convert', () => {
     it('rejects a missing output_format (empty bag) pre-upload, no fetch', async () => {
       const c = await client();
-      expect(() => c.convert('photo.png', {})).toThrow(/output_format/);
+      expect(() => c.convert('photo.png', {} as never)).toThrow(/output_format/);
       expect(fetchSpy).not.toHaveBeenCalled();
     });
 
     it('rejects a bag with options but no output_format pre-upload, no fetch', async () => {
       const c = await client();
-      expect(() => c.convert('photo.png', { quality: 80 })).toThrow(/output_format/);
+      expect(() => c.convert('photo.png', { quality: 80 } as never)).toThrow(/output_format/);
       expect(fetchSpy).not.toHaveBeenCalled();
     });
 
     it('rejects a null output_format pre-upload, no fetch', async () => {
       const c = await client();
-      expect(() => c.convert('photo.png', { output_format: null })).toThrow(/output_format/);
+      expect(() => c.convert('photo.png', { output_format: null } as never)).toThrow(/output_format/);
       expect(fetchSpy).not.toHaveBeenCalled();
     });
 
     it('rejects an unknown option key pre-upload, no fetch', async () => {
       const c = await client();
-      expect(() => c.convert('photo.png', { output_format: 'webp', bogus: 1 })).toThrow(
+      expect(() => c.convert('photo.png', { output_format: 'webp', bogus: 1 } as never)).toThrow(
         /unknown option 'bogus'/,
       );
       expect(fetchSpy).not.toHaveBeenCalled();
@@ -445,7 +448,7 @@ describe('single-op builder option validation (ExVcchMz)', () => {
 
     it('rejects the SDK alias `format` (single-op needs the wire key output_format) pre-upload, no fetch', async () => {
       const c = await client();
-      expect(() => c.convert('photo.png', { format: 'webp' })).toThrow(/unknown option 'format'/);
+      expect(() => c.convert('photo.png', { format: 'webp' } as never)).toThrow(/unknown option 'format'/);
       expect(fetchSpy).not.toHaveBeenCalled();
     });
 
@@ -453,6 +456,44 @@ describe('single-op builder option validation (ExVcchMz)', () => {
       const c = await client();
       expect(() => c.convert('photo.png', { output_format: 'webp', quality: 80 })).not.toThrow();
     });
+  });
+
+  // uFbM31dC — the single-op `convert`/`thumbnail` factory signatures are typed
+  // (`ConvertOptions & { output_format }` / `ThumbnailOptions`), so a bad bag is a
+  // COMPILE error, not only a runtime throw. vitest strips types so these assert
+  // nothing at runtime — the value is the `@ts-expect-error` compile guard; the
+  // builders are never invoked, so no upload/create fires. Mirrors the multi-input
+  // `operation()` type-guard block below. (Enforced by `tsc -p tsconfig.test.json`.)
+  it('rejects single-op convert/thumbnail bad bags at compile time (uFbM31dC)', async () => {
+    const c = await client();
+    // @ts-expect-error — single-op convert requires `output_format` in the bag.
+    const badConvertEmpty = (): unknown => c.convert('a.png', {});
+    // @ts-expect-error — `output_format` is required even alongside other options.
+    const badConvertNoFormat = (): unknown => c.convert('a.png', { quality: 80 });
+    // @ts-expect-error — unknown key rejected by ConvertOptions.
+    const badConvertUnknown = (): unknown => c.convert('a.png', { output_format: 'webp', bogus: 1 });
+    // @ts-expect-error — `format` is the file-first alias, not the single-op wire key.
+    const badConvertAlias = (): unknown => c.convert('a.png', { format: 'webp' });
+    // @ts-expect-error — thumbnail requires width + height.
+    const badThumbEmpty = (): unknown => c.thumbnail('a.png', {});
+    // @ts-expect-error — thumbnail requires height too.
+    const badThumbWidthOnly = (): unknown => c.thumbnail('a.png', { width: 320 });
+    // @ts-expect-error — unknown key rejected by ThumbnailOptions.
+    const badThumbUnknown = (): unknown => c.thumbnail('a.png', { width: 1, height: 1, bogus: 1 });
+
+    // Positive controls — these MUST compile; a regression that breaks them would
+    // surface as a plain tsc error here (not an unused-`@ts-expect-error`).
+    const okConvert = (): unknown => c.convert('a.png', { output_format: 'webp', quality: 80 });
+    const okThumb = (): unknown => c.thumbnail('a.png', { width: 320, height: 240, fit: 'crop' });
+
+    // Reference the closures (never invoked) so no-unused-var stays quiet.
+    expect(
+      [badConvertEmpty, badConvertNoFormat, badConvertUnknown, badConvertAlias,
+        badThumbEmpty, badThumbWidthOnly, badThumbUnknown, okConvert, okThumb].every(
+        (f) => typeof f === 'function',
+      ),
+    ).toBe(true);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it('does NOT validate compress at the factory (preset resolver owns it) — no throw on an unknown key', async () => {

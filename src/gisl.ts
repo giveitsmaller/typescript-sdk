@@ -43,6 +43,7 @@ import {
   validateSingleOpConvertOptions,
   assertThumbnailDimensions,
 } from './ergonomic/option_validation.js';
+import type { ConvertOptions, ThumbnailOptions } from './ergonomic/option_types.js';
 import { MergeBuilder, asset, type Asset, type MergeOptions } from './merge.js';
 import { PresetDefaults } from './ergonomic/presets/index.js';
 import { Recipe, FilesRecipe, BatchRecipe, fileInput, type FileInput } from './file-first.js';
@@ -420,8 +421,24 @@ export type ErgonomicClient = GislClient & {
    */
   workflow(id: string): Handle;
   compress(input: string | Blob, options?: Record<string, unknown>): OperationBuilder;
-  convert(input: string | Blob, options?: Record<string, unknown>): OperationBuilder;
-  thumbnail(input: string | Blob, options?: Record<string, unknown>): OperationBuilder;
+  /**
+   * Single-op convert. The target format rides the bag as the required
+   * `output_format` (the single-op builder has no positional format — that is
+   * the file-first `Recipe.convert(format, …)` surface). Extra keys are the
+   * typed {@link ConvertOptions}. A missing `output_format` is a compile-time
+   * error (uFbM31dC); an unknown key is a compile-time error for an INLINE bag
+   * only — aliased bags bypass TS excess-property checks — so the runtime guard
+   * remains the backstop (also for untyped JS callers).
+   */
+  convert(input: string | Blob, options: ConvertOptions & { output_format: string }): OperationBuilder;
+  /**
+   * Single-op thumbnail. {@link ThumbnailOptions} requires `width` + `height`;
+   * omitting either is a compile-time error (uFbM31dC). An unknown key is a
+   * compile-time error for an INLINE bag only — aliased bags bypass TS
+   * excess-property checks — so the runtime guard remains the backstop (also
+   * for untyped JS callers).
+   */
+  thumbnail(input: string | Blob, options: ThumbnailOptions): OperationBuilder;
   /** Geometric transform (rotate/flip). Passthrough; the op is `planned` (server 422s until Lambdas ship). */
   transform(input: string | Blob, options?: Record<string, unknown>): OperationBuilder;
   /**
