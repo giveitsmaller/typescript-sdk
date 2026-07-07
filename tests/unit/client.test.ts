@@ -14,6 +14,7 @@ import {
   GislBalanceExhaustedError,
   GislFeatureNotAvailableError,
   GislFeatureTierRestrictedError,
+  GislLongFormConcurrencyError,
   GislTierRestrictedError,
   GislTimeoutError,
   GislValidationError,
@@ -75,10 +76,13 @@ describe('GislClient', () => {
         expect(err).toBeInstanceOf(GislApiError);
         const apiErr = err as GislApiError;
         expect(apiErr.statusCode).toBe(404);
-        expect(apiErr.errorMessage).toBe('Not found');
+        // No wire `message` on this envelope → the canonical synthetic fallback
+        // (U7MACpOj), NOT the raw `error` value. The `.message` prefix format is
+        // what this test pins.
+        expect(apiErr.errorMessage).toBe('Request failed with status 404 (Not found).');
         expect(apiErr.path).toBe('/api/uploads/xyz/metadata');
         expect(apiErr.message).toBe(
-          'API error 404 at /api/uploads/xyz/metadata: Not found',
+          'API error 404 at /api/uploads/xyz/metadata: Request failed with status 404 (Not found).',
         );
       }
     });
@@ -850,6 +854,26 @@ describe('GislClient', () => {
       );
 
       await expect(client.getSchema()).rejects.toThrow(GislApiError);
+    });
+
+    it('error response with `error` but no `message` falls back to the synthetic sentence (U7MACpOj)', async () => {
+      // The getSchema raw-response error path routes through the SAME
+      // fallbackErrorMessage helper as handleResponse, so a message-absent
+      // error envelope surfaces the byte-identical synthetic sentence — not
+      // the raw machine code.
+      fetchSpy.mockResolvedValueOnce(
+        schemaResponse(503, {}, { success: false, error: 'SOME_CODE' }),
+      );
+
+      try {
+        await client.getSchema();
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislApiError);
+        const apiErr = err as GislApiError;
+        expect(apiErr.errorMessage).toBe('Request failed with status 503 (SOME_CODE).');
+        expect(apiErr.errorCode).toBe('SOME_CODE');
+      }
     });
   });
 
@@ -3675,7 +3699,112 @@ describe('GislClient', () => {
         expect(err).not.toBeInstanceOf(GislWorkflowExpiredError);
         const apiErr = err as GislApiError;
         expect(apiErr.statusCode).toBe(500);
-        expect(apiErr.errorMessage).toBe('Some new error');
+        // No wire `message` → canonical synthetic fallback (U7MACpOj), not the
+        // raw `error` value.
+        expect(apiErr.errorMessage).toBe('Request failed with status 500 (Some new error).');
+      }
+    });
+
+    // -------------------------------------------------------------------
+    // ST5CIN87 — 429 long-form concurrency limit (code-keyed dispatch)
+    // -------------------------------------------------------------------
+
+    it('429 LONG_FORM_CONCURRENCY_LIMIT_EXCEEDED → GislLongFormConcurrencyError with upgradeUrl', async () => {
+      // Dispatch keys on the `error` CODE (this envelope carries no
+      // error_type). Production trigger is POST /api/workflows but the
+      // dispatcher is endpoint-agnostic — getWorkflowStatus exercises the
+      // same handleResponse branch.
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'LONG_FORM_CONCURRENCY_LIMIT_EXCEEDED',
+            message: 'Too many long-form jobs',
+            links: { upgrade: 'https://x/upgrade' },
+          },
+          429,
+        ),
+      );
+
+      try {
+        await client.getWorkflowStatus('wf-1');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislLongFormConcurrencyError);
+        expect(err).toBeInstanceOf(GislApiError);
+        const concErr = err as GislLongFormConcurrencyError;
+        expect(concErr.statusCode).toBe(429);
+        expect(concErr.upgradeUrl).toBe('https://x/upgrade');
+        expect(concErr.payload.links?.upgrade).toBe('https://x/upgrade');
+        expect(concErr.errorMessage).toBe('Too many long-form jobs');
+      }
+    });
+
+    it('generic infra rate-limit 429 (TOO_MANY_REQUESTS) stays base GislApiError with retryAfterSeconds', async () => {
+      // Negative/regression guard: the code-keyed dispatch must NOT over-match
+      // a generic infra rate-limit 429 (different code, carries Retry-After).
+      // It surfaces as the base GislApiError where retryAfterSeconds applies.
+      fetchSpy.mockResolvedValueOnce(
+        new Response(JSON.stringify({ success: false, error: 'TOO_MANY_REQUESTS' }), {
+          status: 429,
+          headers: { 'Content-Type': 'application/json', 'Retry-After': '30' },
+        }),
+      );
+
+      try {
+        await client.getWorkflowStatus('wf-1');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislApiError);
+        expect(err).not.toBeInstanceOf(GislLongFormConcurrencyError);
+        const apiErr = err as GislApiError;
+        expect(apiErr.statusCode).toBe(429);
+        // Retry-After still resolves — proves the base-error metadata path.
+        expect(apiErr.retryAfterSeconds).toBe(30);
+      }
+    });
+
+    // -------------------------------------------------------------------
+    // U7MACpOj — message-absent fallback (byte-identical to PHP)
+    // -------------------------------------------------------------------
+
+    it('error envelope with no `message` falls back to the synthetic sentence on errorMessage', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'SOME_CODE',
+            // message intentionally absent
+          },
+          400,
+        ),
+      );
+
+      try {
+        await client.getWorkflowStatus('wf-1');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislApiError);
+        const apiErr = err as GislApiError;
+        // .errorMessage is the RAW synthetic string (NOT .message, which is
+        // prefixed with `API error 400 at …:`).
+        expect(apiErr.errorMessage).toBe('Request failed with status 400 (SOME_CODE).');
+        expect(apiErr.errorCode).toBe('SOME_CODE');
+      }
+    });
+
+    it('error envelope with neither `error` nor `message` falls back to unknown_error', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({ success: false }, 400),
+      );
+
+      try {
+        await client.getWorkflowStatus('wf-1');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislApiError);
+        const apiErr = err as GislApiError;
+        expect(apiErr.errorMessage).toBe('Request failed with status 400 (unknown_error).');
       }
     });
   });

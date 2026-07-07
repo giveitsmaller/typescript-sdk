@@ -9,6 +9,7 @@ import {
   GislError,
   GislFeatureNotAvailableError,
   GislFeatureTierRestrictedError,
+  GislLongFormConcurrencyError,
   GislMultipartPartCountError,
   GislMultipartPartError,
   GislProbePendingError,
@@ -41,6 +42,47 @@ describe('error classes', () => {
       expect(err).toBeInstanceOf(GislError);
       expect(err).toBeInstanceOf(Error);
       expect(err.name).toBe('GislBalanceExhaustedError');
+    });
+
+    it('GislLongFormConcurrencyError extends GislApiError with upgradeUrl getter', () => {
+      // ST5CIN87 — 429 long-form concurrency limit. Mirrors the
+      // GislBalanceExhaustedError instanceof test above; the wire envelope is
+      // camelCase here (what handleResponse builds via FromJSON before it
+      // threads the payload into the subclass constructor).
+      const err = new GislLongFormConcurrencyError(
+        429,
+        'msg',
+        {
+          success: false,
+          error: 'LONG_FORM_CONCURRENCY_LIMIT_EXCEEDED',
+          links: { upgrade: 'https://x/upgrade' },
+        },
+      );
+      expect(err).toBeInstanceOf(GislLongFormConcurrencyError);
+      expect(err).toBeInstanceOf(GislApiError);
+      expect(err).toBeInstanceOf(GislError);
+      expect(err).toBeInstanceOf(Error);
+      expect(err.name).toBe('GislLongFormConcurrencyError');
+      expect(err.statusCode).toBe(429);
+      // upgradeUrl reads links.upgrade off the typed payload.
+      expect(err.upgradeUrl).toBe('https://x/upgrade');
+      // Payload narrows to LongFormConcurrencyLimitResponse.
+      expect(err.payload.links?.upgrade).toBe('https://x/upgrade');
+      expect(err.payload.error).toBe('LONG_FORM_CONCURRENCY_LIMIT_EXCEEDED');
+    });
+
+    it('GislLongFormConcurrencyError.upgradeUrl is undefined when links absent', () => {
+      const err = new GislLongFormConcurrencyError(
+        429,
+        'Too many long-form jobs',
+        {
+          success: false,
+          error: 'LONG_FORM_CONCURRENCY_LIMIT_EXCEEDED',
+        },
+      );
+      expect(err).toBeInstanceOf(GislLongFormConcurrencyError);
+      expect(err.upgradeUrl).toBeUndefined();
+      expect(err.payload.links?.upgrade).toBeUndefined();
     });
 
     it('GislBundleAlreadyArchivedError extends GislConfigError', () => {

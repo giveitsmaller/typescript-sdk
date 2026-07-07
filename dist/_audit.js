@@ -56,6 +56,8 @@ export function _runAudit() {
     accept();
     accept();
     accept();
+    accept();
+    accept();
     // SDK-3 (Wb6ebOMM) public-API surface for the 3 resume-support endpoints.
     accept();
     accept();

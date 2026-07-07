@@ -38,6 +38,7 @@ import {
   BalanceExhaustedResponseRequiredActionEnum,
   FeatureNotAvailableResponseFromJSON,
   FeatureTierRestrictedResponseFromJSON,
+  LongFormConcurrencyLimitResponseFromJSON,
   TierRestrictionKind,
   TierRestrictionResponseFromJSON,
   UserTier,
@@ -90,6 +91,7 @@ import {
   GislError,
   GislFeatureNotAvailableError,
   GislFeatureTierRestrictedError,
+  GislLongFormConcurrencyError,
   GislMultipartPartCountError,
   GislMultipartPartError,
   GislMultipartSessionNotFoundError,
@@ -269,6 +271,19 @@ function headersToRecord(headers: Headers): Record<string, string> {
     r[k] = v;
   });
   return r;
+}
+
+// Canonical human-readable fallback when a failure envelope carries NO `message`
+// field. Kept IDENTICAL to the PHP SDK (`GislClient::fallbackErrorMessage`) so a
+// message-absent error surfaces byte-identical `.message` text across SDKs
+// (card U7MACpOj). Used by BOTH error-construction paths (`handleResponse` and
+// the `getSchema` raw-response path) so they cannot drift. The machine code
+// stays on `.errorCode` — this string is human DISPLAY text only; never parse
+// it. `error` absent → `unknown_error` (PHP parity). Historically TS leaked the
+// SCREAMING_SNAKE `error` code as `.message`, diverging from PHP's synthetic
+// sentence; this unifies them on the human-shaped form.
+function fallbackErrorMessage(status: number, errorCode: string | undefined): string {
+  return `Request failed with status ${status} (${errorCode ?? 'unknown_error'}).`;
 }
 
 function isValidationDetails(value: unknown): value is ValidationDetail[] {
@@ -737,13 +752,17 @@ export class GislClient {
 
       // Human-readable text comes from `message` (the I26 localised field).
       // `error` is the stable, never-localised SCREAMING_SNAKE machine code —
-      // NOT display text. Surfacing `error` as the thrown error's `.message`
-      // regressed consumers that render the human string (x9Lbf6uy). Fall back
-      // to `error` when `message` is absent (deployed contract guarantees
-      // `message` on conforming error envelopes). Machine dispatch keys off
-      // `error_type` (below), unchanged.
+      // NOT display text (surfacing it as `.message` regressed consumers that
+      // render the human string, x9Lbf6uy). When `message` is absent (the
+      // deployed contract guarantees it on conforming error envelopes), fall
+      // back to the canonical synthetic sentence — byte-identical to the PHP
+      // SDK — instead of leaking the machine code (card U7MACpOj). The code is
+      // still carried on `.errorCode`. Machine dispatch keys off `error_type`
+      // (below), unchanged.
       const status = response.status;
-      const errorMessage = json.message ?? json.error ?? 'Unknown error';
+      const errorMessage =
+        json.message ??
+        fallbackErrorMessage(status, typeof json.error === 'string' ? json.error : undefined);
 
       // Validation-details branch first — preserve existing shape so callers
       // matching on `instanceof GislValidationError` keep working.
@@ -930,6 +949,20 @@ export class GislClient {
           (p) =>
             isInEnum(p.currentTier, UserTier) &&
             typeof p.maxDurationSeconds === 'number',
+        );
+      }
+
+      // Long-form concurrency limit (429) — a TIER quota, DISTINCT from a
+      // generic infra rate-limit 429. Dispatched on the machine `error` CODE
+      // (this envelope carries NO `error_type`); a generic rate-limit 429 has a
+      // different/absent code, so it falls through to the base GislApiError
+      // where `retryAfterSeconds` applies. The validator re-asserts the code so
+      // a malformed envelope falls through rather than mis-typing.
+      if (status === 429 && json.error === 'LONG_FORM_CONCURRENCY_LIMIT_EXCEEDED') {
+        tryThrowStructured(
+          LongFormConcurrencyLimitResponseFromJSON,
+          GislLongFormConcurrencyError,
+          (p) => p.error === 'LONG_FORM_CONCURRENCY_LIMIT_EXCEEDED',
         );
       }
 
@@ -2583,18 +2616,24 @@ export class GislClient {
     }
 
     if (!response.ok) {
-      let errorMessage = 'Unknown error';
       let errorCode: string | undefined;
+      // Seed with the canonical synthetic sentence (unknown_error) so the
+      // message-absent JSON branch below reuses the SAME helper as
+      // handleResponse + PHP — that message-absent JSON envelope is the
+      // U7MACpOj parity target. A non-JSON body is a rare edge that keeps
+      // this seed (it does NOT claim byte-parity with PHP's non-JSON path,
+      // which throws a distinct GislError).
+      let errorMessage = fallbackErrorMessage(response.status, undefined);
       try {
         const errJson = (await response.json()) as { error?: string; message?: string };
-        // Prefer the human `message`; `error` is the machine code (x9Lbf6uy).
-        if (errJson.message) errorMessage = errJson.message;
-        else if (errJson.error) errorMessage = errJson.error;
         // Surface the machine code as errorCode too (parity with handleResponse
         // + PHP), even when `message` supplied the human text.
         if (typeof errJson.error === 'string') errorCode = errJson.error;
+        // Prefer the human `message`; else the canonical synthetic sentence —
+        // NOT the raw machine code (x9Lbf6uy / U7MACpOj).
+        errorMessage = errJson.message ?? fallbackErrorMessage(response.status, errorCode);
       } catch {
-        // Non-JSON body — keep generic message, no machine code.
+        // Non-JSON body — keep the generic synthetic message, no machine code.
       }
       // This throw is OUTSIDE handleResponse (rawResponse:true / 304 path), so
       // build the response-header surface from the in-scope `response` here.

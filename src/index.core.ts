@@ -77,6 +77,7 @@ export {
   GislApiError,
   GislValidationError,
   GislBalanceExhaustedError,
+  GislLongFormConcurrencyError,
   GislTierRestrictedError,
   GislFeatureTierRestrictedError,
   GislFeatureNotAvailableError,
@@ -357,6 +358,8 @@ export type {
   // and read `error.payload` typed as the corresponding response shape.
   BalanceExhaustedResponse,
   BalanceExhaustedResponseAllOfLinks,
+  LongFormConcurrencyLimitResponse,
+  LongFormConcurrencyLimitResponseAllOfLinks,
   TierRestrictionResponse,
   FeatureTierRestrictedResponse,
   FeatureNotAvailableResponse,

@@ -5,6 +5,7 @@ import type {
   BalanceExhaustedResponse,
   FeatureNotAvailableResponse,
   FeatureTierRestrictedResponse,
+  LongFormConcurrencyLimitResponse,
   ProbePendingResponse,
   TierRestrictionResponse,
   UploadDurationExceedsTierResponse,
@@ -258,6 +259,48 @@ export class GislBalanceExhaustedError extends GislApiError {
   ) {
     super(statusCode, errorMessage, path, undefined, buildOptionsWithPayload(payload, extra));
     this.name = 'GislBalanceExhaustedError';
+  }
+}
+
+/**
+ * `429` on `POST /api/workflows` when the caller already holds the maximum
+ * number of concurrent in-flight long-form (Fargate) workflows their tier
+ * permits (Pro 2 / Max 5; Enterprise uncapped). DISTINCT from an infrastructure
+ * rate-limit `429`: it carries the machine code `LONG_FORM_CONCURRENCY_LIMIT_EXCEEDED`
+ * and a `links.upgrade` deep link, and has **no `Retry-After`** — the limit clears
+ * when an in-flight long-form workflow finishes, not on a timer. A generic infra
+ * rate-limit `429` (no matching code) surfaces as the base {@link GislApiError}
+ * instead, where {@link GislApiError.retryAfterSeconds} applies.
+ *
+ * Dispatched on the `error` CODE, not `error_type` (the envelope carries none).
+ *
+ * @example
+ * try {
+ *   await client.createWorkflow({ jobs });
+ * } catch (e) {
+ *   if (e instanceof GislLongFormConcurrencyError) {
+ *     showUpgradeCta(e.upgradeUrl); // wait on completion or upgrade — do NOT back off
+ *   }
+ *   throw e;
+ * }
+ */
+export class GislLongFormConcurrencyError extends GislApiError {
+  declare readonly payload: LongFormConcurrencyLimitResponse;
+
+  constructor(
+    statusCode: number,
+    errorMessage: string,
+    payload: LongFormConcurrencyLimitResponse,
+    path?: string,
+    extra?: Omit<GislApiErrorOptions, 'payload'>,
+  ) {
+    super(statusCode, errorMessage, path, undefined, buildOptionsWithPayload(payload, extra));
+    this.name = 'GislLongFormConcurrencyError';
+  }
+
+  /** The pricing / upgrade deep link (`links.upgrade`), or `undefined` when absent. */
+  get upgradeUrl(): string | undefined {
+    return this.payload.links?.upgrade;
   }
 }
 

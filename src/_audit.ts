@@ -21,6 +21,8 @@ import type {
   // `instanceof Gisl<X>Error` and read `error.payload` typed.
   BalanceExhaustedResponse,
   BalanceExhaustedResponseAllOfLinks,
+  LongFormConcurrencyLimitResponse,
+  LongFormConcurrencyLimitResponseAllOfLinks,
   TierRestrictionResponse,
   FeatureTierRestrictedResponse,
   FeatureNotAvailableResponse,
@@ -227,6 +229,8 @@ export function _runAudit(): void {
   accept<WorkflowWarning>();
   accept<BalanceExhaustedResponse>();
   accept<BalanceExhaustedResponseAllOfLinks>();
+  accept<LongFormConcurrencyLimitResponse>();
+  accept<LongFormConcurrencyLimitResponseAllOfLinks>();
   accept<TierRestrictionResponse>();
   accept<FeatureTierRestrictedResponse>();
   accept<FeatureNotAvailableResponse>();

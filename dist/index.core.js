@@ -9,7 +9,7 @@ export { GislClient, DEFAULT_MULTIPART_FIRST_CHUNK_SIZE } from './client.js';
 export { parseSseStream } from './sse.js';
 export { uploadSource, jobOutputSource, externalImportSource, connectionSource, } from './types.js';
 // Errors
-export { GislError, GislApiError, GislValidationError, GislBalanceExhaustedError, GislTierRestrictedError, GislFeatureTierRestrictedError, GislFeatureNotAvailableError, GislWorkflowExpiredError, GislProbePendingError, GislAuthError, GislUploadCapExceededError, GislMultipartPartError, GislMultipartPartCountError, 
+export { GislError, GislApiError, GislValidationError, GislBalanceExhaustedError, GislLongFormConcurrencyError, GislTierRestrictedError, GislFeatureTierRestrictedError, GislFeatureNotAvailableError, GislWorkflowExpiredError, GislProbePendingError, GislAuthError, GislUploadCapExceededError, GislMultipartPartError, GislMultipartPartCountError, 
 // SDK-3 (Wb6ebOMM) — typed errors for the 3 resume-support endpoints.
 GislMultipartSessionNotFoundError, GislMultipartSessionOwnershipError, GislMultipartSessionAuthRequiredError, GislTimeoutError, GislAbortError, 
 // FF2b / tywwynmN — transport-level failure (mirrors PHP GislNetworkError);
