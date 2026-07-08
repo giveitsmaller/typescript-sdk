@@ -46,9 +46,7 @@ for (const artifact of many.artifacts) console.log(artifact.url);
 > `client.compress(path, { ... }).run()` form (and `thumbnail` / `convert`) is
 > available, and the raw wire client — `client.createWorkflow({ jobs: [...] })`
 > with `uploadSource` / `OperationType` for hand-built job DAGs — is the advanced
-> escape hatch. File-first is the recommended direction the
-> [examples](https://github.com/AntonioCS/giveitsmaller-sdks/tree/main/docs/typescript/examples)
-> build on.
+> escape hatch. File-first is the recommended direction to build on.
 
 > **Reusing an upload id across clients?** An upload created by an
 > authenticated caller is owned by that caller. If you persist a `fileId` and
@@ -58,18 +56,11 @@ for (const artifact of many.artifacts) console.log(artifact.url);
 > only under the same auth that created it; the upload-then-create flow above is
 > consistent by construction. Anonymous-intake uploads are unaffected.
 
-## Full documentation
+## Documentation
 
-Docs are published in the [giveitsmaller-sdks](https://github.com/AntonioCS/giveitsmaller-sdks) repository — they are **not** shipped in the npm tarball (only `dist/` is published).
-
-- **Getting started & concepts** — [`docs/typescript/index.md`](https://github.com/AntonioCS/giveitsmaller-sdks/blob/main/docs/typescript/index.md)
-- **Client reference** (all `GislClient` methods + operation option list) — [`docs/typescript/client.md`](https://github.com/AntonioCS/giveitsmaller-sdks/blob/main/docs/typescript/client.md)
-- **Types & authoring primitives** (config, payloads, job factories) — [`docs/typescript/types.md`](https://github.com/AntonioCS/giveitsmaller-sdks/blob/main/docs/typescript/types.md)
-- **SSE / live progress** — [`docs/typescript/sse.md`](https://github.com/AntonioCS/giveitsmaller-sdks/blob/main/docs/typescript/sse.md)
-- **Webhooks** — [`docs/typescript/webhook.md`](https://github.com/AntonioCS/giveitsmaller-sdks/blob/main/docs/typescript/webhook.md)
-- **Errors & retry guidance** — [`docs/typescript/errors.md`](https://github.com/AntonioCS/giveitsmaller-sdks/blob/main/docs/typescript/errors.md)
-- **Troubleshooting** — [`docs/typescript/troubleshooting.md`](https://github.com/AntonioCS/giveitsmaller-sdks/blob/main/docs/typescript/troubleshooting.md)
-- **Examples** — compress, thumbnail, convert, merge, archive, watermark, output — [`docs/typescript/examples/`](https://github.com/AntonioCS/giveitsmaller-sdks/tree/main/docs/typescript/examples)
+Full documentation — getting started and concepts, the `GislClient` reference and operation
+options, authoring primitives, SSE/live progress, webhooks, error/retry guidance, troubleshooting,
+and per-operation examples — lives at [giveitsmaller.com](https://giveitsmaller.com).
 
 ## Contributing: the committed `dist/`
 
