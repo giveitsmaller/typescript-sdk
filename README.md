@@ -2,6 +2,8 @@
 
 TypeScript / Node.js SDK for the [GISL](https://giveitsmaller.com) (Give It Smaller) file compression and processing API.
 
+> **Read-only mirror.** This repository is automatically published from Give It Smaller's private monorepo on each release. Do **not** open issues or pull requests here — they are not monitored. Licensed under [Apache-2.0](./LICENSE).
+
 ## Install
 
 ```bash
@@ -92,4 +94,4 @@ the `file:` gap.
 
 ## License
 
-MIT — see the [LICENSE](https://github.com/AntonioCS/giveitsmaller-sdks/blob/main/LICENSE) file.
+Apache-2.0 — see the [LICENSE](./LICENSE) file.
