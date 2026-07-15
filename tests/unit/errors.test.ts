@@ -578,10 +578,11 @@ describe('error classes', () => {
   });
 
   describe('Auth error_type vocabulary', () => {
-    // The contract enum (AuthErrorType) carries 7 values per the API spec.
-    // (`api_key_revoked` was removed in Mc6wiUzc — the revoked case now
-    // collapses into `api_key_invalid` for anti-enumeration.)
-    // Parametrise across ALL 7 so a future contract addition or a typo in
+    // The contract enum (AuthErrorType) carries 8 values per the API spec.
+    // (`api_key_revoked` was removed in Mc6wiUzc — collapses into
+    // `api_key_invalid`; `reauthentication_required` added in apxXxptO for a
+    // stale-session 401 that fails closed on POST /api/workflows.)
+    // Parametrise across ALL 8 so a future contract addition or a typo in
     // the dispatch allow-list lands on a failing test, not a silent fall-
     // through to base GislApiError.
     it.each([
@@ -591,6 +592,7 @@ describe('error classes', () => {
       'account_deleted',
       'account_deletion_expired',
       'authentication_required',
+      'reauthentication_required',
       'api_key_invalid',
     ] as const)('accepts errorType=%s', (errorType) => {
       const err = new GislAuthError(
