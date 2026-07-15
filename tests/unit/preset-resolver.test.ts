@@ -850,23 +850,23 @@ describe('code-review R1 regression: presetConfigHash is canonical across nested
 });
 
 describe('code-review R1 regression: type_mismatch suggestion uses correct PascalCase class name', () => {
-  it('document_pdf suggestion names DocumentPdfCompressPresetOptionsInput (not Documentpdf…)', () => {
+  it('document_office suggestion names DocumentOfficeCompressPresetOptionsInput (not Documentoffice…)', () => {
     try {
       resolveCompressOptions({
         media: 'image',
         op: 'compress',
-        // PDF-flavoured fields on an image op — triggers type_mismatch
-        // (profile + grayscale both belong to document_pdf).
-        presetOverrides: { profile: 'screen', grayscale: true },
+        // Office-flavoured fields on an image op — triggers type_mismatch
+        // (all three strip flags belong to document_office).
+        presetOverrides: { stripMacros: true, stripHiddenData: true, stripUnusedFonts: true },
         explicitOptions: {},
       });
       throw new Error('expected throw');
     } catch (err) {
       const e = err as GislConfigError;
       expect(e.reason).toBe('type_mismatch');
-      expect(e.suggestion).toContain('DocumentPdfCompressPresetOptionsInput');
+      expect(e.suggestion).toContain('DocumentOfficeCompressPresetOptionsInput');
       // Negative — the buggy lowercase form must NOT appear.
-      expect(e.suggestion).not.toContain('Documentpdf');
+      expect(e.suggestion).not.toContain('Documentoffice');
     }
   });
 

@@ -412,6 +412,7 @@ describe('WORKFLOW_CREATE_PAYLOAD_KEYS', () => {
       'export',
       'delivery',
       'processing',
+      'notify',
     ]);
   });
 });

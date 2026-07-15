@@ -64,10 +64,10 @@ export function _detectCompressMedia(input) {
             return 'audio';
         if (mime.startsWith('video/'))
             return 'video';
-        if (mime === 'application/pdf')
-            return 'document_pdf';
         if (mime === 'application/epub+zip')
             return 'document_epub';
+        if (mime === 'application/pdf')
+            return 'document_pdf';
         if (mime === 'application/vnd.oasis.opendocument.text' ||
             mime === 'application/vnd.oasis.opendocument.spreadsheet' ||
             mime === 'application/vnd.oasis.opendocument.presentation') {
@@ -93,10 +93,10 @@ export function _detectCompressMedia(input) {
         return 'audio';
     if (['mp4', 'mov', 'mkv', 'webm', 'avi', 'wmv', 'flv', 'm4v'].includes(ext))
         return 'video';
-    if (ext === 'pdf')
-        return 'document_pdf';
     if (ext === 'epub')
         return 'document_epub';
+    if (ext === 'pdf')
+        return 'document_pdf';
     if (['odt', 'ods', 'odp'].includes(ext))
         return 'document_odf';
     if (['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'].includes(ext))

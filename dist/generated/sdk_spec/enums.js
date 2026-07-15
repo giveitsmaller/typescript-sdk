@@ -77,20 +77,6 @@ export const AudioSampleRate = {
     _44100: 44100,
     _48000: 48000,
 };
-// PDF Ghostscript preset. Screen = smallest; Ebook = mid; Printer = 300dpi; Prepress = print-production.
-export const PdfProfile = {
-    Screen: "screen",
-    Ebook: "ebook",
-    Printer: "printer",
-    Prepress: "prepress",
-};
-// PDF output color space.
-export const PdfColorspace = {
-    Unchanged: "unchanged",
-    Rgb: "rgb",
-    Cmyk: "cmyk",
-    Grayscale: "grayscale",
-};
 /** Catalog of every ergonomic enum (canonicalName → wire). */
 export const ERGONOMIC_ENUMS = {
     OptimizeFor,
@@ -102,6 +88,4 @@ export const ERGONOMIC_ENUMS = {
     AudioBitrate,
     AudioCodec,
     AudioSampleRate,
-    PdfProfile,
-    PdfColorspace,
 };

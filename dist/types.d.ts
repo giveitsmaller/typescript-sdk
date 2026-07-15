@@ -1,5 +1,5 @@
 import type { OperationType, OperationsSchemaResponse, OperationCapability, OutputProperties, ImageEncodeCapabilities, CallbackEventType, SseEventType, SseOperationProgressData, SseOperationCompletedData, SseOperationFailedData, SseJobCompletedData, SseJobFailedData, SseWorkflowTerminalData, MultipartInitiateRequestMetadataHint, UploadProbeResponse } from '@giveitsmaller/contracts/openapi';
-import type { JobInputV2RoleEnum } from '@giveitsmaller/contracts/openapi';
+import type { JobInputV2RoleEnum, NotifyConfig } from '@giveitsmaller/contracts/openapi';
 export interface GislClientConfig {
     baseUrl: string;
     apiKey?: string;
@@ -188,6 +188,14 @@ export interface WorkflowCreatePayload {
     export?: ExternalDestinationPayload;
     delivery?: DeliveryPayload;
     processing?: WorkflowProcessingPayload;
+    /**
+     * Per-job completion notification (contracts v2.164.0, `notify.email`).
+     * Opaque passthrough wire shape — the ergonomic `notifyEmail` surface
+     * (SubmitOptions/RunOptions + builder convenience) is a separate follow-up
+     * (card y6jsQCpb); this field only acknowledges the wire key so a
+     * hand-built payload can carry it. Mirrors `export`/`delivery`/`processing`.
+     */
+    notify?: NotifyConfig;
 }
 /**
  * Single source of truth for WorkflowCreatePayload's top-level wire keys.
@@ -196,7 +204,7 @@ export interface WorkflowCreatePayload {
  * only via deep imports and should not be treated as public API.
  * @internal
  */
-export declare const WORKFLOW_CREATE_PAYLOAD_KEYS: readonly ["jobs", "source", "operations", "workflow_edges", "callback_url", "callback_events", "export", "delivery", "processing"];
+export declare const WORKFLOW_CREATE_PAYLOAD_KEYS: readonly ["jobs", "source", "operations", "workflow_edges", "callback_url", "callback_events", "export", "delivery", "processing", "notify"];
 export interface GetSchemaOptions {
     /** Filter the schema to operations that accept this MIME type (e.g. `image/jpeg`). */
     mimeType?: string;

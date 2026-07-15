@@ -2714,14 +2714,17 @@ export class GislClient {
    * via that cookie when the client is configured with
    * `useSessionCookie: true`.
    *
-   * Failure modes per ticket FX6mbTJD:
-   * - **401** `invalid_credentials` (collapsed with unverified
-   *   accounts for anti-enumeration) → `GislAuthError`.
-   * - **403** account-state failures (`account_locked`,
-   *   `account_disabled`, `account_deleted`,
-   *   `account_deletion_expired`) → `GislAuthError`.
+   * Failure modes per ticket FX6mbTJD (login narrowed at contracts
+   * v2.166.0 authsec — no 403 account-state branch on login):
+   * - **401** `invalid_credentials` (wrong password, unverified, OR
+   *   unknown account — all collapsed for anti-enumeration) →
+   *   `GislAuthError`.
    * - **429** infrastructure rate-limit → `GislApiError` with
    *   the `Retry-After` header echoed on the response.
+   *
+   * The account-status error types (`account_locked` / `account_disabled`
+   * / `account_deleted` / `account_deletion_expired`) still exist but are
+   * emitted on the API-key path + live-session enforcement, not on login.
    *
    * Node session persistence (cookie-jar across processes) is out of
    * scope — this method only touches the request side.

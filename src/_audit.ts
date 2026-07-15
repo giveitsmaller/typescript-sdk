@@ -169,8 +169,6 @@ import type {
   AudioCompressPresetOptionsInput,
   VideoCompressPresetOptions,
   VideoCompressPresetOptionsInput,
-  DocumentPdfCompressPresetOptions,
-  DocumentPdfCompressPresetOptionsInput,
   DocumentOfficeCompressPresetOptions,
   DocumentOfficeCompressPresetOptionsInput,
   DocumentOdfCompressPresetOptions,
@@ -186,8 +184,6 @@ import type {
   AudioBitrate,
   AudioCodec,
   AudioSampleRate,
-  PdfProfile,
-  PdfColorspace,
   // T4b / 27rE1fZn — resolver public surface + augmented GislConfigError metadata.
   GislConfigErrorMetadata,
   ResolvedOptionsSources,
@@ -320,8 +316,6 @@ export function _runAudit(): void {
   accept<AudioCompressPresetOptionsInput>();
   accept<VideoCompressPresetOptions>();
   accept<VideoCompressPresetOptionsInput>();
-  accept<DocumentPdfCompressPresetOptions>();
-  accept<DocumentPdfCompressPresetOptionsInput>();
   accept<DocumentOfficeCompressPresetOptions>();
   accept<DocumentOfficeCompressPresetOptionsInput>();
   accept<DocumentOdfCompressPresetOptions>();
@@ -337,8 +331,6 @@ export function _runAudit(): void {
   accept<AudioBitrate>();
   accept<AudioCodec>();
   accept<AudioSampleRate>();
-  accept<PdfProfile>();
-  accept<PdfColorspace>();
   // T4b / 27rE1fZn — preset resolver public types.
   accept<GislConfigErrorMetadata>();
   accept<ResolvedOptionsSources>();

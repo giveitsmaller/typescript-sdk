@@ -788,7 +788,7 @@ describe('T4b — _detectCompressMedia (input → media classification)', () => 
     expect(_detectCompressMedia(new Blob(['x'], { type: 'video/mp4' }))).toBe('video');
   });
 
-  it('application/pdf MIME → document_pdf', async () => {
+  it('application/pdf MIME → document_pdf (still a detectable media; only lossy compress dropped in v2.166.0)', async () => {
     const { _detectCompressMedia } = await import('../../src/builder.js');
     expect(_detectCompressMedia(new Blob(['x'], { type: 'application/pdf' }))).toBe('document_pdf');
   });
@@ -828,7 +828,7 @@ describe('T4b — _detectCompressMedia (input → media classification)', () => 
     expect(_detectCompressMedia('CLIP.MOV')).toBe('video');
   });
 
-  it('filename extension fallback — .pdf → document_pdf', async () => {
+  it('filename extension fallback — .pdf → document_pdf (still a detectable media; only lossy compress dropped in v2.166.0)', async () => {
     const { _detectCompressMedia } = await import('../../src/builder.js');
     expect(_detectCompressMedia('paper.pdf')).toBe('document_pdf');
   });
@@ -970,6 +970,18 @@ describe('T4b — non-compress ops bypass the resolver (passthrough)', () => {
     const payload = mock.createWorkflow.mock.calls[0][0];
     // Resolver bypassed — opOptions verbatim, no snake_case translation.
     expect(payload.jobs[0].operations[0].options).toEqual({ quality: 80 });
+  });
+
+  it('compress op on a PDF fails fast with a specific error (PDF lossy compress dropped in v2.166.0)', async () => {
+    const mock = makeMockClient();
+    // .pdf → _detectCompressMedia → document_pdf (detectable but not compressible):
+    // the resolver fail-fasts client-side, before any upload, with an actionable message.
+    await expect(
+      new OperationBuilder(mock.client, 'compress', 'report.pdf', {
+        quality: 80,
+      }).run({ maxWait: '30s' }),
+    ).rejects.toThrow(/PDF compression was removed at contracts v2\.166\.0/);
+    expect(mock.createWorkflow).not.toHaveBeenCalled();
   });
 });
 

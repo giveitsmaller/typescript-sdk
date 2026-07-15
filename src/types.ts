@@ -17,7 +17,7 @@ import type {
   WorkflowSource,
   MultiInputSource,
 } from '@giveitsmaller/contracts/openapi';
-import type { JobInputV2RoleEnum } from '@giveitsmaller/contracts/openapi';
+import type { JobInputV2RoleEnum, NotifyConfig } from '@giveitsmaller/contracts/openapi';
 
 // ---------------------------------------------------------------------------
 // Client configuration
@@ -367,6 +367,14 @@ export interface WorkflowCreatePayload {
   export?: ExternalDestinationPayload;
   delivery?: DeliveryPayload;
   processing?: WorkflowProcessingPayload;
+  /**
+   * Per-job completion notification (contracts v2.164.0, `notify.email`).
+   * Opaque passthrough wire shape — the ergonomic `notifyEmail` surface
+   * (SubmitOptions/RunOptions + builder convenience) is a separate follow-up
+   * (card y6jsQCpb); this field only acknowledges the wire key so a
+   * hand-built payload can carry it. Mirrors `export`/`delivery`/`processing`.
+   */
+  notify?: NotifyConfig;
 }
 
 /**
@@ -386,6 +394,7 @@ export const WORKFLOW_CREATE_PAYLOAD_KEYS = Object.freeze([
   'export',
   'delivery',
   'processing',
+  'notify',
 ] as const);
 
 // Compile-time invariant: WORKFLOW_CREATE_PAYLOAD_KEYS must exactly equal

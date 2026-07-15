@@ -204,8 +204,6 @@ export {
   type AudioCompressPresetOptionsInput,
   VideoCompressPresetOptions,
   type VideoCompressPresetOptionsInput,
-  DocumentPdfCompressPresetOptions,
-  type DocumentPdfCompressPresetOptionsInput,
   DocumentOfficeCompressPresetOptions,
   type DocumentOfficeCompressPresetOptionsInput,
   DocumentOdfCompressPresetOptions,
@@ -221,8 +219,6 @@ export {
   AudioBitrate,
   AudioCodec,
   AudioSampleRate,
-  PdfProfile,
-  PdfColorspace,
 } from './ergonomic/presets/index.js';
 
 // Operation-builder surface (T2 / xVDTIm8C) — `client.compress/convert/thumbnail`
@@ -571,7 +567,6 @@ export type {
   CompressImageAvifOptions,
   CompressVideoOptions,
   CompressAudioOptions,
-  CompressDocumentPdfOptions,
   CompressDocumentOfficeOptions,
   CompressDocumentOdfOptions,
   CompressDocumentEpubOptions,

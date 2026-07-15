@@ -28,7 +28,6 @@
 import { ImageCompressPresetOptions, } from './image_compress.js';
 import { AudioCompressPresetOptions, } from './audio_compress.js';
 import { VideoCompressPresetOptions, } from './video_compress.js';
-import { DocumentPdfCompressPresetOptions, } from './document_pdf_compress.js';
 import { DocumentOfficeCompressPresetOptions, } from './document_office_compress.js';
 import { DocumentOdfCompressPresetOptions, } from './document_odf_compress.js';
 import { DocumentEpubCompressPresetOptions, } from './document_epub_compress.js';
@@ -36,12 +35,11 @@ import { DocumentEpubCompressPresetOptions, } from './document_epub_compress.js'
 export { ImageCompressPresetOptions, } from './image_compress.js';
 export { AudioCompressPresetOptions, } from './audio_compress.js';
 export { VideoCompressPresetOptions, } from './video_compress.js';
-export { DocumentPdfCompressPresetOptions, } from './document_pdf_compress.js';
 export { DocumentOfficeCompressPresetOptions, } from './document_office_compress.js';
 export { DocumentOdfCompressPresetOptions, } from './document_odf_compress.js';
 export { DocumentEpubCompressPresetOptions, } from './document_epub_compress.js';
 // Re-export ergonomic enums for callers (single canonical path).
-export { OptimizeFor, ImageMetadataPolicy, ImageFormat, VideoCodec, VideoPreset, VideoFit, AudioBitrate, AudioCodec, AudioSampleRate, PdfProfile, PdfColorspace, } from '../../generated/sdk_spec/enums.js';
+export { OptimizeFor, ImageMetadataPolicy, ImageFormat, VideoCodec, VideoPreset, VideoFit, AudioBitrate, AudioCodec, AudioSampleRate, } from '../../generated/sdk_spec/enums.js';
 function cellKeyOf(media, op) {
     return `${media}_${op}`;
 }
@@ -89,8 +87,6 @@ function mergePresetOptions(cellKey, parentOpts, childOpts) {
             return AudioCompressPresetOptions.from(mergedFields);
         case 'video_compress':
             return VideoCompressPresetOptions.from(mergedFields);
-        case 'document_pdf_compress':
-            return DocumentPdfCompressPresetOptions.from(mergedFields);
         case 'document_office_compress':
             return DocumentOfficeCompressPresetOptions.from(mergedFields);
         case 'document_odf_compress':
@@ -177,10 +173,6 @@ export class PresetDefaults {
     /** Register a (level, delta) on the video-compress cell. Immutable. */
     videoCompress(level, input = {}) {
         return new PresetDefaults(withCellEntry(this.cells, 'video_compress', level, VideoCompressPresetOptions.from(input)));
-    }
-    /** Register a (level, delta) on the document-pdf-compress cell. Immutable. */
-    pdfCompress(level, input = {}) {
-        return new PresetDefaults(withCellEntry(this.cells, 'document_pdf_compress', level, DocumentPdfCompressPresetOptions.from(input)));
     }
     /** Register a (level, delta) on the document-office-compress cell. Immutable. */
     officeCompress(level, input = {}) {

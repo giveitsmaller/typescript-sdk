@@ -63,20 +63,6 @@ export declare const AudioSampleRate: {
     readonly _48000: 48000;
 };
 export type AudioSampleRate = typeof AudioSampleRate[keyof typeof AudioSampleRate];
-export declare const PdfProfile: {
-    readonly Screen: "screen";
-    readonly Ebook: "ebook";
-    readonly Printer: "printer";
-    readonly Prepress: "prepress";
-};
-export type PdfProfile = typeof PdfProfile[keyof typeof PdfProfile];
-export declare const PdfColorspace: {
-    readonly Unchanged: "unchanged";
-    readonly Rgb: "rgb";
-    readonly Cmyk: "cmyk";
-    readonly Grayscale: "grayscale";
-};
-export type PdfColorspace = typeof PdfColorspace[keyof typeof PdfColorspace];
 /** Catalog of every ergonomic enum (canonicalName → wire). */
 export declare const ERGONOMIC_ENUMS: {
     readonly OptimizeFor: {
@@ -134,17 +120,5 @@ export declare const ERGONOMIC_ENUMS: {
         readonly _22050: 22050;
         readonly _44100: 44100;
         readonly _48000: 48000;
-    };
-    readonly PdfProfile: {
-        readonly Screen: "screen";
-        readonly Ebook: "ebook";
-        readonly Printer: "printer";
-        readonly Prepress: "prepress";
-    };
-    readonly PdfColorspace: {
-        readonly Unchanged: "unchanged";
-        readonly Rgb: "rgb";
-        readonly Cmyk: "cmyk";
-        readonly Grayscale: "grayscale";
     };
 };

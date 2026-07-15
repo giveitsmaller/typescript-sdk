@@ -27,7 +27,7 @@
 import type { GislClient } from './client.js';
 import type { OperationDownload, WorkflowStatusResponse, SseOperationProgressDataStatusEnum } from '@giveitsmaller/contracts/openapi';
 import { Handle } from './handle.js';
-import type { PresetDefaults, PresetMedia } from './ergonomic/presets/index.js';
+import type { PresetDefaults, DetectedMedia } from './ergonomic/presets/index.js';
 /**
  * Best-effort detection of the compress-operation media from the
  * builder's input. T4b only resolves presets for compress; the wire's
@@ -40,7 +40,7 @@ import type { PresetDefaults, PresetMedia } from './ergonomic/presets/index.js';
  *
  * @internal — exported for tests + the preset resolver.
  */
-export declare function _detectCompressMedia(input: string | Blob): PresetMedia | undefined;
+export declare function _detectCompressMedia(input: string | Blob): DetectedMedia | undefined;
 /**
  * Best-effort classification of whether an audio input is LOSSLESS
  * (flac/wav) vs lossy. The worker rejects `bitrate` on lossless audio

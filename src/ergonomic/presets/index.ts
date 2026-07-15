@@ -40,10 +40,6 @@ import {
   type VideoCompressPresetOptionsInput,
 } from './video_compress.js';
 import {
-  DocumentPdfCompressPresetOptions,
-  type DocumentPdfCompressPresetOptionsInput,
-} from './document_pdf_compress.js';
-import {
   DocumentOfficeCompressPresetOptions,
   type DocumentOfficeCompressPresetOptionsInput,
 } from './document_office_compress.js';
@@ -70,10 +66,6 @@ export {
   type VideoCompressPresetOptionsInput,
 } from './video_compress.js';
 export {
-  DocumentPdfCompressPresetOptions,
-  type DocumentPdfCompressPresetOptionsInput,
-} from './document_pdf_compress.js';
-export {
   DocumentOfficeCompressPresetOptions,
   type DocumentOfficeCompressPresetOptionsInput,
 } from './document_office_compress.js';
@@ -97,8 +89,6 @@ export {
   AudioBitrate,
   AudioCodec,
   AudioSampleRate,
-  PdfProfile,
-  PdfColorspace,
 } from '../../generated/sdk_spec/enums.js';
 
 // ---------------------------------------------------------------------------
@@ -110,10 +100,16 @@ export type PresetMedia =
   | 'image'
   | 'audio'
   | 'video'
-  | 'document_pdf'
   | 'document_office'
   | 'document_odf'
   | 'document_epub';
+
+/**
+ * Media the file-first detector can identify — the compressible
+ * `PresetMedia` set PLUS `document_pdf`, which is detectable (and a valid
+ * watermark-reject / convert / transform base) but NOT compressible.
+ */
+export type DetectedMedia = PresetMedia | 'document_pdf';
 
 export type PresetOp = 'compress';
 
@@ -126,7 +122,6 @@ export type AnyPresetOptions =
   | ImageCompressPresetOptions
   | AudioCompressPresetOptions
   | VideoCompressPresetOptions
-  | DocumentPdfCompressPresetOptions
   | DocumentOfficeCompressPresetOptions
   | DocumentOdfCompressPresetOptions
   | DocumentEpubCompressPresetOptions;
@@ -140,7 +135,6 @@ type CellKey =
   | 'image_compress'
   | 'audio_compress'
   | 'video_compress'
-  | 'document_pdf_compress'
   | 'document_office_compress'
   | 'document_odf_compress'
   | 'document_epub_compress';
@@ -199,8 +193,6 @@ function mergePresetOptions(
       return AudioCompressPresetOptions.from(mergedFields as AudioCompressPresetOptionsInput);
     case 'video_compress':
       return VideoCompressPresetOptions.from(mergedFields as VideoCompressPresetOptionsInput);
-    case 'document_pdf_compress':
-      return DocumentPdfCompressPresetOptions.from(mergedFields as DocumentPdfCompressPresetOptionsInput);
     case 'document_office_compress':
       return DocumentOfficeCompressPresetOptions.from(mergedFields as DocumentOfficeCompressPresetOptionsInput);
     case 'document_odf_compress':
@@ -308,13 +300,6 @@ export class PresetDefaults {
     );
   }
 
-  /** Register a (level, delta) on the document-pdf-compress cell. Immutable. */
-  pdfCompress(level: OptimizeFor, input: DocumentPdfCompressPresetOptionsInput = {}): PresetDefaults {
-    return new PresetDefaults(
-      withCellEntry(this.cells, 'document_pdf_compress', level, DocumentPdfCompressPresetOptions.from(input)),
-    );
-  }
-
   /** Register a (level, delta) on the document-office-compress cell. Immutable. */
   officeCompress(
     level: OptimizeFor,
@@ -343,11 +328,6 @@ export class PresetDefaults {
   /** @internal */ cellFor(media: 'image', op: 'compress', level: OptimizeFor): ImageCompressPresetOptions | undefined;
   /** @internal */ cellFor(media: 'audio', op: 'compress', level: OptimizeFor): AudioCompressPresetOptions | undefined;
   /** @internal */ cellFor(media: 'video', op: 'compress', level: OptimizeFor): VideoCompressPresetOptions | undefined;
-  /** @internal */ cellFor(
-    media: 'document_pdf',
-    op: 'compress',
-    level: OptimizeFor,
-  ): DocumentPdfCompressPresetOptions | undefined;
   /** @internal */ cellFor(
     media: 'document_office',
     op: 'compress',

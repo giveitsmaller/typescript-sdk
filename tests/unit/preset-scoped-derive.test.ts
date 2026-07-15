@@ -8,7 +8,6 @@ import {
   ImageFormat,
   VideoCodec,
   AudioBitrate,
-  PdfProfile,
 } from '../../src/index.js';
 import { create } from '../../src/gisl.js';
 import { resolveCompressOptions } from '../../src/ergonomic/preset_resolver.js';
@@ -269,12 +268,11 @@ describe('PresetDefaults.merge (static)', () => {
     expect(Object.isFrozen(merged)).toBe(true);
   });
 
-  it('merges across all 7 cell types correctly', () => {
+  it('merges across all 6 cell types correctly', () => {
     const parent = presetDefaults()
       .imageCompress(OptimizeFor.Size, { quality: 70 })
       .audioCompress(OptimizeFor.Size, { bitrate: AudioBitrate._128 })
       .videoCompress(OptimizeFor.Size, { codec: VideoCodec.H264 })
-      .pdfCompress(OptimizeFor.Size, { profile: PdfProfile.Printer })
       .officeCompress(OptimizeFor.Size, { stripHiddenData: true })
       .odfCompress(OptimizeFor.Size, { stripUnusedStyles: true })
       .epubCompress(OptimizeFor.Size, { stripUnusedCss: true });
@@ -287,7 +285,6 @@ describe('PresetDefaults.merge (static)', () => {
     expect(merged.cellFor('audio', 'compress', OptimizeFor.Size)?.bitrate).toBe(AudioBitrate._320);
     // Non-overlapping cells: parent verbatim
     expect(merged.cellFor('video', 'compress', OptimizeFor.Size)?.codec).toBe(VideoCodec.H264);
-    expect(merged.cellFor('document_pdf', 'compress', OptimizeFor.Size)?.profile).toBe(PdfProfile.Printer);
     expect(merged.cellFor('document_office', 'compress', OptimizeFor.Size)?.stripHiddenData).toBe(true);
     expect(merged.cellFor('document_odf', 'compress', OptimizeFor.Size)?.stripUnusedStyles).toBe(true);
     expect(merged.cellFor('document_epub', 'compress', OptimizeFor.Size)?.stripUnusedCss).toBe(true);

@@ -50,4 +50,5 @@ export const WORKFLOW_CREATE_PAYLOAD_KEYS = Object.freeze([
     'export',
     'delivery',
     'processing',
+    'notify',
 ]);

@@ -109,7 +109,6 @@ const CROSS_VERB_ROUTING: Readonly<Record<string, Readonly<Record<string, 'outpu
  * expose+contract AND genuinely unreachable).
  */
 const DEFERRED_EXPOSURE: Readonly<Record<string, readonly string[]>> = {
-  document_pdf: ['quality', 'image_dpi'],
   document_office: ['quality'],
   document_odf: ['quality'],
   document_epub: ['quality'],

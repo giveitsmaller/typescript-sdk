@@ -37,7 +37,7 @@
 import { sha256Hex } from '../sha256.js';
 import { GislConfigError } from '../errors.js';
 import { PRESET_VERSION as GENERATED_PRESET_VERSION } from '../generated/sdk_spec/version.js';
-import { ImageCompressPresetOptions, AudioCompressPresetOptions, VideoCompressPresetOptions, DocumentPdfCompressPresetOptions, DocumentOfficeCompressPresetOptions, DocumentOdfCompressPresetOptions, DocumentEpubCompressPresetOptions, definedFieldsOf, } from './presets/index.js';
+import { ImageCompressPresetOptions, AudioCompressPresetOptions, VideoCompressPresetOptions, DocumentOfficeCompressPresetOptions, DocumentOdfCompressPresetOptions, DocumentEpubCompressPresetOptions, definedFieldsOf, } from './presets/index.js';
 /**
  * The preset matrix version emitted on every resolve. Re-exported from the
  * GENERATED `sdk_spec/version.ts` (source of truth: contracts
@@ -175,8 +175,6 @@ function sdkDefaultRecord(media, op, optimize) {
             return { ...AudioCompressPresetOptions.shippedDefaultsFor(optimize) };
         case 'video':
             return { ...VideoCompressPresetOptions.shippedDefaultsFor(optimize) };
-        case 'document_pdf':
-            return { ...DocumentPdfCompressPresetOptions.shippedDefaultsFor(optimize) };
         case 'document_office':
             return { ...DocumentOfficeCompressPresetOptions.shippedDefaultsFor(optimize) };
         case 'document_odf':
@@ -212,9 +210,6 @@ function presetDefaultsCellRecord(defaults, media, op, optimize) {
             break;
         case 'video':
             cell = defaults.cellFor('video', 'compress', optimize);
-            break;
-        case 'document_pdf':
-            cell = defaults.cellFor('document_pdf', 'compress', optimize);
             break;
         case 'document_office':
             cell = defaults.cellFor('document_office', 'compress', optimize);
@@ -252,7 +247,6 @@ const MEDIA_FIELDS = Object.freeze({
     image: new Set(['quality', 'metadata', 'outputFormat']),
     audio: new Set(['bitrate', 'channels', 'sampleRate', 'normalize']),
     video: new Set(['codec', 'targetSize', 'crf', 'preset', 'width', 'height', 'fit', 'fps', 'faststart', 'audioCodec', 'audioBitrate']),
-    document_pdf: new Set(['profile', 'grayscale']),
     document_office: new Set(['stripMacros', 'stripHiddenData', 'stripUnusedFonts']),
     document_odf: new Set(['stripMetadata', 'stripUnusedStyles']),
     document_epub: new Set(['fontSubsetting', 'stripUnusedCss']),
@@ -278,9 +272,9 @@ function detectMismatchedOverrides(media, overrides) {
         const otherSet = MEDIA_FIELDS[otherMedia];
         if (unknownFields.every((k) => otherSet.has(k))) {
             // PascalCase every underscore-separated segment so multi-segment
-            // media (`document_pdf` → `DocumentPdf…`) emit the actual exported
+            // media (`document_office` → `DocumentOffice…`) emit the actual exported
             // class name (code-review MEDIUM: previously emitted
-            // `Documentpdf…` which doesn't resolve in user code).
+            // `Documentoffice…` which doesn't resolve in user code).
             const className = otherMedia
                 .split('_')
                 .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
@@ -321,7 +315,6 @@ export const KNOWN_WIRE_FIELDS = Object.freeze({
     image: new Set(['quality', 'metadata', 'output_format']),
     audio: new Set(['bitrate', 'channels', 'sample_rate', 'normalize', 'trim_start', 'trim_end']),
     video: new Set(['codec', 'encoding_mode', 'crf', 'target_size_bytes', 'preset', 'width', 'height', 'fit', 'fps', 'faststart', 'audio_codec', 'audio_bitrate', 'trim_start', 'trim_end']),
-    document_pdf: new Set(['profile', 'grayscale']),
     document_office: new Set(['strip_macros', 'strip_hidden_data', 'strip_unused_fonts']),
     document_odf: new Set(['strip_metadata', 'strip_unused_styles']),
     document_epub: new Set(['font_subsetting', 'strip_unused_css']),
@@ -444,6 +437,9 @@ function computePresetConfigHash(clientDefault, scopedDefault, callPresetOverrid
  * `optimize` unset ⇒ layer 1 contributes nothing; `resolvedOptions.preset = null`.
  */
 export function resolveCompressOptions(input) {
+    if (input.media === 'document_pdf') {
+        throw new GislConfigError('PDF compression was removed at contracts v2.166.0; convert() / transform() still accept PDF.', { reason: 'unsupported_media' });
+    }
     const { media, op, presetDefaults, scopedPresetDefaults, presetOverrides, optimize, explicitOptions, audioLossless } = input;
     if (op !== 'compress') {
         throw new GislConfigError(`Preset resolution is only wired for compress operations today; got op='${op}'.`, { reason: 'unsupported_op' });

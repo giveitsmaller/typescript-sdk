@@ -50,20 +50,6 @@ export const PRESETS = Object.freeze({
             "preset": "Slow",
         }),
     }),
-    "document_pdf_compress": Object.freeze({
-        Size: Object.freeze({
-            "profile": "Screen",
-            "grayscale": true,
-        }),
-        Balanced: Object.freeze({
-            "profile": "Ebook",
-            "grayscale": false,
-        }),
-        Quality: Object.freeze({
-            "profile": "Printer",
-            "grayscale": false,
-        }),
-    }),
     "document_office_compress": Object.freeze({
         Size: Object.freeze({
             "stripMacros": true,

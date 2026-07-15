@@ -49,7 +49,7 @@ import { GislTimeoutError, GislNetworkError, SseEndedWithoutTerminal } from './e
 // time, not at module load, so the builder.ts <-> handle.ts cycle is safe
 // under ESM (handle.ts imports the await-primitives from this module).
 import { Handle } from './handle.js';
-import type { PresetDefaults, PresetMedia } from './ergonomic/presets/index.js';
+import type { PresetDefaults, PresetMedia, DetectedMedia } from './ergonomic/presets/index.js';
 import type { OptimizeFor } from './generated/sdk_spec/enums.js';
 import {
   resolveCompressOptions,
@@ -68,7 +68,7 @@ import {
  *
  * @internal — exported for tests + the preset resolver.
  */
-export function _detectCompressMedia(input: string | Blob): PresetMedia | undefined {
+export function _detectCompressMedia(input: string | Blob): DetectedMedia | undefined {
   let filename: string | undefined;
   let mime: string | undefined;
   if (typeof input === 'string') {
@@ -83,8 +83,8 @@ export function _detectCompressMedia(input: string | Blob): PresetMedia | undefi
     if (mime.startsWith('image/')) return 'image';
     if (mime.startsWith('audio/')) return 'audio';
     if (mime.startsWith('video/')) return 'video';
-    if (mime === 'application/pdf') return 'document_pdf';
     if (mime === 'application/epub+zip') return 'document_epub';
+    if (mime === 'application/pdf') return 'document_pdf';
     if (
       mime === 'application/vnd.oasis.opendocument.text' ||
       mime === 'application/vnd.oasis.opendocument.spreadsheet' ||
@@ -109,8 +109,8 @@ export function _detectCompressMedia(input: string | Blob): PresetMedia | undefi
   if (['jpg', 'jpeg', 'png', 'webp', 'avif', 'gif', 'tiff', 'tif', 'bmp', 'heic', 'heif'].includes(ext)) return 'image';
   if (['mp3', 'aac', 'm4a', 'ogg', 'oga', 'flac', 'wav', 'opus'].includes(ext)) return 'audio';
   if (['mp4', 'mov', 'mkv', 'webm', 'avi', 'wmv', 'flv', 'm4v'].includes(ext)) return 'video';
-  if (ext === 'pdf') return 'document_pdf';
   if (ext === 'epub') return 'document_epub';
+  if (ext === 'pdf') return 'document_pdf';
   if (['odt', 'ods', 'odp'].includes(ext)) return 'document_odf';
   if (['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'].includes(ext)) return 'document_office';
   return undefined;
