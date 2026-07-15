@@ -38,6 +38,7 @@ export type ErrorCode =
   | "missing_dependency"
   | "unsupported_value"
   | "type_mismatch"
+  | "image_dimensions_too_large"
   | "upload_failed"
   | "workflow_failed";
 
@@ -529,6 +530,17 @@ export const ERROR_CODES: Readonly<Record<ErrorCode, ErrorEntry>> = Object.freez
       "actual": "string",
     }),
   }),
+  "image_dimensions_too_large": Object.freeze({
+    code: "image_dimensions_too_large",
+    category: "api" as ErrorCategory,
+    source: "ErrorEnvelope.error",
+    status: "wired" as ErrorStatus,
+    httpStatus: 413,
+    retryable: false,
+    sdkClass: "GislUploadCapExceededError",
+    description: "413 — POST /api/uploads rejected a decodable raster image whose pixel area (width × height) exceeds the configured ceiling (UPLOAD_MAX_IMAGE_PIXELS, default 16 MP), read from the file header before decode (I0Rqj4jo). Wire `IMAGE_DIMENSIONS_TOO_LARGE`; flat ErrorEnvelope (no details[]). A pixel-dimension member of the upload-cap family — GislUploadCapExceededError, alongside the size/duration caps — matching the SDKs' existing status-based 413 dispatch (NOT GislValidationError, which is the structured-422 class). Retry only after downscaling the input.",
+    metadataSchema: Object.freeze({}),
+  }),
   "upload_failed": Object.freeze({
     code: "upload_failed",
     category: "network" as ErrorCategory,
@@ -572,6 +584,7 @@ export const ERROR_CATEGORIES: Readonly<Record<ErrorCategory, readonly ErrorCode
     "upload_duration_exceeds_tier",
     "probe_pending",
     "requires_reencode",
+    "image_dimensions_too_large",
     "workflow_failed",
   ] as readonly ErrorCode[]),
   config: Object.freeze([

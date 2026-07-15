@@ -31,7 +31,7 @@
     "node": ">=18"
   },
   "dependencies": {
-    "@giveitsmaller/contracts": "^0.57.0"
+    "@giveitsmaller/contracts": "^0.58.0"
   },
   "devDependencies": {
     "@types/node": "^22",
