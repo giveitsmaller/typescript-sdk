@@ -125,6 +125,11 @@ export declare class Handle {
      *    empty `keyByRef`, so each input's key is recovered from its `file-{i}`
      *    ref (`"0"`, `"1"`, …). A submitted/reattached fan-out carries no
      *    caller-supplied keys — keyed fan-out is a separate concern.
+     *  - A `merge` / `archive` / `watermark` shape ({@link isMergeStatus} /
+     *    {@link isArchiveStatus} / {@link isWatermarkStatus}) → project ONLY the
+     *    terminal deliverable, filtering the `src_*` passthrough plumbing. The
+     *    terminal ref is the downstream `post` job when post-`sole_op` steps were
+     *    chained ({@link terminalOutputRef}), else the sole_op job itself.
      *  - Anything else (the single-file {@link Recipe} path) →
      *    {@link projectDownloadsToRunResult} keyed by this handle's `#key`
      *    (the recipe key from a file-first `submit()`, or `null` on reattach).

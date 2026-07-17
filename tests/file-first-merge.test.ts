@@ -52,20 +52,59 @@ describe('MergedRecipe — lowering', () => {
     });
   });
 
-  it('merge().compress() appends compress after merge in the same job (example 14)', () => {
+  it('merge().compress() lowers compress into a downstream `post` job (sole_op split, PIiUit28)', () => {
     const merged = mergedRecipe(['a.mp4', 'b.mp4'], { mediaKind: 'video' }).compress(OptimizeFor.Size);
 
     const payload = merged.toWorkflowPayload(['f0', 'f1']);
 
+    // merge is `sole_op` (ADR-0025): the merge job carries ONLY the merge op.
     const mergeJob = payload.jobs[2]; // 2 src jobs + merge
     expect(mergeJob.id).toBe('merge');
-    expect(mergeJob.operations.map((o) => o.type)).toEqual(['merge', 'compress']);
+    expect(mergeJob.operations.map((o) => o.type)).toEqual(['merge']);
+
+    // the post-combine compress lowers into a downstream `post` job that
+    // consumes the merge output via job_output.
+    const postJob = payload.jobs[3];
+    expect(postJob.id).toBe('post');
+    expect(postJob.source).toEqual({ type: 'job_output', from: 'merge' });
+    expect(postJob.operations.map((o) => o.type)).toEqual(['compress']);
   });
 
   it('wires the callback url into the payload', () => {
     const merged = mergedRecipe(['a.mp4', 'b.mp4'], { mediaKind: 'video' });
     const payload = merged.toWorkflowPayload(['f0', 'f1'], 'https://example.com/cb');
     expect(payload.callback_url).toBe('https://example.com/cb');
+  });
+});
+
+describe('MergedRecipe — sole_op post-step split (PIiUit28)', () => {
+  it('lowers ALL post-combine steps into a downstream `post` job, in order', () => {
+    // merge is sole_op: the merge job carries ONLY the merge op; every chained
+    // post-step lowers into the `post` job that consumes the merge output via
+    // job_output, preserving chain order.
+    const merged = mergedRecipe(['a.mp4', 'b.mp4'], { mediaKind: 'video' })
+      .compress(OptimizeFor.Size)
+      .convert('webm');
+    const payload = merged.toWorkflowPayload(['f0', 'f1']);
+
+    const mergeJob = payload.jobs[2];
+    expect(mergeJob.id).toBe('merge');
+    expect(mergeJob.operations.map((o) => o.type)).toEqual(['merge']);
+
+    const postJob = payload.jobs[3];
+    expect(postJob.id).toBe('post');
+    expect(postJob.source).toEqual({ type: 'job_output', from: 'merge' });
+    expect(postJob.operations.map((o) => o.type)).toEqual(['compress', 'convert']);
+
+    // The `post` job is the LAST job, appended after the src_* + merge jobs.
+    expect(payload.jobs.map((j) => j.id)).toEqual(['src_0', 'src_1', 'merge', 'post']);
+  });
+
+  it('emits NO `post` job for a bare merge (no post-combine steps)', () => {
+    const merged = mergedRecipe(['a.mp4', 'b.mp4'], { mediaKind: 'video' });
+    const payload = merged.toWorkflowPayload(['f0', 'f1']);
+    expect(payload.jobs.map((j) => j.id)).toEqual(['src_0', 'src_1', 'merge']);
+    expect(payload.jobs.find((j) => j.id === 'post')).toBeUndefined();
   });
 });
 

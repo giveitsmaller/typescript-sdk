@@ -257,9 +257,22 @@ export declare function projectMultiJobToRunResult(workflowId: string, finalStat
  */
 export declare function isFanoutStatus(finalStatus: WorkflowStatusResponse): boolean;
 /**
+ * Job id/ref for the DOWNSTREAM job that carries post-`sole_op` steps. A
+ * `sole_op` op (image_watermark / video_watermark / merge — ADR-0025) MUST be
+ * the only op in its job, so when a caller chains `compress()` / `convert()` /
+ * `thumbnail()` / `transform()` after `watermark()` / `merge()`, those steps
+ * lower into this separate job that consumes the sole_op output via
+ * `job_output` (the server derives the DAG from the `from` reference — no
+ * explicit `workflow_edges` needed). When present it is the TERMINAL deliverable,
+ * so `run()` / the {@link Handle} project THIS job's output, and the status-shape
+ * detectors accept it alongside the sole_op + `src_{i}` refs. PIiUit28.
+ */
+export declare const _POST_STEP_JOB_REF = "post";
+/**
  * True when a terminal status describes a fluent `files([...]).merge(...)`
  * combine — at least one job ref `merge` and every OTHER job ref is `src_{i}`
- * (the ids the {@link MergedRecipe} lowering assigns). The data-driven seam that
+ * or the downstream `post` job (the ids the {@link MergedRecipe} lowering
+ * assigns; `post` carries any post-combine steps). The data-driven seam that
  * lets {@link Handle.wait}/{@link Handle.result} project ONLY the merged output
  * — filtering the `src_*` passthrough plumbing — even after a
  * `client.workflow(id)` reattach (no construction-time marker), matching
@@ -282,9 +295,10 @@ export declare function isMergeStatus(finalStatus: WorkflowStatusResponse): bool
 export declare function isArchiveStatus(finalStatus: WorkflowStatusResponse): boolean;
 /**
  * True when a terminal status describes a fluent `file(...).watermark(overlay)`
- * — at least one job ref `watermark` and every OTHER job ref is `src_{i}` (the
- * ids the {@link WatermarkedRecipe} lowering assigns: `src_0` base, `src_1`
- * overlay). Lets {@link Handle.wait}/{@link Handle.result} AND
+ * — at least one job ref `watermark` and every OTHER job ref is `src_{i}` or
+ * the downstream `post` job (the ids the {@link WatermarkedRecipe} lowering
+ * assigns: `src_0` base, `src_1` overlay, `post` any post-watermark steps).
+ * Lets {@link Handle.wait}/{@link Handle.result} AND
  * {@link WatermarkedRecipe.run} project ONLY the watermark output — filtering
  * the `src_*` passthrough plumbing — even after a `client.workflow(id)` reattach.
  * Mutually exclusive with {@link isFanoutStatus} / {@link isMergeStatus} /
@@ -771,9 +785,10 @@ export declare class FilesRecipe {
  *
  * **Lowering (one workflow):** each input is uploaded once and wrapped in its
  * own single-input `passthrough` source job (`src_N`); the `merge` job consumes
- * those via `job_output` inputs (array order = play order) and carries the merge
- * op FIRST in its `operations[]`, followed by any post-combine ops (compress /
- * convert / thumbnail) so they run on the merged output in the same job. The
+ * those via `job_output` inputs (array order = play order). `merge` is
+ * `sole_op` (ADR-0025), so it is the ONLY op in its job; any post-combine ops
+ * (compress / convert / thumbnail / transform) lower into a downstream `post`
+ * job that consumes the merged output via `job_output`. The
  * merge-level wire options reuse {@link wireMergeOptions} so a fluent merge
  * lowers identically to the operation-first `client.merge()`.
  *
@@ -798,9 +813,9 @@ export declare class MergedRecipe {
     transform(options?: TransformOptions): MergedRecipe;
     /**
      * Lower to the merge DAG: one `passthrough` source job per input + one
-     * `merge` job whose `operations[]` is `[merge, ...post-combine ops]`. The
-     * merge job's `inputs[]` consume the source jobs via `job_output` in input
-     * (play) order.
+     * `merge` job whose `operations[]` is exactly `[merge]` (sole_op). The merge
+     * job's `inputs[]` consume the source jobs via `job_output` in input (play)
+     * order; any post-combine ops lower into a downstream `post` job.
      *
      * @internal Consumed by {@link run} (after uploading all inputs), {@link submit}
      *   (with a webhook), and the cross-language parity harness (with fixed ids).
@@ -964,7 +979,8 @@ export declare class ArchivedRecipe {
  * `passthrough` source job (`src_0` base, `src_1` overlay; their own preceding
  * steps lower into those jobs), and the `watermark` job consumes them via
  * `job_output` inputs tagged `role: base` / `role: overlay`. Post-watermark
- * `compress`/`convert`/`thumbnail` chain onto the watermark output. Mirrors
+ * `compress`/`convert`/`thumbnail`/`transform` steps lower into a downstream
+ * `post` job on the watermark output (`image_watermark` is `sole_op`). Mirrors
  * {@link MergedRecipe}. `textWatermark` is intentionally NOT a post-verb here.
  */
 export declare class WatermarkedRecipe {
@@ -988,8 +1004,9 @@ export declare class WatermarkedRecipe {
     /**
      * Lower to the watermark DAG: a `src_0` passthrough/base-steps job + a `src_1`
      * passthrough/overlay-steps job + one `watermark` job whose `inputs[]` consume
-     * them via `job_output` (role base/overlay) and whose `operations[]` is
-     * `[image_watermark|video_watermark, ...post-watermark ops]`. `fileIds` is
+     * them via `job_output` (role base/overlay). The watermark op is `sole_op`
+     * (ADR-0025), so `operations[]` is exactly `[image_watermark|video_watermark]`;
+     * any post-watermark ops lower into a downstream `post` job. `fileIds` is
      * `[baseId, overlayId]` (upload order). Throws pre-lowering if the base media
      * is undetectable/unsupported (the planned-op gate).
      *

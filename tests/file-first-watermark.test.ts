@@ -32,6 +32,17 @@ const watermarkJobOf = (payload: { jobs: readonly { id?: string }[] }) =>
     operations: { type: string; options?: Record<string, unknown> }[];
   };
 
+// PIiUit28 — image_watermark/video_watermark are `sole_op`, so post-watermark
+// steps lower into a DOWNSTREAM `post` job that consumes the watermark output
+// via `job_output` (from: watermark) rather than co-bundling into the
+// watermark job. This locates that job.
+const postJobOf = (payload: { jobs: readonly { id?: string }[] }) =>
+  payload.jobs.find((j) => j.id === 'post') as unknown as {
+    id: string;
+    source: { type: string; from: string };
+    operations: { type: string; options?: Record<string, unknown> }[];
+  };
+
 describe('WatermarkedRecipe — routing', () => {
   it('routes an image base to image_watermark', () => {
     const wr = recipe('photo.jpg').watermark(overlay(), { anchor: 'bottom_right', opacity: 0.65 });
@@ -133,18 +144,32 @@ describe('WatermarkedRecipe — lowering shape', () => {
     expect(src1.operations).toEqual([{ type: 'convert', options: { output_format: 'png' } }]);
   });
 
-  it('appends post-watermark steps after the watermark op in the watermark job', () => {
+  it('lowers post-watermark steps into a downstream `post` job (sole_op split, PIiUit28)', () => {
+    // image_watermark is `sole_op`: the watermark job carries ONLY the watermark
+    // op, and the post-step (convert) lowers into a separate `post` job that
+    // consumes the watermark output via job_output.
     const wr = recipe('photo.jpg').watermark(overlay()).convert('webp');
-    const wm = watermarkJobOf(wr.toWorkflowPayload(['b', 'o']));
-    expect(wm.operations.map((o) => o.type)).toEqual(['image_watermark', 'convert']);
+    const payload = wr.toWorkflowPayload(['b', 'o']);
+    const wm = watermarkJobOf(payload);
+    expect(wm.operations.map((o) => o.type)).toEqual(['image_watermark']);
+
+    const post = postJobOf(payload);
+    expect(post.source).toEqual({ type: 'job_output', from: 'watermark' });
+    expect(post.operations.map((o) => o.type)).toEqual(['convert']);
   });
 
   it('resolves a post-watermark compress preset against the watermark OUTPUT media', () => {
     // image base -> image_watermark -> the synthetic post media is image, so
-    // compress(Size) resolves the IMAGE Size cell (not video / unknown).
+    // compress(Size) resolves the IMAGE Size cell (not video / unknown). The
+    // compress op now lives in the downstream `post` job (sole_op split).
     const wr = recipe('photo.jpg').watermark(overlay()).compress(OptimizeFor.Size);
-    const wm = watermarkJobOf(wr.toWorkflowPayload(['b', 'o']));
-    const compressOp = wm.operations.find((o) => o.type === 'compress');
+    const payload = wr.toWorkflowPayload(['b', 'o']);
+    const wm = watermarkJobOf(payload);
+    // watermark job carries ONLY the sole_op watermark op.
+    expect(wm.operations.map((o) => o.type)).toEqual(['image_watermark']);
+
+    const post = postJobOf(payload);
+    const compressOp = post.operations.find((o) => o.type === 'compress');
     expect(compressOp).toBeDefined();
     expect(compressOp!.options).toBeDefined();
     // image presets never carry the video-only crf/encoding_mode keys.
@@ -153,11 +178,17 @@ describe('WatermarkedRecipe — lowering shape', () => {
 
   it('resolves a post-watermark compress preset against a VIDEO watermark output', () => {
     // video base -> video_watermark -> the synthetic post media is video, so
-    // compress(Size) resolves the VIDEO Size cell (the `mp4` synthetic arm).
+    // compress(Size) resolves the VIDEO Size cell (the `mp4` synthetic arm). The
+    // compress op now lives in the downstream `post` job (sole_op split).
     const wr = recipe('clip.mp4').watermark(overlay()).compress(OptimizeFor.Size);
-    const wm = watermarkJobOf(wr.toWorkflowPayload(['b', 'o']));
+    const payload = wr.toWorkflowPayload(['b', 'o']);
+    const wm = watermarkJobOf(payload);
     expect(wm.operations[0].type).toBe('video_watermark');
-    const compressOp = wm.operations.find((o) => o.type === 'compress');
+    // watermark job carries ONLY the sole_op watermark op.
+    expect(wm.operations.map((o) => o.type)).toEqual(['video_watermark']);
+
+    const post = postJobOf(payload);
+    const compressOp = post.operations.find((o) => o.type === 'compress');
     expect(compressOp).toBeDefined();
     // video presets carry the video-only crf key — proves the synthetic resolved
     // against mp4 (video), not png (image).
@@ -170,6 +201,42 @@ describe('WatermarkedRecipe — lowering shape', () => {
       callback_url?: string;
     };
     expect(payload.callback_url).toBe('https://hook.example.com');
+  });
+});
+
+describe('WatermarkedRecipe — sole_op post-step split (PIiUit28)', () => {
+  it('lowers ALL post-watermark steps into a downstream `post` job, in order', () => {
+    // image_watermark is sole_op (ADR-0025): the watermark job carries ONLY the
+    // watermark op; every chained post-step lowers into the `post` job that
+    // consumes the watermark output via job_output, preserving chain order.
+    const wr = recipe('photo.jpg').watermark(overlay()).convert('webp').compress(OptimizeFor.Size);
+    const payload = wr.toWorkflowPayload(['b', 'o']);
+
+    // The sole_op job holds exactly the watermark op — nothing else.
+    const wm = watermarkJobOf(payload);
+    expect(wm.operations.map((o) => o.type)).toEqual(['image_watermark']);
+
+    // The downstream `post` job consumes the watermark output and carries the
+    // post-steps in chain order.
+    const post = postJobOf(payload);
+    expect(post.id).toBe('post');
+    expect(post.source).toEqual({ type: 'job_output', from: 'watermark' });
+    expect(post.operations.map((o) => o.type)).toEqual(['convert', 'compress']);
+
+    // The `post` job is the LAST job, appended after src_0/src_1/watermark.
+    expect(payload.jobs.map((j) => (j as { id?: string }).id)).toEqual([
+      'src_0',
+      'src_1',
+      'watermark',
+      'post',
+    ]);
+  });
+
+  it('emits NO `post` job when there are no post-watermark steps', () => {
+    const wr = recipe('photo.jpg').watermark(overlay());
+    const payload = wr.toWorkflowPayload(['b', 'o']);
+    expect(postJobOf(payload)).toBeUndefined();
+    expect(payload.jobs.map((j) => (j as { id?: string }).id)).toEqual(['src_0', 'src_1', 'watermark']);
   });
 });
 

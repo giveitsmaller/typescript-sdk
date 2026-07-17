@@ -483,7 +483,7 @@ describe('MergedRecipe chain options — post-combine ops carry options', () => 
   const mergedVideo = (paths: string[], options: MergeOptions = { mediaKind: 'video' }): MergedRecipe =>
     new MergedRecipe(paths.map((p) => fileInput.path(p)), options);
 
-  it('merge().compress(optimize, { crf }) carries the override onto the merge job', () => {
+  it('merge().compress(optimize, { crf }) carries the override onto the downstream `post` job', () => {
     // Merged media is video, so use a video-valid knob (crf), not image quality.
     const expected = resolveCompressOptions({
       media: 'video',
@@ -496,34 +496,39 @@ describe('MergedRecipe chain options — post-combine ops carry options', () => 
       .compress(OptimizeFor.Balanced, { crf: 28 })
       .toWorkflowPayload(['f0', 'f1']);
 
-    // 2 src jobs + the merge job (last).
+    // merge is sole_op: the merge job holds ONLY the merge op; the compress
+    // lowers into the downstream `post` job (PIiUit28).
     const mergeJob = payload.jobs[2];
     expect(mergeJob.id).toBe('merge');
-    expect(mergeJob.operations.map((o) => o.type)).toEqual(['merge', 'compress']);
-    const compressOp = mergeJob.operations[1];
+    expect(mergeJob.operations.map((o) => o.type)).toEqual(['merge']);
+    const postJob = payload.jobs.find((j) => j.id === 'post')!;
+    expect(postJob.source).toEqual({ type: 'job_output', from: 'merge' });
+    const compressOp = postJob.operations[0];
+    expect(compressOp.type).toBe('compress');
     expect(compressOp.options).toEqual(expected);
     expect((compressOp.options as Record<string, unknown>).crf).toBe(28);
   });
 
-  it('merge().convert(format, options) carries the bag onto the merge job', () => {
+  it('merge().convert(format, options) carries the bag onto the downstream `post` job', () => {
     const payload = mergedVideo(['a.mp4', 'b.mp4'])
       .convert('webm', { crf: 28 })
       .toWorkflowPayload(['f0', 'f1']);
 
-    const mergeJob = payload.jobs[2];
-    expect(mergeJob.operations[1]).toEqual({
+    const postJob = payload.jobs.find((j) => j.id === 'post')!;
+    expect(postJob.source).toEqual({ type: 'job_output', from: 'merge' });
+    expect(postJob.operations[0]).toEqual({
       type: 'convert',
       options: { output_format: 'webm', crf: 28 },
     });
   });
 
-  it('merge().thumbnail(options) carries extra keys onto the merge job', () => {
+  it('merge().thumbnail(options) carries extra keys onto the downstream `post` job', () => {
     const payload = mergedVideo(['a.mp4', 'b.mp4'])
       .thumbnail({ width: 320, height: 180, format: 'jpg' })
       .toWorkflowPayload(['f0', 'f1']);
 
-    const mergeJob = payload.jobs[2];
-    expect(mergeJob.operations[1]).toEqual({
+    const postJob = payload.jobs.find((j) => j.id === 'post')!;
+    expect(postJob.operations[0]).toEqual({
       type: 'thumbnail',
       options: { width: 320, height: 180, format: 'jpg' },
     });
@@ -580,8 +585,11 @@ describe('chain media inference from prior step output (56N4chXY / N8eESzQN)', (
       .convert('flac')
       .compress(OptimizeFor.Size)
       .toWorkflowPayload(['f0', 'f1']);
-    const mergeJob = payload.jobs[payload.jobs.length - 1];
-    const compress = mergeJob.operations.find((o) => o.type === 'compress');
+    // merge is sole_op — the post-merge convert+compress lower into the
+    // downstream `post` job (the LAST job); the compress reads there (PIiUit28).
+    const postJob = payload.jobs[payload.jobs.length - 1];
+    expect(postJob.id).toBe('post');
+    const compress = postJob.operations.find((o) => o.type === 'compress');
     const opts = (compress?.options ?? {}) as Record<string, unknown>;
     expect(opts).not.toHaveProperty('bitrate'); // resolved against the post-merge flac output
   });

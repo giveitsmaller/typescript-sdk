@@ -81,26 +81,26 @@ describe('FilesRecipe.transform — shared op across the fan-out', () => {
 });
 
 describe('MergedRecipe.transform — post-merge lowering', () => {
-  it('appends a transform op to the merge job', () => {
+  it('lowers the transform op into a downstream post job (sole_op split, PIiUit28)', () => {
     const merged = new MergedRecipe([fileInput.path('a.mp4'), fileInput.path('b.mp4')], { mediaKind: 'video' })
       .transform({ rotate: 180 });
+    // `merge` is sole_op: it is alone in the `merge` job, and the transform
+    // post-step lowers into a downstream `post` job (now the last job).
     const ops = lastJobOps(merged.toWorkflowPayload([FILE_ID, 'file_0002']));
-    // The post-verb appends to the merge job, so the wire order is merge → transform
-    // (parity with the PHP TransformVerbTest merge-order assertion).
-    expect(ops.map((o) => o.type)).toEqual(['merge', 'transform']);
+    expect(ops.map((o) => o.type)).toEqual(['transform']);
     expect(transformOp(ops)).toEqual({ type: 'transform', options: { rotate: 180 } });
   });
 });
 
 describe('WatermarkedRecipe.transform — post-watermark lowering', () => {
-  it('appends a transform op after the watermark op in the watermark job', () => {
+  it('lowers the transform op into a downstream post job (sole_op split, PIiUit28)', () => {
     const wr = new Recipe(fileInput.path('photo.jpg'))
       .watermark(new Recipe(fileInput.path('logo.png')))
       .transform({ rotate: 90 });
-    // The watermark job is the last job ([src_0, src_1, watermark]); post-verbs
-    // append to it, so the wire order is image_watermark → transform.
+    // `image_watermark` is sole_op: it is alone in the `watermark` job, and the
+    // transform post-step lowers into a downstream `post` job (now the last job).
     const ops = lastJobOps(wr.toWorkflowPayload(['base', 'ovl']));
-    expect(ops.map((o) => o.type)).toEqual(['image_watermark', 'transform']);
+    expect(ops.map((o) => o.type)).toEqual(['transform']);
     expect(transformOp(ops)).toEqual({ type: 'transform', options: { rotate: 90 } });
   });
 });

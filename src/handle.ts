@@ -55,6 +55,7 @@ import {
   isMergeStatus,
   isArchiveStatus,
   isWatermarkStatus,
+  _POST_STEP_JOB_REF,
   type Downloader,
 } from './file-first.js';
 import { LazyHttpDownloader } from './lazy-downloader.js';
@@ -100,6 +101,20 @@ export class StatusSnapshot {
   toJSON(): { workflowId: string; state: string } {
     return { workflowId: this.workflowId, state: this.state };
   }
+}
+
+/**
+ * The terminal deliverable's job ref for a `sole_op` DAG: the downstream
+ * post-steps job ({@link _POST_STEP_JOB_REF}, present when the caller chained
+ * ops after `watermark()` / `merge()`) when it exists, else the `sole_op` job
+ * itself. Lets a submitted/reattached {@link Handle} project the final output —
+ * not the intermediate `sole_op` artifact — without builder state. PIiUit28.
+ */
+function terminalOutputRef(
+  jobDownloads: ReadonlyArray<{ ref: string }>,
+  soleOpRef: string,
+): string {
+  return jobDownloads.some((d) => d.ref === _POST_STEP_JOB_REF) ? _POST_STEP_JOB_REF : soleOpRef;
 }
 
 /**
@@ -251,6 +266,11 @@ export class Handle {
    *    empty `keyByRef`, so each input's key is recovered from its `file-{i}`
    *    ref (`"0"`, `"1"`, …). A submitted/reattached fan-out carries no
    *    caller-supplied keys — keyed fan-out is a separate concern.
+   *  - A `merge` / `archive` / `watermark` shape ({@link isMergeStatus} /
+   *    {@link isArchiveStatus} / {@link isWatermarkStatus}) → project ONLY the
+   *    terminal deliverable, filtering the `src_*` passthrough plumbing. The
+   *    terminal ref is the downstream `post` job when post-`sole_op` steps were
+   *    chained ({@link terminalOutputRef}), else the sole_op job itself.
    *  - Anything else (the single-file {@link Recipe} path) →
    *    {@link projectDownloadsToRunResult} keyed by this handle's `#key`
    *    (the recipe key from a file-first `submit()`, or `null` on reattach).
@@ -269,13 +289,16 @@ export class Handle {
         downloader,
       );
     }
-    // A fluent `files([...]).merge(...)` combine — project ONLY the merged
-    // output, filtering the `src_*` passthrough plumbing (which re-exposes the
-    // raw inputs). Matches MergedRecipe.run()'s `ref === 'merge'` filter so a
+    // A fluent `files([...]).merge(...)` combine — project ONLY the terminal
+    // deliverable, filtering the `src_*` passthrough plumbing (which re-exposes
+    // the raw inputs). Matches MergedRecipe.run()'s terminal-output filter so a
     // submitted/reattached merge handle never surfaces the input artifacts
     // alongside the combined output (codex c1).
     if (isMergeStatus(finalStatus)) {
-      const mergeDownloads = jobDownloads.filter((d) => d.ref === 'merge');
+      // Post-merge steps (PIiUit28) lower into the downstream `_POST_STEP_JOB_REF`
+      // job, which is then the deliverable; otherwise the `merge` job is.
+      const mergeOutputRef = terminalOutputRef(jobDownloads, 'merge');
+      const mergeDownloads = jobDownloads.filter((d) => d.ref === mergeOutputRef);
       return projectDownloadsToRunResult(
         this.workflowId,
         finalStatus,
@@ -297,12 +320,13 @@ export class Handle {
         downloader,
       );
     }
-    // A fluent `file(...).watermark(overlay)` — project ONLY the watermark
-    // output, filtering the `src_*` (base/overlay) passthrough plumbing. Matches
-    // WatermarkedRecipe.run()'s `ref === 'watermark'` filter so a
+    // A fluent `file(...).watermark(overlay)` — project ONLY the terminal
+    // deliverable, filtering the `src_*` (base/overlay) passthrough plumbing.
+    // Matches WatermarkedRecipe.run()'s terminal-output filter so a
     // submitted/reattached watermark handle never surfaces the raw inputs.
     if (isWatermarkStatus(finalStatus)) {
-      const watermarkDownloads = jobDownloads.filter((d) => d.ref === 'watermark');
+      const watermarkOutputRef = terminalOutputRef(jobDownloads, 'watermark');
+      const watermarkDownloads = jobDownloads.filter((d) => d.ref === watermarkOutputRef);
       return projectDownloadsToRunResult(
         this.workflowId,
         finalStatus,

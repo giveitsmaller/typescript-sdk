@@ -570,9 +570,23 @@ export function isFanoutStatus(finalStatus: WorkflowStatusResponse): boolean {
 const _MERGE_SRC_REF = /^src_\d+$/;
 
 /**
+ * Job id/ref for the DOWNSTREAM job that carries post-`sole_op` steps. A
+ * `sole_op` op (image_watermark / video_watermark / merge — ADR-0025) MUST be
+ * the only op in its job, so when a caller chains `compress()` / `convert()` /
+ * `thumbnail()` / `transform()` after `watermark()` / `merge()`, those steps
+ * lower into this separate job that consumes the sole_op output via
+ * `job_output` (the server derives the DAG from the `from` reference — no
+ * explicit `workflow_edges` needed). When present it is the TERMINAL deliverable,
+ * so `run()` / the {@link Handle} project THIS job's output, and the status-shape
+ * detectors accept it alongside the sole_op + `src_{i}` refs. PIiUit28.
+ */
+export const _POST_STEP_JOB_REF = 'post';
+
+/**
  * True when a terminal status describes a fluent `files([...]).merge(...)`
  * combine — at least one job ref `merge` and every OTHER job ref is `src_{i}`
- * (the ids the {@link MergedRecipe} lowering assigns). The data-driven seam that
+ * or the downstream `post` job (the ids the {@link MergedRecipe} lowering
+ * assigns; `post` carries any post-combine steps). The data-driven seam that
  * lets {@link Handle.wait}/{@link Handle.result} project ONLY the merged output
  * — filtering the `src_*` passthrough plumbing — even after a
  * `client.workflow(id)` reattach (no construction-time marker), matching
@@ -590,6 +604,8 @@ export function isMergeStatus(finalStatus: WorkflowStatusResponse): boolean {
       hasMerge = true;
       continue;
     }
+    // The downstream post-`sole_op` steps job (PIiUit28) is part of a merge DAG.
+    if (job.ref === _POST_STEP_JOB_REF) continue;
     if (!_MERGE_SRC_REF.test(job.ref)) return false;
   }
   return hasMerge;
@@ -621,9 +637,10 @@ export function isArchiveStatus(finalStatus: WorkflowStatusResponse): boolean {
 
 /**
  * True when a terminal status describes a fluent `file(...).watermark(overlay)`
- * — at least one job ref `watermark` and every OTHER job ref is `src_{i}` (the
- * ids the {@link WatermarkedRecipe} lowering assigns: `src_0` base, `src_1`
- * overlay). Lets {@link Handle.wait}/{@link Handle.result} AND
+ * — at least one job ref `watermark` and every OTHER job ref is `src_{i}` or
+ * the downstream `post` job (the ids the {@link WatermarkedRecipe} lowering
+ * assigns: `src_0` base, `src_1` overlay, `post` any post-watermark steps).
+ * Lets {@link Handle.wait}/{@link Handle.result} AND
  * {@link WatermarkedRecipe.run} project ONLY the watermark output — filtering
  * the `src_*` passthrough plumbing — even after a `client.workflow(id)` reattach.
  * Mutually exclusive with {@link isFanoutStatus} / {@link isMergeStatus} /
@@ -640,6 +657,8 @@ export function isWatermarkStatus(finalStatus: WorkflowStatusResponse): boolean 
       hasWatermark = true;
       continue;
     }
+    // The downstream post-`sole_op` steps job (PIiUit28) is part of a watermark DAG.
+    if (job.ref === _POST_STEP_JOB_REF) continue;
     if (!_MERGE_SRC_REF.test(job.ref)) return false;
   }
   return hasWatermark;
@@ -2182,9 +2201,10 @@ export class FilesRecipe {
  *
  * **Lowering (one workflow):** each input is uploaded once and wrapped in its
  * own single-input `passthrough` source job (`src_N`); the `merge` job consumes
- * those via `job_output` inputs (array order = play order) and carries the merge
- * op FIRST in its `operations[]`, followed by any post-combine ops (compress /
- * convert / thumbnail) so they run on the merged output in the same job. The
+ * those via `job_output` inputs (array order = play order). `merge` is
+ * `sole_op` (ADR-0025), so it is the ONLY op in its job; any post-combine ops
+ * (compress / convert / thumbnail / transform) lower into a downstream `post`
+ * job that consumes the merged output via `job_output`. The
  * merge-level wire options reuse {@link wireMergeOptions} so a fluent merge
  * lowers identically to the operation-first `client.merge()`.
  *
@@ -2246,9 +2266,9 @@ export class MergedRecipe {
 
   /**
    * Lower to the merge DAG: one `passthrough` source job per input + one
-   * `merge` job whose `operations[]` is `[merge, ...post-combine ops]`. The
-   * merge job's `inputs[]` consume the source jobs via `job_output` in input
-   * (play) order.
+   * `merge` job whose `operations[]` is exactly `[merge]` (sole_op). The merge
+   * job's `inputs[]` consume the source jobs via `job_output` in input (play)
+   * order; any post-combine ops lower into a downstream `post` job.
    *
    * @internal Consumed by {@link run} (after uploading all inputs), {@link submit}
    *   (with a webhook), and the cross-language parity harness (with fixed ids).
@@ -2266,13 +2286,20 @@ export class MergedRecipe {
       inputs.push({ source: jobOutputSource(srcId) });
     });
 
-    const operations: OperationDef[] = [
-      { type: 'merge', options: wireMergeOptions(this.mergeOptions, mediaKind) },
-      ...this.lowerPostSteps(mediaKind),
-    ];
-    const mergeJob: JobDefinitionPayload = { id: 'merge', inputs, operations };
+    // `merge` is `sole_op` (ADR-0025): the op MUST be alone in its job.
+    // Post-merge steps lower into a DOWNSTREAM job (see {@link _POST_STEP_JOB_REF})
+    // that consumes the merge output via `job_output`. PIiUit28.
+    const mergeJob: JobDefinitionPayload = {
+      id: 'merge',
+      inputs,
+      operations: [{ type: 'merge', options: wireMergeOptions(this.mergeOptions, mediaKind) }],
+    };
 
-    const jobs = [...sourceJobs, mergeJob];
+    const jobs: JobDefinitionPayload[] = [...sourceJobs, mergeJob];
+    const postOps = this.lowerPostSteps(mediaKind);
+    if (postOps.length > 0) {
+      jobs.push({ id: _POST_STEP_JOB_REF, source: jobOutputSource('merge'), operations: postOps });
+    }
     return callbackUrl === undefined ? { jobs } : { jobs, callback_url: callbackUrl };
   }
 
@@ -2351,10 +2378,12 @@ export class MergedRecipe {
       );
     }
 
-    // Project ONLY the merge job's output — the `src_*` passthrough jobs
-    // re-expose the raw uploads, which are plumbing, not the deliverable
-    // (mirrors the operation-first merge.ts `ref === 'merge'` filter + PHP).
-    const mergeDownloads = downloads.downloads.filter((d) => d.ref === 'merge');
+    // Project ONLY the terminal deliverable — the `src_*` passthrough jobs
+    // re-expose the raw uploads (plumbing). Post-merge steps lower into the
+    // downstream `_POST_STEP_JOB_REF` job, which is then the deliverable;
+    // otherwise the `merge` job is (mirrors merge.ts + PHP).
+    const outputRef = this.postSteps.length > 0 ? _POST_STEP_JOB_REF : 'merge';
+    const mergeDownloads = downloads.downloads.filter((d) => d.ref === outputRef);
     const downloader = new LazyHttpDownloader();
     return projectDownloadsToRunResult(created.workflowId, finalStatus, mergeDownloads, null, downloader);
   }
@@ -2770,7 +2799,8 @@ export class ArchivedRecipe {
  * `passthrough` source job (`src_0` base, `src_1` overlay; their own preceding
  * steps lower into those jobs), and the `watermark` job consumes them via
  * `job_output` inputs tagged `role: base` / `role: overlay`. Post-watermark
- * `compress`/`convert`/`thumbnail` chain onto the watermark output. Mirrors
+ * `compress`/`convert`/`thumbnail`/`transform` steps lower into a downstream
+ * `post` job on the watermark output (`image_watermark` is `sole_op`). Mirrors
  * {@link MergedRecipe}. `textWatermark` is intentionally NOT a post-verb here.
  */
 export class WatermarkedRecipe {
@@ -2831,8 +2861,9 @@ export class WatermarkedRecipe {
   /**
    * Lower to the watermark DAG: a `src_0` passthrough/base-steps job + a `src_1`
    * passthrough/overlay-steps job + one `watermark` job whose `inputs[]` consume
-   * them via `job_output` (role base/overlay) and whose `operations[]` is
-   * `[image_watermark|video_watermark, ...post-watermark ops]`. `fileIds` is
+   * them via `job_output` (role base/overlay). The watermark op is `sole_op`
+   * (ADR-0025), so `operations[]` is exactly `[image_watermark|video_watermark]`;
+   * any post-watermark ops lower into a downstream `post` job. `fileIds` is
    * `[baseId, overlayId]` (upload order). Throws pre-lowering if the base media
    * is undetectable/unsupported (the planned-op gate).
    *
@@ -2863,13 +2894,21 @@ export class WatermarkedRecipe {
       { source: jobOutputSource('src_0'), role: 'base' },
       { source: jobOutputSource('src_1'), role: 'overlay' },
     ];
-    const operations: OperationDef[] = [
-      _lowerWatermarkOp(wireOp, this.watermarkOptions),
-      ...this.lowerPostSteps(wireOp),
-    ];
-    const watermarkJob: JobDefinitionPayload = { id: 'watermark', inputs, operations };
+    // `image_watermark` / `video_watermark` are `sole_op` (ADR-0025): the op
+    // MUST be alone in its job. Post-watermark steps lower into a DOWNSTREAM
+    // job (see {@link _POST_STEP_JOB_REF}) that consumes the watermark output
+    // via `job_output`. PIiUit28.
+    const watermarkJob: JobDefinitionPayload = {
+      id: 'watermark',
+      inputs,
+      operations: [_lowerWatermarkOp(wireOp, this.watermarkOptions)],
+    };
 
-    const jobs = [srcBase, srcOverlay, watermarkJob];
+    const jobs: JobDefinitionPayload[] = [srcBase, srcOverlay, watermarkJob];
+    const postOps = this.lowerPostSteps(wireOp);
+    if (postOps.length > 0) {
+      jobs.push({ id: _POST_STEP_JOB_REF, source: jobOutputSource('watermark'), operations: postOps });
+    }
     return callbackUrl === undefined ? { jobs } : { jobs, callback_url: callbackUrl };
   }
 
@@ -2938,9 +2977,12 @@ export class WatermarkedRecipe {
       );
     }
 
-    // Project ONLY the watermark job's output — the `src_*` passthrough jobs
-    // re-expose the raw base/overlay uploads, which are plumbing.
-    const watermarkDownloads = downloads.downloads.filter((d) => d.ref === 'watermark');
+    // Project ONLY the terminal deliverable — the `src_*` passthrough jobs
+    // re-expose the raw base/overlay uploads (plumbing). When post-watermark
+    // steps were chained they lowered into the downstream `_POST_STEP_JOB_REF`
+    // job, which is now the deliverable; otherwise the `watermark` job is.
+    const outputRef = this.postSteps.length > 0 ? _POST_STEP_JOB_REF : 'watermark';
+    const watermarkDownloads = downloads.downloads.filter((d) => d.ref === outputRef);
     const downloader = new LazyHttpDownloader();
     return projectDownloadsToRunResult(created.workflowId, finalStatus, watermarkDownloads, null, downloader);
   }
