@@ -1705,8 +1705,8 @@ function _resolveWatermarkWireOp(base: WatermarkBase): WatermarkWireOp {
     );
   }
   throw new GislConfigError(
-    `watermark does not support ${media} base files — overlay watermarking targets image or video bases ` +
-      '(audio overlay and luma matte are planned operations). Use textWatermark() for document/text watermarks.',
+    `watermark does not support ${media} base files — overlay watermarking targets image or video bases. ` +
+      'textWatermark() is image-only, so it is not an alternative for document or audio bases.',
     { reason: 'unsupported_media' },
   );
 }

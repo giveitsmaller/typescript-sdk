@@ -245,8 +245,14 @@ describe('WatermarkedRecipe — planned-op gate (throws pre-upload)', () => {
     expect(() => recipe('song.mp3').watermark(overlay())).toThrow(GislConfigError);
   });
 
-  it('throws for a document base', () => {
+  it('throws for a document base without misdirecting to textWatermark (ZRkctunz)', () => {
     expect(() => recipe('report.pdf').watermark(overlay())).toThrow(GislConfigError);
+    // The message must NOT tell the caller to use textWatermark() (which is
+    // image-only, so following that advice would upload + fail server-side) —
+    // it says textWatermark() is not an alternative for document bases.
+    expect(() => recipe('report.pdf').watermark(overlay())).toThrow(
+      /not an alternative for document/,
+    );
   });
 
   it('throws for an animated-GIF base (image_gif is planned)', () => {
