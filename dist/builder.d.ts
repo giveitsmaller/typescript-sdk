@@ -21,7 +21,7 @@
  *   `status` values pass through verbatim from `SseOperationProgressDataStatusEnum`.
  *   The wire does NOT carry a `phase` field — see karen reality-check 2026-05-23.
  * - `.run()` requires `maxWait` (no default). The underlying `waitForWorkflow`
- *   has a 300s default for the poll fallback path; the ergonomic layer makes
+ *   has a 600s default for the poll fallback path; the ergonomic layer makes
  *   it MANDATORY in the type so callers consciously choose a deadline.
  */
 import type { GislClient } from './client.js';
@@ -236,7 +236,7 @@ export interface RunOptions {
     /**
      * Wall-clock deadline for the entire run (upload + create + wait + downloads).
      * MANDATORY — the SDK does NOT supply a default because the underlying
-     * `waitForWorkflow` poll path has a 300s default that would otherwise
+     * `waitForWorkflow` poll path has a 600s default that would otherwise
      * leak silently. Pass `'2h'` / `'30m'` / `'120s'` as a string suffix or
      * a number of milliseconds.
      */

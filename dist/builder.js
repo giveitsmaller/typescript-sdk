@@ -21,7 +21,7 @@
  *   `status` values pass through verbatim from `SseOperationProgressDataStatusEnum`.
  *   The wire does NOT carry a `phase` field — see karen reality-check 2026-05-23.
  * - `.run()` requires `maxWait` (no default). The underlying `waitForWorkflow`
- *   has a 300s default for the poll fallback path; the ergonomic layer makes
+ *   has a 600s default for the poll fallback path; the ergonomic layer makes
  *   it MANDATORY in the type so callers consciously choose a deadline.
  */
 import { SseEventType, SseOperationProgressDataFromJSON, } from '@giveitsmaller/contracts/openapi';

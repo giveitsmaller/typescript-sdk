@@ -330,7 +330,7 @@ export interface ReadCapabilityOptions {
 export interface WaitOptions {
     /** Poll interval in milliseconds (default: 2000) */
     intervalMs?: number;
-    /** Maximum wait time in milliseconds (default: 300000 = 5 min) */
+    /** Maximum wait time in milliseconds (default: 600000 = 10 min) */
     timeoutMs?: number;
     /** Called after each poll with current status */
     onPoll?: (status: string) => void;

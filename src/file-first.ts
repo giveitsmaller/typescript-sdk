@@ -1038,7 +1038,7 @@ export class Recipe {
         { reason: 'no_client' },
       );
     }
-    const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 300_000);
+    const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 600_000);
 
     // 1+2. Upload (when required) + create the workflow. Shared with submit()
     // (which passes a webhook → callback_url). run() passes no webhook.
@@ -1120,7 +1120,7 @@ export class Recipe {
     // submit() is fire-and-forget — NO whole-run deadline. The upload may be
     // large (a multi-GB master, example 12) and is bounded by the HTTP client's
     // own request timeout, not an arbitrary submit-side cap. Pass `undefined`
-    // so the post-upload deadline check is skipped: a 300s cap here would throw
+    // so the post-upload deadline check is skipped: a 600s cap here would throw
     // on a slow-but-successful big upload before createWorkflow (codex).
     const created = await this._uploadAndCreate(
       webhook,
@@ -2000,7 +2000,7 @@ export class FilesRecipe {
         { reason: 'no_client' },
       );
     }
-    const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 300_000);
+    const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 600_000);
 
     // 1+2. Upload EVERY input + create ONE multi-job workflow. Shared with
     // submit() (which passes a webhook → callback_url and no deadline).
@@ -2311,7 +2311,7 @@ export class MergedRecipe {
         { reason: 'no_client' },
       );
     }
-    const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 300_000);
+    const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 600_000);
 
     const created = await this._uploadAllAndCreate(
       undefined,
@@ -2618,7 +2618,7 @@ export class ArchivedRecipe {
         { reason: 'no_client' },
       );
     }
-    const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 300_000);
+    const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 600_000);
 
     const created = await this._uploadAllAndCreate(
       undefined,
@@ -2896,7 +2896,7 @@ export class WatermarkedRecipe {
         { reason: 'no_client' },
       );
     }
-    const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 300_000);
+    const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 600_000);
 
     const created = await this._uploadAllAndCreate(
       undefined,
@@ -3160,7 +3160,7 @@ export class BatchRecipe {
     // path-precheck would diverge batch from FilesRecipe.)
     this.validatePreUpload();
 
-    const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 300_000);
+    const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 600_000);
 
     // 1+2. Upload each entry's input + create ONE multi-job workflow. batch v1
     // sends NO webhook (run()-only), so `callback_url` is omitted from the

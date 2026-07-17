@@ -213,7 +213,7 @@ const S3_MAX_MULTIPART_PARTS = 10_000;
 const RECOMMENDED_CHUNK_SIZE_MAX_BYTES = 104_857_600; // 100 MiB
 
 const DEFAULT_POLL_INTERVAL_MS = 2_000;
-const DEFAULT_POLL_TIMEOUT_MS = 300_000; // 5 min
+const DEFAULT_POLL_TIMEOUT_MS = 600_000; // 10 min
 
 // Anonymous-read capability header. An anonymous (null-owner) workflow create
 // returns a one-time `cap` token (WorkflowCreateResponse.cap); the session-less

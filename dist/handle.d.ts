@@ -97,7 +97,7 @@ export declare class Handle {
      * This is the ONLY blocking accessor on a `Handle`.
      *
      * @param maxWait Wall-clock deadline for the wait + downloads (string suffix
-     *   `'2h'`/`'30m'`/`'120s'` or a number of milliseconds). Defaults to 300s,
+     *   `'2h'`/`'30m'`/`'120s'` or a number of milliseconds). Defaults to 600s,
      *   matching `Recipe.run()` / the PHP `Handle::wait()` default.
      * @throws {GislConfigError} reason `no_client` when no client is bound.
      * @throws {GislTimeoutError} when `maxWait` elapses before terminal.
