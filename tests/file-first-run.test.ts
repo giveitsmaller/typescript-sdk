@@ -312,9 +312,15 @@ describe('Recipe.run — timeout', () => {
       yield;
     });
     mock.getWorkflowStatus.mockResolvedValue({ workflowId: 'wf_1', status: 'running' });
-    await expect(recipe(mock).compress().run({ maxWait: 1, pollIntervalMs: 5 })).rejects.toBeInstanceOf(
-      GislTimeoutError,
-    );
+    const err = await recipe(mock)
+      .compress()
+      .run({ maxWait: 1, pollIntervalMs: 5 })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(GislTimeoutError);
+    // oYumKo6y: the workflow was created (wf_1); only the wait timed out. The
+    // timeout carries the id so the caller can poll it to recover the result
+    // instead of re-running (which re-uploads and double-charges).
+    expect((err as GislTimeoutError).workflowId).toBe('wf_1');
     expect(mock.getWorkflowDownloads).not.toHaveBeenCalled();
   });
 });

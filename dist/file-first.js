@@ -759,13 +759,13 @@ export class Recipe {
         // 4. Fetch downloads. The maxWait deadline covers upload + create + wait +
         // downloads, so check before issuing the request (mirrors builder.ts).
         if (Date.now() >= deadline) {
-            throw new GislTimeoutError(`Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`);
+            throw new GislTimeoutError(`Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`, created.workflowId);
         }
         const downloads = await this.client.getWorkflowDownloads(created.workflowId);
         // TDqmkWpX: re-check AFTER the downloads fetch so a slow getWorkflowDownloads
         // cannot return a success past the advertised maxWait deadline.
         if (Date.now() >= deadline) {
-            throw new GislTimeoutError(`Workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`);
+            throw new GislTimeoutError(`Workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`, created.workflowId);
         }
         // Download URLs from getWorkflowDownloads are pre-signed and require no SDK
         // auth, so the downloader issues a plain unauthenticated fetch.
@@ -1524,13 +1524,13 @@ export class FilesRecipe {
         });
         // 4. Fetch downloads + project per-job into the partitioned RunResult.
         if (Date.now() >= deadline) {
-            throw new GislTimeoutError(`Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`);
+            throw new GislTimeoutError(`Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`, created.workflowId);
         }
         const downloads = await this.client.getWorkflowDownloads(created.workflowId);
         // TDqmkWpX: re-check AFTER the downloads fetch so a slow getWorkflowDownloads
         // cannot return a success past the advertised maxWait deadline.
         if (Date.now() >= deadline) {
-            throw new GislTimeoutError(`Workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`);
+            throw new GislTimeoutError(`Workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`, created.workflowId);
         }
         // keyByRef maps each job ref ("file-{i}") to the partition key. Today the
         // key is just the index string; the Map seam leaves room for the FF3b
@@ -1739,13 +1739,13 @@ export class MergedRecipe {
             useSSE: options.useSSE ?? true,
         });
         if (Date.now() >= deadline) {
-            throw new GislTimeoutError(`Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`);
+            throw new GislTimeoutError(`Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`, created.workflowId);
         }
         const downloads = await this.client.getWorkflowDownloads(created.workflowId);
         // TDqmkWpX: re-check AFTER the downloads fetch so a slow getWorkflowDownloads
         // cannot return a success past the advertised maxWait deadline.
         if (Date.now() >= deadline) {
-            throw new GislTimeoutError(`Workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`);
+            throw new GislTimeoutError(`Workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`, created.workflowId);
         }
         // Project ONLY the merge job's output — the `src_*` passthrough jobs
         // re-expose the raw uploads, which are plumbing, not the deliverable
@@ -1950,13 +1950,13 @@ export class ArchivedRecipe {
             useSSE: options.useSSE ?? true,
         });
         if (Date.now() >= deadline) {
-            throw new GislTimeoutError(`Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`);
+            throw new GislTimeoutError(`Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`, created.workflowId);
         }
         const downloads = await this.client.getWorkflowDownloads(created.workflowId);
         // TDqmkWpX: re-check AFTER the downloads fetch so a slow getWorkflowDownloads
         // cannot return a success past the advertised maxWait deadline.
         if (Date.now() >= deadline) {
-            throw new GislTimeoutError(`Workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`);
+            throw new GislTimeoutError(`Workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`, created.workflowId);
         }
         // Project ONLY the archive job's output — the `src_*` passthrough jobs
         // re-expose the raw uploads, which are plumbing, not the deliverable.
@@ -2153,11 +2153,11 @@ export class WatermarkedRecipe {
             useSSE: options.useSSE ?? true,
         });
         if (Date.now() >= deadline) {
-            throw new GislTimeoutError(`Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`);
+            throw new GislTimeoutError(`Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`, created.workflowId);
         }
         const downloads = await this.client.getWorkflowDownloads(created.workflowId);
         if (Date.now() >= deadline) {
-            throw new GislTimeoutError(`Workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`);
+            throw new GislTimeoutError(`Workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`, created.workflowId);
         }
         // Project ONLY the watermark job's output — the `src_*` passthrough jobs
         // re-expose the raw base/overlay uploads, which are plumbing.
@@ -2359,13 +2359,13 @@ export class BatchRecipe {
         });
         // 4. Fetch downloads + project per-job into the keyed RunResult.
         if (Date.now() >= deadline) {
-            throw new GislTimeoutError(`Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`);
+            throw new GislTimeoutError(`Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`, created.workflowId);
         }
         const downloads = await this.client.getWorkflowDownloads(created.workflowId);
         // TDqmkWpX: re-check AFTER the downloads fetch so a slow getWorkflowDownloads
         // cannot return a success past the advertised maxWait deadline.
         if (Date.now() >= deadline) {
-            throw new GislTimeoutError(`Workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`);
+            throw new GislTimeoutError(`Workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`, created.workflowId);
         }
         const downloader = new LazyHttpDownloader();
         return projectMultiJobToRunResult(created.workflowId, finalStatus, downloads.downloads, this.keyByRef(), downloader);

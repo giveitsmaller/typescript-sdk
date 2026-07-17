@@ -586,6 +586,7 @@ export class OperationBuilder {
     if (Date.now() >= deadline) {
       throw new GislTimeoutError(
         `Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`,
+        created.workflowId,
       );
     }
     const downloads = await this.client.getWorkflowDownloads(created.workflowId);
@@ -595,6 +596,7 @@ export class OperationBuilder {
     if (Date.now() >= deadline) {
       throw new GislTimeoutError(
         `Workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`,
+        created.workflowId,
       );
     }
     return _projectResult(finalStatus, downloads.downloads, resolved.wireOptions, resolved.resolvedOptions);
@@ -834,6 +836,7 @@ export async function _consumeSseToTerminal(
   if (remainingMs <= 0) {
     throw new GislTimeoutError(
       `Workflow ${args.workflowId} did not complete before maxWait deadline`,
+      args.workflowId,
     );
   }
   const sseAbort = new AbortController();
@@ -862,6 +865,7 @@ export async function _consumeSseToTerminal(
       if (deadlineExpired && err instanceof DOMException && err.name === 'AbortError') {
         throw new GislTimeoutError(
           `Workflow ${args.workflowId} did not complete before maxWait deadline`,
+          args.workflowId,
         );
       }
       // TDqmkWpX: a genuine connect-phase TRANSPORT failure surfaces as a raw
@@ -883,6 +887,7 @@ export async function _consumeSseToTerminal(
       if (deadlineExpired) {
         throw new GislTimeoutError(
           `Workflow ${args.workflowId} did not complete before maxWait deadline`,
+          args.workflowId,
         );
       }
       if (args.onProgress !== undefined && event.event === SseEventType.operation_progress) {
@@ -929,6 +934,7 @@ export async function _consumeSseToTerminal(
         sseAbort.abort();
         throw new GislTimeoutError(
           `Workflow ${args.workflowId} did not complete before maxWait deadline`,
+          args.workflowId,
         );
       }
     }
@@ -937,6 +943,7 @@ export async function _consumeSseToTerminal(
     if (deadlineExpired) {
       throw new GislTimeoutError(
         `Workflow ${args.workflowId} did not complete before maxWait deadline`,
+        args.workflowId,
       );
     }
     // Otherwise it was a clean server-side close — fall back to poll. TDqmkWpX:
@@ -960,6 +967,7 @@ export async function _consumeSseToTerminal(
       ) {
         throw new GislTimeoutError(
           `Workflow ${args.workflowId} did not complete before maxWait deadline`,
+          args.workflowId,
         );
       }
       // A genuine mid-stream TRANSPORT failure (reader disconnect) surfaces as a
@@ -1010,6 +1018,7 @@ export async function _pollToTerminal(
     if (Date.now() >= args.deadline) {
       throw new GislTimeoutError(
         `Workflow ${args.workflowId} did not complete before maxWait deadline`,
+        args.workflowId,
       );
     }
     const status = await client.getWorkflowStatus(args.workflowId);
@@ -1023,11 +1032,13 @@ export async function _pollToTerminal(
     if (Date.now() >= args.deadline) {
       throw new GislTimeoutError(
         `Workflow ${args.workflowId} did not complete before maxWait deadline`,
+        args.workflowId,
       );
     }
     if (Date.now() + intervalMs >= args.deadline) {
       throw new GislTimeoutError(
         `Workflow ${args.workflowId} did not complete before maxWait deadline`,
+        args.workflowId,
       );
     }
     await sleep(intervalMs, args.signal);

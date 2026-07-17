@@ -128,14 +128,14 @@ export class MergeBuilder {
         });
         // 5. Fetch downloads + project.
         if (Date.now() >= deadline) {
-            throw new GislTimeoutError(`Merge workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`);
+            throw new GislTimeoutError(`Merge workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`, created.workflowId);
         }
         const downloads = await this.client.getWorkflowDownloads(created.workflowId);
         // TDqmkWpX: the maxWait deadline also covers the downloads fetch itself —
         // re-check AFTER the call so a slow getWorkflowDownloads cannot return a
         // success past the advertised whole-run deadline.
         if (Date.now() >= deadline) {
-            throw new GislTimeoutError(`Merge workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`);
+            throw new GislTimeoutError(`Merge workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`, created.workflowId);
         }
         // p0SuJEeK — project ONLY the merge job's output. getWorkflowDownloads
         // returns a download group per terminal job, which now INCLUDES the

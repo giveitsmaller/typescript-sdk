@@ -205,6 +205,7 @@ export class Handle {
     if (Date.now() >= deadline) {
       throw new GislTimeoutError(
         `Workflow ${this.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`,
+        this.workflowId,
       );
     }
     const downloads = await client.getWorkflowDownloads(this.workflowId);
@@ -213,6 +214,7 @@ export class Handle {
     if (Date.now() >= deadline) {
       throw new GislTimeoutError(
         `Workflow ${this.workflowId} downloads fetch completed after maxWait elapsed`,
+        this.workflowId,
       );
     }
     return this.project(finalStatus, downloads.downloads);

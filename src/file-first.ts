@@ -1068,6 +1068,7 @@ export class Recipe {
     if (Date.now() >= deadline) {
       throw new GislTimeoutError(
         `Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`,
+        created.workflowId,
       );
     }
     const downloads = await this.client.getWorkflowDownloads(created.workflowId);
@@ -1076,6 +1077,7 @@ export class Recipe {
     if (Date.now() >= deadline) {
       throw new GislTimeoutError(
         `Workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`,
+        created.workflowId,
       );
     }
 
@@ -2029,6 +2031,7 @@ export class FilesRecipe {
     if (Date.now() >= deadline) {
       throw new GislTimeoutError(
         `Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`,
+        created.workflowId,
       );
     }
     const downloads = await this.client.getWorkflowDownloads(created.workflowId);
@@ -2037,6 +2040,7 @@ export class FilesRecipe {
     if (Date.now() >= deadline) {
       throw new GislTimeoutError(
         `Workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`,
+        created.workflowId,
       );
     }
 
@@ -2334,6 +2338,7 @@ export class MergedRecipe {
     if (Date.now() >= deadline) {
       throw new GislTimeoutError(
         `Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`,
+        created.workflowId,
       );
     }
     const downloads = await this.client.getWorkflowDownloads(created.workflowId);
@@ -2342,6 +2347,7 @@ export class MergedRecipe {
     if (Date.now() >= deadline) {
       throw new GislTimeoutError(
         `Workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`,
+        created.workflowId,
       );
     }
 
@@ -2641,6 +2647,7 @@ export class ArchivedRecipe {
     if (Date.now() >= deadline) {
       throw new GislTimeoutError(
         `Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`,
+        created.workflowId,
       );
     }
     const downloads = await this.client.getWorkflowDownloads(created.workflowId);
@@ -2649,6 +2656,7 @@ export class ArchivedRecipe {
     if (Date.now() >= deadline) {
       throw new GislTimeoutError(
         `Workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`,
+        created.workflowId,
       );
     }
 
@@ -2919,12 +2927,14 @@ export class WatermarkedRecipe {
     if (Date.now() >= deadline) {
       throw new GislTimeoutError(
         `Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`,
+        created.workflowId,
       );
     }
     const downloads = await this.client.getWorkflowDownloads(created.workflowId);
     if (Date.now() >= deadline) {
       throw new GislTimeoutError(
         `Workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`,
+        created.workflowId,
       );
     }
 
@@ -3206,6 +3216,7 @@ export class BatchRecipe {
     if (Date.now() >= deadline) {
       throw new GislTimeoutError(
         `Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`,
+        created.workflowId,
       );
     }
     const downloads = await this.client.getWorkflowDownloads(created.workflowId);
@@ -3214,6 +3225,7 @@ export class BatchRecipe {
     if (Date.now() >= deadline) {
       throw new GislTimeoutError(
         `Workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`,
+        created.workflowId,
       );
     }
 

@@ -257,6 +257,7 @@ export class MergeBuilder {
     if (Date.now() >= deadline) {
       throw new GislTimeoutError(
         `Merge workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`,
+        created.workflowId,
       );
     }
     const downloads = await this.client.getWorkflowDownloads(created.workflowId);
@@ -266,6 +267,7 @@ export class MergeBuilder {
     if (Date.now() >= deadline) {
       throw new GislTimeoutError(
         `Merge workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`,
+        created.workflowId,
       );
     }
     // p0SuJEeK — project ONLY the merge job's output. getWorkflowDownloads

@@ -316,14 +316,14 @@ export class OperationBuilder {
         // the deadline before issuing the downloads request rather than letting
         // a slow getWorkflowDownloads silently exceed it.
         if (Date.now() >= deadline) {
-            throw new GislTimeoutError(`Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`);
+            throw new GislTimeoutError(`Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`, created.workflowId);
         }
         const downloads = await this.client.getWorkflowDownloads(created.workflowId);
         // TDqmkWpX: the maxWait deadline also covers the downloads fetch itself — a
         // slow getWorkflowDownloads must not return a success after the advertised
         // whole-run deadline. Re-check AFTER the call (the check above is BEFORE).
         if (Date.now() >= deadline) {
-            throw new GislTimeoutError(`Workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`);
+            throw new GislTimeoutError(`Workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`, created.workflowId);
         }
         return _projectResult(finalStatus, downloads.downloads, resolved.wireOptions, resolved.resolvedOptions);
     }
@@ -531,7 +531,7 @@ class _OnProgressThrew {
 export async function _consumeSseToTerminal(client, args) {
     const remainingMs = args.deadline - Date.now();
     if (remainingMs <= 0) {
-        throw new GislTimeoutError(`Workflow ${args.workflowId} did not complete before maxWait deadline`);
+        throw new GislTimeoutError(`Workflow ${args.workflowId} did not complete before maxWait deadline`, args.workflowId);
     }
     const sseAbort = new AbortController();
     // Compose caller's signal + a SDK-internal one so we can tear down on terminal.
@@ -560,7 +560,7 @@ export async function _consumeSseToTerminal(client, args) {
             // If streamEvents rejected because the deadline-armed sseAbort fired
             // before/during connect, surface as timeout (not raw AbortError).
             if (deadlineExpired && err instanceof DOMException && err.name === 'AbortError') {
-                throw new GislTimeoutError(`Workflow ${args.workflowId} did not complete before maxWait deadline`);
+                throw new GislTimeoutError(`Workflow ${args.workflowId} did not complete before maxWait deadline`, args.workflowId);
             }
             // TDqmkWpX: a genuine connect-phase TRANSPORT failure surfaces as a raw
             // `TypeError` from `fetch` (DNS/TCP/TLS) — wrap it as a typed
@@ -577,7 +577,7 @@ export async function _consumeSseToTerminal(client, args) {
         try {
             for await (const event of events) {
                 if (deadlineExpired) {
-                    throw new GislTimeoutError(`Workflow ${args.workflowId} did not complete before maxWait deadline`);
+                    throw new GislTimeoutError(`Workflow ${args.workflowId} did not complete before maxWait deadline`, args.workflowId);
                 }
                 if (args.onProgress !== undefined && event.event === SseEventType.operation_progress) {
                     // Codex r1 high d6485d3e35f9 — `streamEvents` yields raw snake_case
@@ -620,13 +620,13 @@ export async function _consumeSseToTerminal(client, args) {
                 }
                 if (Date.now() >= args.deadline) {
                     sseAbort.abort();
-                    throw new GislTimeoutError(`Workflow ${args.workflowId} did not complete before maxWait deadline`);
+                    throw new GislTimeoutError(`Workflow ${args.workflowId} did not complete before maxWait deadline`, args.workflowId);
                 }
             }
             // Stream ended cleanly without terminal. If the deadline timer fired
             // mid-stream and triggered the abort, surface that as the timeout.
             if (deadlineExpired) {
-                throw new GislTimeoutError(`Workflow ${args.workflowId} did not complete before maxWait deadline`);
+                throw new GislTimeoutError(`Workflow ${args.workflowId} did not complete before maxWait deadline`, args.workflowId);
             }
             // Otherwise it was a clean server-side close — fall back to poll. TDqmkWpX:
             // a sealed marker (not a bare Error) so callers poll ONLY on this + a typed
@@ -646,7 +646,7 @@ export async function _consumeSseToTerminal(client, args) {
             if (deadlineExpired &&
                 innerErr instanceof DOMException &&
                 innerErr.name === 'AbortError') {
-                throw new GislTimeoutError(`Workflow ${args.workflowId} did not complete before maxWait deadline`);
+                throw new GislTimeoutError(`Workflow ${args.workflowId} did not complete before maxWait deadline`, args.workflowId);
             }
             // A genuine mid-stream TRANSPORT failure (reader disconnect) surfaces as a
             // raw `TypeError` from the iterator — wrap as GislNetworkError so callers
@@ -686,7 +686,7 @@ export async function _pollToTerminal(client, args) {
     while (true) {
         _checkAborted(args.signal);
         if (Date.now() >= args.deadline) {
-            throw new GislTimeoutError(`Workflow ${args.workflowId} did not complete before maxWait deadline`);
+            throw new GislTimeoutError(`Workflow ${args.workflowId} did not complete before maxWait deadline`, args.workflowId);
         }
         const status = await client.getWorkflowStatus(args.workflowId);
         if (TERMINAL_STATUS.has(status.status)) {
@@ -697,10 +697,10 @@ export async function _pollToTerminal(client, args) {
         // pre-fetch check firing. Without this, a small `pollIntervalMs` against
         // a slow API can busy-spin past the deadline arbitrarily.
         if (Date.now() >= args.deadline) {
-            throw new GislTimeoutError(`Workflow ${args.workflowId} did not complete before maxWait deadline`);
+            throw new GislTimeoutError(`Workflow ${args.workflowId} did not complete before maxWait deadline`, args.workflowId);
         }
         if (Date.now() + intervalMs >= args.deadline) {
-            throw new GislTimeoutError(`Workflow ${args.workflowId} did not complete before maxWait deadline`);
+            throw new GislTimeoutError(`Workflow ${args.workflowId} did not complete before maxWait deadline`, args.workflowId);
         }
         await sleep(intervalMs, args.signal);
     }

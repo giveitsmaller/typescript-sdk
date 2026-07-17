@@ -784,9 +784,31 @@ export class GislBundleAlreadyArchivedError extends GislConfigError {
 }
 
 export class GislTimeoutError extends GislError {
-  constructor(message: string) {
+  /**
+   * The workflow this timeout is scoped to, when the SDK knows it. Set on a
+   * timed-out `run()` / `wait()` / poll / download once the workflow has been
+   * created: a timeout does NOT mean the work failed — the server keeps
+   * processing, so poll `client.getWorkflowStatus(workflowId)` /
+   * `getWorkflowDownloads(workflowId)` to recover a result that completed after
+   * the deadline, instead of re-running (a re-run re-uploads and, for
+   * authenticated callers, settles a SECOND charge for the same deliverable).
+   *
+   * `undefined` when the SDK has no id to offer. That is NOT a guarantee that
+   * nothing was created or charged: it covers both the safe case (an upload /
+   * probe timeout before any workflow existed) AND the AMBIGUOUS case (the
+   * `POST /api/workflows` request itself timed out — the server may have
+   * created and charged the workflow before its response was lost). Treat an
+   * absent id as "cannot auto-recover", not "clean slate": reconcile (e.g. list
+   * recent workflows) before re-running rather than assuming nothing happened.
+   */
+  readonly workflowId?: string;
+
+  constructor(message: string, workflowId?: string) {
     super(message);
     this.name = 'GislTimeoutError';
+    // Normalise an empty id to "absent" — an empty string is not a usable
+    // recovery handle (some throw sites derive the id as `… ?? ''`).
+    this.workflowId = workflowId === '' ? undefined : workflowId;
   }
 }
 

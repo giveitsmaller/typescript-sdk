@@ -432,6 +432,63 @@ describe('GislClient', () => {
       ).rejects.toThrow(GislTimeoutError);
     });
 
+    it('carries the workflowId on the timeout so the caller can recover (oYumKo6y)', async () => {
+      fetchSpy.mockImplementation(() =>
+        Promise.resolve(
+          jsonResponse({
+            success: true,
+            data: { workflow_id: 'wf-1', status: 'in_progress', jobs: [] },
+          }),
+        ),
+      );
+
+      const err = await client
+        .waitForWorkflow('wf-1', { intervalMs: 10, timeoutMs: 25 })
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(GislTimeoutError);
+      // The workflow exists server-side; poll wf-1 rather than re-running.
+      expect((err as GislTimeoutError).workflowId).toBe('wf-1');
+    });
+
+    it('GislTimeoutError.workflowId is absent when none is supplied or empty', () => {
+      // A pre-create timeout passes no id; some throw sites derive the id as
+      // `… ?? ''`, so an empty string must normalise to "absent" rather than
+      // leak as an unusable non-undefined value.
+      expect(new GislTimeoutError('deadline').workflowId).toBeUndefined();
+      expect(new GislTimeoutError('deadline', '').workflowId).toBeUndefined();
+      expect(new GislTimeoutError('deadline', 'wf-9').workflowId).toBe('wf-9');
+    });
+
+    it('enriches a transport timeout on getWorkflowStatus with the workflowId (oYumKo6y)', async () => {
+      // A per-request transport timeout (the fetch aborts) previously threw a
+      // bare GislTimeoutError with no id — unrecoverable even mid-wait. It now
+      // carries the workflow being read so the caller can still recover it.
+      fetchSpy.mockImplementationOnce(async (_url, init: RequestInit) => {
+        return new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener(
+            'abort',
+            () => {
+              const abortErr = new Error('The operation was aborted');
+              abortErr.name = 'AbortError';
+              reject(abortErr);
+            },
+            { once: true },
+          );
+        });
+      });
+      const fastClient = new GislClient({
+        baseUrl: 'https://api.example.com',
+        apiKey: 'test-key',
+        timeout: 10,
+      });
+
+      const err = await fastClient.getWorkflowStatus('wf-xyz').catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(GislTimeoutError);
+      expect((err as GislTimeoutError).workflowId).toBe('wf-xyz');
+      // The re-tag preserves the original transport timeout as the cause.
+      expect((err as { cause?: unknown }).cause).toBeInstanceOf(GislTimeoutError);
+    });
+
     it('calls onPoll callback with each status', async () => {
       fetchSpy
         .mockResolvedValueOnce(

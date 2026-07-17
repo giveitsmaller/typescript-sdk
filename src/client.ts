@@ -215,6 +215,24 @@ const RECOMMENDED_CHUNK_SIZE_MAX_BYTES = 104_857_600; // 100 MiB
 const DEFAULT_POLL_INTERVAL_MS = 2_000;
 const DEFAULT_POLL_TIMEOUT_MS = 600_000; // 10 min
 
+/**
+ * Re-tag a bare per-request transport {@link GislTimeoutError} with the workflow
+ * it was scoped to, so a timed-out workflow read (status / downloads) stays
+ * recoverable. No-op for any other error and for a timeout that already carries
+ * an id. See `oYumKo6y`. (PHP transport failures surface as `GislNetworkError`,
+ * so this enrichment is TS-only.)
+ */
+function withWorkflowIdOnTimeout(err: unknown, workflowId: string): unknown {
+  if (!(err instanceof GislTimeoutError) || err.workflowId !== undefined) return err;
+  const enriched = new GislTimeoutError(err.message, workflowId);
+  // Preserve the original throw site + chain the cause — the enriched error is
+  // a re-tag, not a new failure, so diagnostics should still point at the
+  // transport timeout.
+  enriched.stack = err.stack;
+  (enriched as { cause?: unknown }).cause = err;
+  return enriched;
+}
+
 // Anonymous-read capability header. An anonymous (null-owner) workflow create
 // returns a one-time `cap` token (WorkflowCreateResponse.cap); the session-less
 // caller passes it back on status/downloads/events reads via this header so the
@@ -2314,10 +2332,14 @@ export class GislClient {
     workflowId: string,
     opts: ReadCapabilityOptions = {},
   ): Promise<WorkflowStatusResponse> {
-    return this.request('GET', `/api/workflows/${encodeURIComponent(workflowId)}/status`, {
-      deserialize: WorkflowStatusResponseFromJSON,
-      headers: workflowCapabilityHeaders(opts.capability),
-    });
+    try {
+      return await this.request('GET', `/api/workflows/${encodeURIComponent(workflowId)}/status`, {
+        deserialize: WorkflowStatusResponseFromJSON,
+        headers: workflowCapabilityHeaders(opts.capability),
+      });
+    } catch (err) {
+      throw withWorkflowIdOnTimeout(err, workflowId);
+    }
   }
 
   /**
@@ -2344,6 +2366,7 @@ export class GislClient {
       if (Date.now() + intervalMs > deadline) {
         throw new GislTimeoutError(
           `Workflow ${workflowId} did not complete within ${timeoutMs}ms`,
+          workflowId,
         );
       }
 
@@ -2408,10 +2431,14 @@ export class GislClient {
     workflowId: string,
     opts: ReadCapabilityOptions = {},
   ): Promise<WorkflowDownloadResponse> {
-    return this.request('GET', `/api/workflows/${encodeURIComponent(workflowId)}/downloads`, {
-      deserialize: WorkflowDownloadResponseFromJSON,
-      headers: workflowCapabilityHeaders(opts.capability),
-    });
+    try {
+      return await this.request('GET', `/api/workflows/${encodeURIComponent(workflowId)}/downloads`, {
+        deserialize: WorkflowDownloadResponseFromJSON,
+        headers: workflowCapabilityHeaders(opts.capability),
+      });
+    } catch (err) {
+      throw withWorkflowIdOnTimeout(err, workflowId);
+    }
   }
 
   /**
