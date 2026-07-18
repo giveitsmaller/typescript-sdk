@@ -269,6 +269,77 @@ describe('output() — chroma_subsampling (v2.110.0 stable) + quality_preset (v2
       expect((e as GislConfigError).reason).toBe('option_not_on_route');
     }
   });
+
+  // General contract depends_on validation (ehHU08Hu) — beyond the auto_quality
+  // family: target_size_bytes needs target_size mode, fit needs a dimension.
+  it('target_size_bytes without encoding_mode:target_size is rejected (default is quality)', () => {
+    try {
+      ops(new Recipe(fileInput.path('a.jpg')).output('jpeg', { target_size_bytes: 50_000 }));
+      throw new Error('expected throw');
+    } catch (e) {
+      expect((e as GislConfigError).reason).toBe('invalid_option_combination');
+      expect((e as GislConfigError).conflictingFields).toEqual(['encoding_mode', 'target_size_bytes']);
+    }
+  });
+
+  it('quality with no encoding_mode is allowed — encoding_mode defaults to quality (no over-reject)', () => {
+    expect(
+      soleOp(new Recipe(fileInput.path('a.jpg')).output('jpeg', { quality: 80 })).options,
+    ).toEqual({ output_format: 'original', quality: 80 });
+  });
+
+  it('fit without width or height is rejected (depends_on { width|height set })', () => {
+    try {
+      ops(new Recipe(fileInput.path('a.jpg')).output('jpeg', { fit: 'max' }));
+      throw new Error('expected throw');
+    } catch (e) {
+      expect((e as GislConfigError).reason).toBe('invalid_option_combination');
+      expect((e as GislConfigError).conflictingFields).toEqual(['fit', 'width', 'height']);
+    }
+  });
+
+  it('fit with a width is allowed', () => {
+    expect(
+      soleOp(new Recipe(fileInput.path('a.jpg')).output('jpeg', { fit: 'max', width: 800 })).options,
+    ).toMatchObject({ fit: 'max', width: 800 });
+  });
+
+  it('fit with a null width is still rejected — null is not "set" (parity with PHP)', () => {
+    try {
+      ops(new Recipe(fileInput.path('a.jpg')).output('jpeg', { fit: 'max', width: null as unknown as number }));
+      throw new Error('expected throw');
+    } catch (e) {
+      expect((e as GislConfigError).reason).toBe('invalid_option_combination');
+      expect((e as GislConfigError).conflictingFields).toEqual(['fit', 'width', 'height']);
+    }
+  });
+
+  // fit → width|height is IDENTICAL in compress + convert, so it is validated on
+  // BOTH routes (codex: same_format-only scoping had disabled it on convert).
+  it('fit without a dimension is rejected on a format_change too (shared dep)', () => {
+    try {
+      ops(new Recipe(fileInput.path('a.jpg')).output('webp', { fit: 'max' }));
+      throw new Error('expected throw');
+    } catch (e) {
+      expect((e as GislConfigError).reason).toBe('invalid_option_combination');
+      expect((e as GislConfigError).conflictingFields).toEqual(['fit', 'width', 'height']);
+    }
+  });
+
+  it('fit with a width is allowed on a format_change', () => {
+    expect(
+      soleOp(new Recipe(fileInput.path('a.jpg')).output('webp', { fit: 'max', width: 800 })).options,
+    ).toMatchObject({ fit: 'max', width: 800 });
+  });
+
+  it('a null dependent option is dropped, not shipped — full null parity (codex)', () => {
+    // target_size_bytes: null is dropped at build (like PHP), so it never reaches
+    // the wire and triggers no dependency error.
+    expect(
+      soleOp(new Recipe(fileInput.path('a.jpg')).output('jpeg', { target_size_bytes: null as unknown as number }))
+        .options,
+    ).toEqual({ output_format: 'original' });
+  });
 });
 
 describe('output() — color_profile (un-gated v2.128.0) + auto_orient (STABLE since v2.120.0)', () => {

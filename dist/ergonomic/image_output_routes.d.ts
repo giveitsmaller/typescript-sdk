@@ -117,4 +117,53 @@ export declare const COMPRESS_OPTION_VALUES: Readonly<Record<string, Readonly<Re
  * treated as unknown rather than coerced to a match.
  */
 export declare function isUnknownEnumValue(inputToken: string, optionKey: string, value: unknown): boolean;
+/** A contract `depends_on` rule for a compress-image output option (ehHU08Hu). */
+type OutputDependsOnRule = {
+    readonly requiresKey: string;
+    readonly requiresValue: string;
+} | {
+    readonly requiresAnyOf: readonly string[];
+};
+/**
+ * Contract `depends_on` per compress-image output option, mirroring
+ * `availability.json` `operations.compress.mime_groups.<group>.options.<opt>.depends_on`
+ * (ehHU08Hu). The rule is option-consistent across every image group that carries
+ * the option, so this is a FLAT table (validated group-by-group by
+ * `output-route-conformance.test.ts` / PHP `ImageOutputRouteConformanceTest`).
+ *
+ * Kept as a hand table — NOT a runtime read of the ~238KB availability sidecar —
+ * so the gate stays browser-safe with no contracts-version coupling, exactly like
+ * {@link COMPRESS_OPTION_VALUES}. Mirrored by PHP
+ * `ImageOutputRoutes::OUTPUT_OPTION_DEPENDS_ON`.
+ *
+ * Generalises the 86gAu5Tr auto_quality gate: every option's dependency is
+ * checked uniformly, so quality/lossless/target_size_bytes under `auto_quality`,
+ * `target_size_bytes` without `target_size`, `fit` without width/height, etc. are
+ * all rejected pre-upload instead of only the one hand-coded case.
+ */
+export declare const OUTPUT_OPTION_DEPENDS_ON: Readonly<Record<string, OutputDependsOnRule>>;
+/**
+ * Default of each depended-on key — an ABSENT key resolves to this before the
+ * dependency check (the server applies the same default). `encoding_mode`
+ * defaults to `quality`, so `quality`/`lossless` are valid with no explicit mode,
+ * but `target_size_bytes` / `quality_preset` are not. Pinned to `availability.json`
+ * defaults by the conformance suite.
+ */
+export declare const DEPENDS_ON_KEY_DEFAULTS: Readonly<Record<string, string>>;
+/**
+ * The first contract `depends_on` an already-lowered compress-image wire-option
+ * set violates for the resolved `route`, or `undefined` when every dependency is
+ * satisfied (ehHU08Hu). The caller ({@link Recipe} output lowering) throws
+ * `invalid_option_combination` with the returned message + conflictingFields.
+ * Only options PRESENT in `wireOptions` are checked; a scalar dependency reads
+ * the depended-on key's effective value ({@link DEPENDS_ON_KEY_DEFAULTS} when
+ * absent). A scalar (encoding_mode) dependency is skipped on a `format_change`
+ * (convert has its own deps); universal deps (e.g. `fit → width|height`, identical
+ * in compress + convert) run on BOTH routes. Mirrored by PHP
+ * `ImageOutputRoutes::dependsOnViolation`.
+ */
+export declare function dependsOnViolation(wireOptions: Readonly<Record<string, unknown>>, route: 'same_format' | 'format_change'): {
+    readonly message: string;
+    readonly conflictingFields: readonly string[];
+} | undefined;
 export {};

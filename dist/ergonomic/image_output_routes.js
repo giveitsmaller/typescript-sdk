@@ -232,3 +232,85 @@ export function isUnknownEnumValue(inputToken, optionKey, value) {
         return false;
     return !(typeof value === 'string' && members.includes(value));
 }
+/**
+ * Contract `depends_on` per compress-image output option, mirroring
+ * `availability.json` `operations.compress.mime_groups.<group>.options.<opt>.depends_on`
+ * (ehHU08Hu). The rule is option-consistent across every image group that carries
+ * the option, so this is a FLAT table (validated group-by-group by
+ * `output-route-conformance.test.ts` / PHP `ImageOutputRouteConformanceTest`).
+ *
+ * Kept as a hand table — NOT a runtime read of the ~238KB availability sidecar —
+ * so the gate stays browser-safe with no contracts-version coupling, exactly like
+ * {@link COMPRESS_OPTION_VALUES}. Mirrored by PHP
+ * `ImageOutputRoutes::OUTPUT_OPTION_DEPENDS_ON`.
+ *
+ * Generalises the 86gAu5Tr auto_quality gate: every option's dependency is
+ * checked uniformly, so quality/lossless/target_size_bytes under `auto_quality`,
+ * `target_size_bytes` without `target_size`, `fit` without width/height, etc. are
+ * all rejected pre-upload instead of only the one hand-coded case.
+ */
+export const OUTPUT_OPTION_DEPENDS_ON = {
+    quality: { requiresKey: 'encoding_mode', requiresValue: 'quality' },
+    lossless: { requiresKey: 'encoding_mode', requiresValue: 'quality' },
+    quality_preset: { requiresKey: 'encoding_mode', requiresValue: 'auto_quality' },
+    target_size_bytes: { requiresKey: 'encoding_mode', requiresValue: 'target_size' },
+    fit: { requiresAnyOf: ['width', 'height'] },
+};
+/**
+ * Default of each depended-on key — an ABSENT key resolves to this before the
+ * dependency check (the server applies the same default). `encoding_mode`
+ * defaults to `quality`, so `quality`/`lossless` are valid with no explicit mode,
+ * but `target_size_bytes` / `quality_preset` are not. Pinned to `availability.json`
+ * defaults by the conformance suite.
+ */
+export const DEPENDS_ON_KEY_DEFAULTS = {
+    encoding_mode: 'quality',
+};
+/**
+ * The first contract `depends_on` an already-lowered compress-image wire-option
+ * set violates for the resolved `route`, or `undefined` when every dependency is
+ * satisfied (ehHU08Hu). The caller ({@link Recipe} output lowering) throws
+ * `invalid_option_combination` with the returned message + conflictingFields.
+ * Only options PRESENT in `wireOptions` are checked; a scalar dependency reads
+ * the depended-on key's effective value ({@link DEPENDS_ON_KEY_DEFAULTS} when
+ * absent). A scalar (encoding_mode) dependency is skipped on a `format_change`
+ * (convert has its own deps); universal deps (e.g. `fit → width|height`, identical
+ * in compress + convert) run on BOTH routes. Mirrored by PHP
+ * `ImageOutputRoutes::dependsOnViolation`.
+ */
+export function dependsOnViolation(wireOptions, route) {
+    for (const [option, rule] of Object.entries(OUTPUT_OPTION_DEPENDS_ON)) {
+        // A nullish value is NOT "set" — the contract `set` condition needs a real
+        // value, and PHP drops null options before lowering, so treat null == absent
+        // for parity (codex: `{ fit: 'max', width: null }` must reject, not bypass).
+        if (wireOptions[option] == null)
+            continue;
+        if ('requiresAnyOf' in rule) {
+            if (!rule.requiresAnyOf.some((key) => wireOptions[key] != null)) {
+                return {
+                    conflictingFields: [option, ...rule.requiresAnyOf],
+                    message: `output(): '${option}' requires at least one of ${rule.requiresAnyOf.join(', ')} to be set ` +
+                        `(its contract dependency). Set ${rule.requiresAnyOf.join(' or ')}, or drop '${option}'.`,
+                };
+            }
+            continue;
+        }
+        // Scalar deps in this (compress-image) table are all on `encoding_mode`, a
+        // same_format optimiser key — validate them on same_format ONLY. A
+        // format_change routes via `convert`, which has no encoding_mode and carries
+        // its own output_format-based deps (a follow-up). The universal requiresAnyOf
+        // dep (fit → width|height) above runs on BOTH routes.
+        if (route !== 'same_format')
+            continue;
+        const effective = wireOptions[rule.requiresKey] ?? DEPENDS_ON_KEY_DEFAULTS[rule.requiresKey];
+        if (effective !== rule.requiresValue) {
+            return {
+                conflictingFields: [rule.requiresKey, option],
+                message: `output(): '${option}' requires ${rule.requiresKey} '${rule.requiresValue}' (its contract ` +
+                    `dependency), but ${rule.requiresKey} is '${String(effective)}'. Set ${rule.requiresKey}: ` +
+                    `'${rule.requiresValue}', or drop '${option}'.`,
+            };
+        }
+    }
+    return undefined;
+}

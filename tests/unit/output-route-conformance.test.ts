@@ -7,6 +7,8 @@ import {
   FACADE_MANAGED_OUTPUTS,
   MAX_OUTPUT_PIXELS,
   COMPRESS_OPTION_VALUES,
+  OUTPUT_OPTION_DEPENDS_ON,
+  DEPENDS_ON_KEY_DEFAULTS,
   tokenForMime,
 } from '../../src/ergonomic/image_output_routes.js';
 import { VERB_OPTION_KEYS } from '../../src/ergonomic/option_types.js';
@@ -102,7 +104,15 @@ describe('IMAGE_OUTPUT_ROUTES conformance with image-output-routes.json', () => 
 interface Availability {
   operations: {
     compress: {
-      mime_groups: Record<string, { options: Record<string, { type?: string; values?: (string | number)[] }> }>;
+      mime_groups: Record<
+        string,
+        {
+          options: Record<
+            string,
+            { type?: string; values?: (string | number)[]; default?: unknown; depends_on?: Record<string, unknown> }
+          >;
+        }
+      >;
     };
   };
 }
@@ -140,6 +150,70 @@ describe('COMPRESS_OPTION_VALUES conformance with availability.json', () => {
       }
     });
   }
+});
+
+describe('OUTPUT_OPTION_DEPENDS_ON conformance with availability.json', () => {
+  const compressGroups = availability.operations.compress.mime_groups;
+  const imageGroups = Object.keys(compressGroups).filter((g) => g === 'image' || g.startsWith('image_'));
+
+  // Normalise an availability `depends_on` to the flat-table rule shape, FAILING
+  // CLOSED on any shape the flat model can't represent (multi-key AND, array /
+  // set-membership values, a `logic` other than `or`) — so a contract regen that
+  // introduces an unsupported dependency form fails HERE instead of being
+  // silently dropped (codex).
+  const toRule = (dep: Record<string, unknown>): unknown => {
+    const entries = Object.entries(dep);
+    if ('logic' in dep) {
+      // set/logic:or — { k1: 'set', k2: 'set', logic: 'or' }.
+      expect(dep.logic).toBe('or');
+      const conditions = entries.filter(([k]) => k !== 'logic');
+      for (const [, v] of conditions) expect(v).toBe('set');
+      return { requiresAnyOf: conditions.map(([k]) => k).sort() };
+    }
+    // scalar equality — EXACTLY one key mapping to a scalar string value.
+    expect(entries).toHaveLength(1);
+    const [key, value] = entries[0]!;
+    expect(typeof value).toBe('string');
+    return { requiresKey: key, requiresValue: value };
+  };
+
+  // Gather every option→depends_on across the image groups; a given option must
+  // carry the SAME depends_on in every group (which justifies the FLAT table).
+  const contractRules = new Map<string, unknown>();
+  for (const group of imageGroups) {
+    for (const [opt, def] of Object.entries(compressGroups[group]!.options)) {
+      if (def.depends_on === undefined) continue;
+      const rule = toRule(def.depends_on);
+      const existing = contractRules.get(opt);
+      if (existing !== undefined) expect(JSON.stringify(rule)).toBe(JSON.stringify(existing));
+      contractRules.set(opt, rule);
+    }
+  }
+
+  it('the hand table covers exactly the image options that carry a depends_on', () => {
+    expect(Object.keys(OUTPUT_OPTION_DEPENDS_ON).sort()).toEqual([...contractRules.keys()].sort());
+  });
+
+  for (const [opt, rule] of contractRules) {
+    it(`${opt} depends_on matches the contract`, () => {
+      const handRule = OUTPUT_OPTION_DEPENDS_ON[opt]!;
+      const normalisedHand =
+        'requiresAnyOf' in handRule
+          ? { requiresAnyOf: [...handRule.requiresAnyOf].sort() }
+          : { requiresKey: handRule.requiresKey, requiresValue: handRule.requiresValue };
+      expect(JSON.stringify(normalisedHand)).toBe(JSON.stringify(rule));
+    });
+  }
+
+  it('encoding_mode default matches the contract (DEPENDS_ON_KEY_DEFAULTS)', () => {
+    // Every image group that HAS encoding_mode defaults it to the pinned value —
+    // the general gate reads this default when the key is absent.
+    for (const group of imageGroups) {
+      const mode = compressGroups[group]!.options.encoding_mode;
+      if (mode === undefined) continue;
+      expect(mode.default).toBe(DEPENDS_ON_KEY_DEFAULTS.encoding_mode);
+    }
+  });
 });
 
 describe('output verb allowlist conformance', () => {
