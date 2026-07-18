@@ -302,6 +302,52 @@ describe('Recipe.run — useSSE opt-out (wf133EDR)', () => {
   });
 });
 
+describe('Recipe.run/submit — route lowering preflights before upload (0azjb6Rg)', () => {
+  it('a route-invalid option throws BEFORE upload (no uploadFile, no createWorkflow)', async () => {
+    const mock = makeMockClient();
+    // progressive is a same-format jpeg optimiser knob; on a png→jpeg format
+    // change it is not honored. It passes the eager unknown-key check (known
+    // key) and only fails at route lowering — which now preflights pre-upload.
+    const err = await recipe(mock, fileInput.path('a.png'))
+      .output('jpeg', { progressive: true })
+      .run({ maxWait: '30s' })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(GislConfigError);
+    expect((err as GislConfigError).reason).toBe('option_not_on_route');
+    expect(mock.uploadFile).not.toHaveBeenCalled();
+    expect(mock.createWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('an out-of-enum value (rtkzl9gr) also throws before upload', async () => {
+    const mock = makeMockClient();
+    const err = await recipe(mock, fileInput.path('a.avif'))
+      .output('avif', { metadata: 'keep' as never })
+      .run({ maxWait: '30s' })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(GislConfigError);
+    expect((err as GislConfigError).reason).toBe('invalid_option_value');
+    expect(mock.uploadFile).not.toHaveBeenCalled();
+  });
+
+  it('submit() preflights too — a route-invalid recipe uploads nothing', async () => {
+    const mock = makeMockClient();
+    const err = await recipe(mock, fileInput.path('a.png'))
+      .output('jpeg', { progressive: true })
+      .submit()
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(GislConfigError);
+    expect(mock.uploadFile).not.toHaveBeenCalled();
+    expect(mock.createWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('a valid recipe still uploads then creates (preflight is a no-op on success)', async () => {
+    const mock = makeMockClient();
+    await recipe(mock, fileInput.path('a.jpg')).output('jpeg', { progressive: true }).run({ maxWait: '30s' });
+    expect(mock.uploadFile).toHaveBeenCalledOnce();
+    expect(mock.createWorkflow).toHaveBeenCalledOnce();
+  });
+});
+
 describe('Recipe.run — timeout', () => {
   it('throws GislTimeoutError when the deadline elapses before terminal', async () => {
     const mock = makeMockClient();

@@ -719,6 +719,17 @@ export class Recipe {
         const job = { source: uploadSource(fileId), operations };
         return callbackUrl === undefined ? { jobs: [job] } : { jobs: [job], callback_url: callbackUrl };
     }
+    /**
+     * Trigger the per-step lowering purely for its validation side effects
+     * (route honoring, planned / out-of-enum values, `media_unknown`), discarding
+     * the result. Called BEFORE uploading bytes so a route-invalid recipe fails
+     * fast instead of after the upload is spent — parity with PHP
+     * `assertOperationsLowerable`. Lowering reads only `steps` + the input token,
+     * not the upload id, so this is a faithful preflight (0azjb6Rg).
+     */
+    assertOperationsLowerable() {
+        this.steps.forEach((step, i) => this.lowerStep(step, i));
+    }
     /** The result-addressing key passed to `file()`, or undefined. */
     key() {
         return this.recipeKey;
@@ -831,6 +842,13 @@ export class Recipe {
      * slow upload must not proceed to createWorkflow past the deadline.
      */
     async _uploadAndCreate(webhook, deadline, onProgress, signal, probeBeforeCreate, probeTimeoutMs) {
+        // 0. Preflight the operation lowering BEFORE any upload so a route-invalid
+        // recipe (an unhonored / planned / out-of-enum option, or media_unknown on a
+        // bare upload-id input) fails fast instead of after the upload bytes are
+        // spent — parity with PHP's uploadAndCreate (0azjb6Rg). Lowering does not
+        // depend on the upload id, so a clean preflight guarantees the real
+        // toWorkflowPayload() lowering below also succeeds.
+        this.assertOperationsLowerable();
         // 1. Resolve the upload id. A pre-uploaded id skips the upload entirely;
         // a path / blob is uploaded now, emitting {phase:'upload'} progress.
         let fileId;

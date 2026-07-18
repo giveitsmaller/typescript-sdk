@@ -475,6 +475,15 @@ export declare class Recipe {
      *   fixed id). Not part of the caller-facing fluent surface.
      */
     toWorkflowPayload(fileId: string, callbackUrl?: string): WorkflowCreatePayload;
+    /**
+     * Trigger the per-step lowering purely for its validation side effects
+     * (route honoring, planned / out-of-enum values, `media_unknown`), discarding
+     * the result. Called BEFORE uploading bytes so a route-invalid recipe fails
+     * fast instead of after the upload is spent — parity with PHP
+     * `assertOperationsLowerable`. Lowering reads only `steps` + the input token,
+     * not the upload id, so this is a faithful preflight (0azjb6Rg).
+     */
+    private assertOperationsLowerable;
     /** The result-addressing key passed to `file()`, or undefined. */
     key(): string | undefined;
     /** The number of operations chained so far (introspection / tests). */
