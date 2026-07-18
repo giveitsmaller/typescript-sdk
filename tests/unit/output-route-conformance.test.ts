@@ -6,6 +6,7 @@ import {
   IMAGE_OUTPUT_ROUTES,
   FACADE_MANAGED_OUTPUTS,
   MAX_OUTPUT_PIXELS,
+  COMPRESS_OPTION_VALUES,
   tokenForMime,
 } from '../../src/ergonomic/image_output_routes.js';
 import { VERB_OPTION_KEYS } from '../../src/ergonomic/option_types.js';
@@ -84,6 +85,57 @@ describe('IMAGE_OUTPUT_ROUTES conformance with image-output-routes.json', () => 
           it('planned options match', () => {
             expect([...IMAGE_OUTPUT_ROUTES[route][fmt]!.planned].sort()).toEqual([...cell.planned_options].sort());
           });
+        });
+      }
+    });
+  }
+});
+
+/**
+ * Enum-membership table conformance (rtkzl9gr). The Output value gate reads a
+ * hand table ({@link COMPRESS_OPTION_VALUES}) rather than the ~238KB availability
+ * sidecar at runtime (browser-safe; no contracts-version coupling). This suite
+ * PINS that table to the shipped `availability/availability.json` — a contract
+ * regen that adds/changes a compress-image enum member fails HERE. Mirrored by
+ * the PHP `ImageOutputRouteConformanceTest`.
+ */
+interface Availability {
+  operations: {
+    compress: {
+      mime_groups: Record<string, { options: Record<string, { type?: string; values?: (string | number)[] }> }>;
+    };
+  };
+}
+const availability = JSON.parse(
+  readFileSync(require.resolve('@giveitsmaller/contracts/availability/availability.json'), 'utf8'),
+) as Availability;
+
+describe('COMPRESS_OPTION_VALUES conformance with availability.json', () => {
+  const compressGroups = availability.operations.compress.mime_groups;
+  // The gate keys off `image` (gif/tiff fallback) plus every `image_<fmt>` group.
+  const imageGroups = Object.keys(compressGroups).filter((g) => g === 'image' || g.startsWith('image_'));
+
+  it('covers exactly the image compress groups', () => {
+    expect(Object.keys(COMPRESS_OPTION_VALUES).sort()).toEqual([...imageGroups].sort());
+  });
+
+  for (const group of imageGroups) {
+    describe(group, () => {
+      const enumOpts = Object.entries(compressGroups[group]!.options).filter(([, o]) => o.type === 'enum');
+
+      it("mirrors exactly the group's enum options", () => {
+        expect(Object.keys(COMPRESS_OPTION_VALUES[group]!).sort()).toEqual(enumOpts.map(([k]) => k).sort());
+      });
+
+      for (const [opt, def] of enumOpts) {
+        it(`${opt} values match`, () => {
+          const members = def.values ?? [];
+          // The runtime gate uses STRICT string membership, so pin that the
+          // contract keeps these enum members as strings — a string→number
+          // contract change (which the gate would then reject) surfaces HERE
+          // rather than passing silently under a `.map(String)` coercion.
+          for (const m of members) expect(typeof m).toBe('string');
+          expect([...COMPRESS_OPTION_VALUES[group]![opt]!].sort()).toEqual([...(members as string[])].sort());
         });
       }
     });

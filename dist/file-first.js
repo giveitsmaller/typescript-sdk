@@ -14,7 +14,7 @@ import { _detectCompressMedia, _detectAudioLossless, _consumeSseToTerminal, _pol
 import { LazyHttpDownloader } from './lazy-downloader.js';
 import { resolveCompressOptions, } from './ergonomic/preset_resolver.js';
 import { validateVerbOptions, assertThumbnailDimensions } from './ergonomic/option_validation.js';
-import { resolveOutputRoute, tokenForMime, tokenForPath, isPlannedValue, FACADE_MANAGED_OUTPUTS, } from './ergonomic/image_output_routes.js';
+import { resolveOutputRoute, tokenForMime, tokenForPath, isPlannedValue, isUnknownEnumValue, FACADE_MANAGED_OUTPUTS, } from './ergonomic/image_output_routes.js';
 import { OptimizeFor } from './generated/sdk_spec/enums.js';
 import { uploadSource, jobOutputSource } from './types.js';
 // Value import used only at call-time (inside MergedRecipe.toWorkflowPayload),
@@ -969,6 +969,15 @@ export class Recipe {
                 throw new GislConfigError(`output(): '${key}' is not honored on the ${resolved.route} route ` +
                     `(${resolved.inputToken} → ${requested ?? resolved.inputToken}). ` +
                     'Check it applies to this format/route combination.', { reason: 'option_not_on_route', conflictingFields: [key] });
+            }
+            // Enum-membership gate (rtkzl9gr): reject a value outside the option's
+            // enum before upload (e.g. `metadata: 'keep'` on avif/svg, whose enum is
+            // ['strip','all']). same_format only — the compress option enums apply
+            // definitionally there; a format_change routes via convert, whose enums
+            // may differ, so we leave it to the (conservative) planned gate.
+            if (resolved.route === 'same_format' && isUnknownEnumValue(resolved.inputToken, key, value)) {
+                throw new GislConfigError(`output(): '${key}: ${String(value)}' is not an accepted value for '${key}' on ` +
+                    `'${resolved.inputToken}' images. Check the values this format's route accepts.`, { reason: 'invalid_option_value', conflictingFields: [key] });
             }
             if (isPlannedValue(resolved.inputToken, key, value)) {
                 throw new GislConfigError(`output(): '${key}: ${String(value)}' is advertised but not available yet (planned).`, { reason: 'feature_not_available', conflictingFields: [key] });

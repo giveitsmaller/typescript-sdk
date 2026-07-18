@@ -87,4 +87,34 @@ export declare function resolveOutputRoute(inputToken: string, outputFormat: str
  * option / value / group is unknown (no gate).
  */
 export declare function isPlannedValue(inputToken: string, optionKey: string, value: unknown): boolean;
+/**
+ * Compress-route enum members per image mime-group, mirroring the shipped
+ * `availability/availability.json` `operations.compress.mime_groups.<group>.
+ * options.<opt>.values`. Kept as a hand table (NOT a runtime read of the ~238KB
+ * availability sidecar) so the enum-membership gate stays browser-safe, exactly
+ * like {@link IMAGE_OUTPUT_ROUTES} — and, crucially, so the gate has NO
+ * dependency on a contracts version that carries the enum in a compact form (a
+ * generated-metadata `values` field would fail open on an older published
+ * `@giveitsmaller/contracts`). PINNED to `availability.json` by
+ * `output-route-conformance.test.ts`; a contract regen that adds/changes an
+ * enum member fails there. Mirrored by PHP `ImageOutputRoutes::COMPRESS_OPTION_VALUES`.
+ *
+ * `image_svg`/`image_avif` carry the NARROW `metadata: ['strip','all']` (no
+ * `keep`) — the reason a value gate that consulted only the generic `image`
+ * group (`['strip','keep','all']`) let `metadata: 'keep'` reach a server 422 on
+ * those bases (rtkzl9gr). `output_format` is listed for a faithful projection
+ * mirror but is never gated here (the Output lowering owns it positionally).
+ */
+export declare const COMPRESS_OPTION_VALUES: Readonly<Record<string, Readonly<Record<string, readonly string[]>>>>;
+/**
+ * Whether a VALUE lies OUTSIDE the option's compress-route enum for the given
+ * input format — the pre-upload enum-membership gate (rtkzl9gr). Reads the hand
+ * {@link COMPRESS_OPTION_VALUES} table. Returns false when the option is not an
+ * enum on this group (no entry), so a non-enum option (e.g. integer `quality`)
+ * is never gated. Meaningful only on the same_format (compress) route, where
+ * the compress option enums definitionally apply. Membership is STRICT: a value
+ * whose type differs from the string enum members (e.g. numeric `420`) is
+ * treated as unknown rather than coerced to a match.
+ */
+export declare function isUnknownEnumValue(inputToken: string, optionKey: string, value: unknown): boolean;
 export {};

@@ -29,8 +29,18 @@
 import { compressMetadata } from '@giveitsmaller/contracts/operations';
 /** The resize option keys — input-keyed, raster-only (see module doc). */
 export const RESIZE_KEYS = ['width', 'height', 'fit'];
-/** Set form of {@link RESIZE_KEYS} for `string`-keyed membership tests. */
-const RESIZE_KEY_SET = new Set(RESIZE_KEYS);
+/**
+ * Options whose availability follows the INPUT format's raster capability, not
+ * the output format — resize (`width`/`height`/`fit`) plus `auto_orient`. The
+ * projection lists them on every `format_change` cell (keyed by OUTPUT), so on
+ * a format change they must be re-gated against the INPUT's `same_format` cell:
+ * a raster input carries them, an SVG (vector) input does not. Before rtkzl9gr
+ * only the resize keys were input-gated, so `auto_orient` leaked onto the
+ * `svg → raster` route and was rejected server-side.
+ */
+const INPUT_GATED_KEYS = [...RESIZE_KEYS, 'auto_orient'];
+/** Set form of {@link INPUT_GATED_KEYS} for `string`-keyed membership tests. */
+const INPUT_GATED_KEY_SET = new Set(INPUT_GATED_KEYS);
 /** Image area cap shared by every resizable route (projection `max_output_pixels`). */
 export const MAX_OUTPUT_PIXELS = 16_000_000;
 /**
@@ -117,21 +127,22 @@ export function resolveOutputRoute(inputToken, outputFormat) {
     const cell = IMAGE_OUTPUT_ROUTES.format_change[outToken];
     if (cell === undefined)
         return undefined;
-    // Resize is INPUT-gated. Since v2.103.0 convert is the resize engine, so the
-    // projection lists width/height/fit on EVERY format_change cell — but an SVG
-    // INPUT cannot be raster-resized (the convert worker rejects it). So strip the
-    // cell's resize keys and re-add only those the INPUT's same_format cell honors:
-    // raster inputs carry them, svg does not. The transcoder options (output_format/
-    // quality/background) ride the cell directly.
-    const transcoderHonored = cell.honored.filter((k) => !RESIZE_KEY_SET.has(k));
+    // Resize + auto_orient are INPUT-gated (see {@link INPUT_GATED_KEYS}). Since
+    // v2.103.0 convert is the resize engine, so the projection lists width/height/
+    // fit AND auto_orient on EVERY format_change cell — but an SVG INPUT cannot be
+    // raster-resized or auto-oriented (the convert worker rejects it). So strip
+    // the cell's input-gated keys and re-add only those the INPUT's same_format
+    // cell honors: raster inputs carry them, svg does not. The transcoder options
+    // (output_format/quality/background/color_profile) ride the cell directly.
+    const transcoderHonored = cell.honored.filter((k) => !INPUT_GATED_KEY_SET.has(k));
     const inCell = IMAGE_OUTPUT_ROUTES.same_format[inputToken];
-    const resize = inCell ? RESIZE_KEYS.filter((k) => inCell.honored.includes(k)) : [];
+    const inputGated = inCell ? INPUT_GATED_KEYS.filter((k) => inCell.honored.includes(k)) : [];
     return {
         route: 'format_change',
         sourceOp: 'convert',
         outputFormatWire: outToken,
         inputToken,
-        honored: new Set([...transcoderHonored, ...resize]),
+        honored: new Set([...transcoderHonored, ...inputGated]),
         planned: new Set(cell.planned),
     };
 }
@@ -160,4 +171,64 @@ export function isPlannedValue(inputToken, optionKey, value) {
         return false;
     const entry = opt.per_value_availability[String(value)];
     return entry?.availability === 'planned';
+}
+/**
+ * Compress-route enum members per image mime-group, mirroring the shipped
+ * `availability/availability.json` `operations.compress.mime_groups.<group>.
+ * options.<opt>.values`. Kept as a hand table (NOT a runtime read of the ~238KB
+ * availability sidecar) so the enum-membership gate stays browser-safe, exactly
+ * like {@link IMAGE_OUTPUT_ROUTES} — and, crucially, so the gate has NO
+ * dependency on a contracts version that carries the enum in a compact form (a
+ * generated-metadata `values` field would fail open on an older published
+ * `@giveitsmaller/contracts`). PINNED to `availability.json` by
+ * `output-route-conformance.test.ts`; a contract regen that adds/changes an
+ * enum member fails there. Mirrored by PHP `ImageOutputRoutes::COMPRESS_OPTION_VALUES`.
+ *
+ * `image_svg`/`image_avif` carry the NARROW `metadata: ['strip','all']` (no
+ * `keep`) — the reason a value gate that consulted only the generic `image`
+ * group (`['strip','keep','all']`) let `metadata: 'keep'` reach a server 422 on
+ * those bases (rtkzl9gr). `output_format` is listed for a faithful projection
+ * mirror but is never gated here (the Output lowering owns it positionally).
+ */
+export const COMPRESS_OPTION_VALUES = {
+    image: { color_profile: ['keep', 'srgb', 'strip'], fit: ['max', 'crop', 'scale'], metadata: ['strip', 'keep', 'all'], output_format: ['original', 'webp', 'auto', 'smallest'] },
+    image_jpeg: { chroma_subsampling: ['420', '422', '444'], color_profile: ['keep', 'srgb', 'strip'], encoding_mode: ['quality', 'target_size', 'auto_quality'], fit: ['max', 'crop', 'scale'], metadata: ['strip', 'keep', 'all'], output_format: ['original', 'webp', 'auto', 'smallest'], quality_preset: ['best', 'good', 'fair', 'low'] },
+    image_png: { color_profile: ['keep', 'srgb', 'strip'], fit: ['max', 'crop', 'scale'], metadata: ['strip', 'keep', 'all'], output_format: ['original', 'webp', 'auto', 'smallest'] },
+    image_avif: { color_profile: ['keep', 'srgb', 'strip'], encoding_mode: ['quality', 'target_size', 'auto_quality'], fit: ['max', 'crop', 'scale'], metadata: ['strip', 'all'], output_format: ['original', 'webp', 'auto', 'smallest'], quality_preset: ['best', 'good', 'fair', 'low'] },
+    image_svg: { metadata: ['strip', 'all'], output_format: ['original', 'webp', 'auto', 'smallest'] },
+    image_webp: { color_profile: ['keep', 'srgb', 'strip'], encoding_mode: ['quality', 'target_size', 'auto_quality'], fit: ['max', 'crop', 'scale'], metadata: ['strip', 'keep', 'all'], output_format: ['original', 'webp', 'auto', 'smallest'], quality_preset: ['best', 'good', 'fair', 'low'] },
+};
+/**
+ * The compress mime-group whose enum members are authoritative for an image
+ * token's SAME_FORMAT route — the exact `image_<token>` group when
+ * {@link COMPRESS_OPTION_VALUES} carries one, else the generic `image` group
+ * (gif/tiff).
+ *
+ * Deliberately DISTINCT from {@link compressGroupForToken} (which the planned
+ * gate uses). The planned gate routes webp/gif/svg/tiff through the generic
+ * `image` group, where cross-format `planned` markers live (e.g. `srgb`).
+ * Enum MEMBERSHIP is the opposite: it needs the format-specific enum, because
+ * `image_svg`'s `metadata` enum is the narrow `[strip, all]` while the generic
+ * group's is `[strip, keep, all]` — so only the specific group rejects
+ * `metadata: 'keep'` on SVG (and AVIF, which already maps specifically).
+ */
+function enumGroupForToken(token) {
+    const specific = `image_${token}`;
+    return COMPRESS_OPTION_VALUES[specific] !== undefined ? specific : 'image';
+}
+/**
+ * Whether a VALUE lies OUTSIDE the option's compress-route enum for the given
+ * input format — the pre-upload enum-membership gate (rtkzl9gr). Reads the hand
+ * {@link COMPRESS_OPTION_VALUES} table. Returns false when the option is not an
+ * enum on this group (no entry), so a non-enum option (e.g. integer `quality`)
+ * is never gated. Meaningful only on the same_format (compress) route, where
+ * the compress option enums definitionally apply. Membership is STRICT: a value
+ * whose type differs from the string enum members (e.g. numeric `420`) is
+ * treated as unknown rather than coerced to a match.
+ */
+export function isUnknownEnumValue(inputToken, optionKey, value) {
+    const members = COMPRESS_OPTION_VALUES[enumGroupForToken(inputToken)]?.[optionKey];
+    if (members === undefined)
+        return false;
+    return !(typeof value === 'string' && members.includes(value));
 }

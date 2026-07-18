@@ -284,6 +284,63 @@ describe('output() — color_profile (un-gated v2.128.0) + auto_orient (STABLE s
   });
 });
 
+describe('output() — out-of-enum value gate (rtkzl9gr)', () => {
+  it("metadata 'keep' rejected pre-upload on same-format avif (enum is [strip,all])", () => {
+    try {
+      ops(new Recipe(fileInput.path('a.avif')).output('avif', { metadata: 'keep' }));
+      throw new Error('expected throw');
+    } catch (e) {
+      expect((e as GislConfigError).reason).toBe('invalid_option_value');
+      expect((e as GislConfigError).conflictingFields).toEqual(['metadata']);
+    }
+  });
+
+  it("metadata 'keep' rejected pre-upload on same-format svg (enum is [strip,all])", () => {
+    // svg routes through the generic `image` group for PLANNED gating, but the
+    // enum gate must use the narrow image_svg enum — this pins that split.
+    try {
+      ops(new Recipe(fileInput.path('logo.svg')).output('svg', { metadata: 'keep' }));
+      throw new Error('expected throw');
+    } catch (e) {
+      expect((e as GislConfigError).reason).toBe('invalid_option_value');
+    }
+  });
+
+  it("metadata 'keep' still honored on same-format png (image group enum includes keep)", () => {
+    expect(
+      soleOp(new Recipe(fileInput.path('a.png')).output('png', { metadata: 'keep' })).options,
+    ).toMatchObject({ metadata: 'keep' });
+  });
+
+  it("metadata 'all' (deprecated alias, in-enum) still passes on avif — deprecated is not invalid", () => {
+    // 'all' is a deprecated alias omitted from the narrow hand-written union but
+    // still a valid runtime enum member — the gate must not reject it.
+    expect(
+      soleOp(new Recipe(fileInput.path('a.avif')).output('avif', { metadata: 'all' as never })).options,
+    ).toMatchObject({ metadata: 'all' });
+  });
+
+  it('an out-of-enum value on any gated option is rejected (fit: bogus on same-format jpeg)', () => {
+    try {
+      ops(new Recipe(fileInput.path('a.jpg')).output('jpeg', { fit: 'bogus' as never }));
+      throw new Error('expected throw');
+    } catch (e) {
+      expect((e as GislConfigError).reason).toBe('invalid_option_value');
+    }
+  });
+
+  it('auto_orient on an svg format-change is rejected pre-upload (input-gated, not honored)', () => {
+    // svg is vector: it cannot be auto-oriented, so the option is stripped from
+    // the svg→raster route and caught locally instead of 422-ing server-side.
+    try {
+      ops(new Recipe(fileInput.path('logo.svg')).output('png', { auto_orient: true }));
+      throw new Error('expected throw');
+    } catch (e) {
+      expect((e as GislConfigError).reason).toBe('option_not_on_route');
+    }
+  });
+});
+
 describe('output() — unrepresentable routes + svg (vector, no resize)', () => {
   it('converting TO a format with no route throws unsupported_route', () => {
     // svg is not a format_change target (cannot transcode TO svg).
