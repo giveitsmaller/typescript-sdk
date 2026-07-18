@@ -154,9 +154,11 @@ export type OutputMetadata = 'strip' | 'keep';
  * Compression mode on the optimiser (same_format) route (contract `encoding_mode`
  * enum). `quality` (default) drives the encode by the quality slider; `target_size`
  * targets a byte budget via the worker's encode-measure loop — STABLE since
- * contracts v2.108.0 (jpeg/webp/avif).
+ * contracts v2.108.0 (jpeg/webp/avif). `auto_quality` lets the worker pick the
+ * quality from a named `quality_preset` (its `depends_on`) — the output lowering
+ * infers it for you when you set `quality_preset` without an `encoding_mode`.
  */
-export type OutputEncodingMode = 'quality' | 'target_size';
+export type OutputEncodingMode = 'quality' | 'target_size' | 'auto_quality';
 /** Chroma subsampling for JPEG output (contract `chroma_subsampling` enum, v2.110.0). `420` smallest → `444` highest fidelity. Honored: same_format jpeg only. */
 export type OutputChromaSubsampling = '420' | '422' | '444';
 /** ICC colour-profile handling (contract `color_profile` enum, v2.112.0). `keep` preserves the embedded profile; `srgb` converts to sRGB; `strip` removes it. Route/value availability is gated by the output lowering. */

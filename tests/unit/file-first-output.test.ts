@@ -211,10 +211,54 @@ describe('output() — chroma_subsampling (v2.110.0 stable) + quality_preset (v2
     }
   });
 
-  it('quality_preset (v2.148.0) honored on same-format jpeg', () => {
+  it('quality_preset infers encoding_mode:auto_quality so it forms a valid request (86gAu5Tr)', () => {
+    // quality_preset depends_on encoding_mode=auto_quality; without the inference
+    // it shipped without encoding_mode and 422-ed. Now the SDK adds it.
     expect(
       soleOp(new Recipe(fileInput.path('a.jpg')).output('jpeg', { quality_preset: 'good' })).options,
-    ).toMatchObject({ quality_preset: 'good' });
+    ).toEqual({ output_format: 'original', quality_preset: 'good', encoding_mode: 'auto_quality' });
+  });
+
+  it('quality_preset with an explicit NON-auto_quality encoding_mode is rejected (depends_on)', () => {
+    try {
+      ops(new Recipe(fileInput.path('a.jpg')).output('jpeg', { quality_preset: 'good', encoding_mode: 'quality' }));
+      throw new Error('expected throw');
+    } catch (e) {
+      expect((e as GislConfigError).reason).toBe('invalid_option_combination');
+    }
+  });
+
+  it('quality_preset WITH an explicit encoding_mode: auto_quality is allowed', () => {
+    expect(
+      soleOp(new Recipe(fileInput.path('a.jpg')).output('jpeg', { quality_preset: 'good', encoding_mode: 'auto_quality' }))
+        .options,
+    ).toMatchObject({ quality_preset: 'good', encoding_mode: 'auto_quality' });
+  });
+
+  // auto_quality forbids the mode-specific siblings whose depends_on names a
+  // different encoding_mode; the SDK rejects them client-side instead of
+  // shipping a payload the worker refuses as invalid_options (86gAu5Tr).
+  it.each(['quality', 'lossless', 'target_size_bytes'])(
+    'quality_preset + %s is rejected — auto_quality forbids it (86gAu5Tr)',
+    (field) => {
+      const value = field === 'lossless' ? true : field === 'target_size_bytes' ? 50_000 : 80;
+      try {
+        ops(new Recipe(fileInput.path('a.jpg')).output('jpeg', { quality_preset: 'good', [field]: value }));
+        throw new Error('expected throw');
+      } catch (e) {
+        expect((e as GislConfigError).reason).toBe('invalid_option_combination');
+        expect((e as GislConfigError).conflictingFields).toEqual(['encoding_mode', field]);
+      }
+    },
+  );
+
+  it('explicit encoding_mode: auto_quality + quality is rejected even without quality_preset (86gAu5Tr)', () => {
+    try {
+      ops(new Recipe(fileInput.path('a.jpg')).output('jpeg', { encoding_mode: 'auto_quality', quality: 80 }));
+      throw new Error('expected throw');
+    } catch (e) {
+      expect((e as GislConfigError).reason).toBe('invalid_option_combination');
+    }
   });
 
   it('quality_preset NOT honored on same-format png (avif/jpeg/webp-only) → option_not_on_route', () => {
