@@ -269,6 +269,26 @@ export declare function isFanoutStatus(finalStatus: WorkflowStatusResponse): boo
  */
 export declare const _POST_STEP_JOB_REF = "post";
 /**
+ * Job id/ref for the UPSTREAM job carrying any steps that PRECEDE a single-input
+ * `sole_op` op (e.g. `.compress().textWatermark()`): the pre-steps run in this
+ * job, the `sole_op` job then consumes its output via `job_output`. Distinct
+ * from the multi-input `src_{i}` fan-in refs. IQc01rj0.
+ */
+export declare const _PRE_STEP_JOB_REF = "pre";
+/**
+ * Wire op types the API marks `sole_op` (ADR-0025) — the op MUST be the ONLY op
+ * in its job. Mirrors `operation-capabilities.json` `operations.<op>.sole_op`,
+ * inlined as a browser-safe const (the raw-JSON sidecar subpath is Node-only)
+ * and PINNED to that projection by `sole-op-conformance.test.ts` — a contract
+ * regen that flips an op's `sole_op` fails there. The single-input
+ * {@link Recipe.toWorkflowPayload} reads THIS set to split a chain at every
+ * sole_op boundary into a `job_output`-linked job chain (so
+ * `.textWatermark('x').compress()` lowers to a valid DAG, not a contract-invalid
+ * co-bundled job). Mirrored by PHP `Recipe::SOLE_OP_TYPES`. IQc01rj0.
+ * @internal
+ */
+export declare const SOLE_OP_TYPES: ReadonlySet<string>;
+/**
  * True when a terminal status describes a fluent `files([...]).merge(...)`
  * combine — at least one job ref `merge` and every OTHER job ref is `src_{i}`
  * or the downstream `post` job (the ids the {@link MergedRecipe} lowering
@@ -307,6 +327,28 @@ export declare function isArchiveStatus(finalStatus: WorkflowStatusResponse): bo
  * @internal Exported for the file-first `Handle`; not part of the public API.
  */
 export declare function isWatermarkStatus(finalStatus: WorkflowStatusResponse): boolean;
+/**
+ * True when a terminal status describes a SINGLE-INPUT `sole_op` chain — e.g.
+ * `.textWatermark('x').compress()` lowered to a `text_watermark` job + a
+ * downstream `post` job (and an optional upstream `pre` job for steps before the
+ * sole_op). Every job ref is a `sole_op` wire type ({@link SOLE_OP_TYPES}) or the
+ * `pre`/`post` chain refs, with NO `src_{i}` fan-in ref (which distinguishes it
+ * from the multi-input merge/watermark/archive DAGs). Lets a submitted/reattached
+ * {@link Handle} project ONLY the terminal deliverable — filtering the
+ * intermediate sole_op artifact — without builder state. IQc01rj0.
+ *
+ * @internal Exported for the file-first `Handle`; not part of the public API.
+ */
+export declare function isSoleOpChainStatus(finalStatus: WorkflowStatusResponse): boolean;
+/**
+ * The terminal deliverable ref for a single-input `sole_op` chain status: the
+ * downstream `post` job when present, else the `sole_op` job itself (the ref in
+ * {@link SOLE_OP_TYPES}). Mirrors how the merge/watermark paths pick their
+ * terminal via {@link terminalOutputRef} in `handle.ts`. IQc01rj0.
+ *
+ * @internal
+ */
+export declare function soleOpChainDeliverableRef(finalStatus: WorkflowStatusResponse): string;
 /**
  * The primary file a {@link Recipe} operates on — the "subject" of the
  * file-first surface. A discriminated union over the ways a caller names an

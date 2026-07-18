@@ -584,6 +584,39 @@ const _MERGE_SRC_REF = /^src_\d+$/;
 export const _POST_STEP_JOB_REF = 'post';
 
 /**
+ * Job id/ref for the UPSTREAM job carrying any steps that PRECEDE a single-input
+ * `sole_op` op (e.g. `.compress().textWatermark()`): the pre-steps run in this
+ * job, the `sole_op` job then consumes its output via `job_output`. Distinct
+ * from the multi-input `src_{i}` fan-in refs. IQc01rj0.
+ */
+export const _PRE_STEP_JOB_REF = 'pre';
+
+/**
+ * Wire op types the API marks `sole_op` (ADR-0025) — the op MUST be the ONLY op
+ * in its job. Mirrors `operation-capabilities.json` `operations.<op>.sole_op`,
+ * inlined as a browser-safe const (the raw-JSON sidecar subpath is Node-only)
+ * and PINNED to that projection by `sole-op-conformance.test.ts` — a contract
+ * regen that flips an op's `sole_op` fails there. The single-input
+ * {@link Recipe.toWorkflowPayload} reads THIS set to split a chain at every
+ * sole_op boundary into a `job_output`-linked job chain (so
+ * `.textWatermark('x').compress()` lowers to a valid DAG, not a contract-invalid
+ * co-bundled job). Mirrored by PHP `Recipe::SOLE_OP_TYPES`. IQc01rj0.
+ * @internal
+ */
+export const SOLE_OP_TYPES: ReadonlySet<string> = new Set([
+  'archive',
+  'audio_overlay',
+  'audio_to_video',
+  'custom_luma',
+  'image_watermark',
+  'merge',
+  'split',
+  'text_watermark',
+  'video_text_watermark',
+  'video_watermark',
+]);
+
+/**
  * True when a terminal status describes a fluent `files([...]).merge(...)`
  * combine — at least one job ref `merge` and every OTHER job ref is `src_{i}`
  * or the downstream `post` job (the ids the {@link MergedRecipe} lowering
@@ -663,6 +696,117 @@ export function isWatermarkStatus(finalStatus: WorkflowStatusResponse): boolean 
     if (!_MERGE_SRC_REF.test(job.ref)) return false;
   }
   return hasWatermark;
+}
+
+/**
+ * True when a terminal status describes a SINGLE-INPUT `sole_op` chain — e.g.
+ * `.textWatermark('x').compress()` lowered to a `text_watermark` job + a
+ * downstream `post` job (and an optional upstream `pre` job for steps before the
+ * sole_op). Every job ref is a `sole_op` wire type ({@link SOLE_OP_TYPES}) or the
+ * `pre`/`post` chain refs, with NO `src_{i}` fan-in ref (which distinguishes it
+ * from the multi-input merge/watermark/archive DAGs). Lets a submitted/reattached
+ * {@link Handle} project ONLY the terminal deliverable — filtering the
+ * intermediate sole_op artifact — without builder state. IQc01rj0.
+ *
+ * @internal Exported for the file-first `Handle`; not part of the public API.
+ */
+export function isSoleOpChainStatus(finalStatus: WorkflowStatusResponse): boolean {
+  const jobs = finalStatus.jobs ?? [];
+  if (jobs.length === 0) return false;
+  let hasSoleOp = false;
+  for (const job of jobs) {
+    if (SOLE_OP_TYPES.has(job.ref)) {
+      hasSoleOp = true;
+      continue;
+    }
+    if (job.ref === _PRE_STEP_JOB_REF || job.ref === _POST_STEP_JOB_REF) continue;
+    return false;
+  }
+  return hasSoleOp;
+}
+
+/**
+ * The terminal deliverable ref for a single-input `sole_op` chain status: the
+ * downstream `post` job when present, else the `sole_op` job itself (the ref in
+ * {@link SOLE_OP_TYPES}). Mirrors how the merge/watermark paths pick their
+ * terminal via {@link terminalOutputRef} in `handle.ts`. IQc01rj0.
+ *
+ * @internal
+ */
+export function soleOpChainDeliverableRef(finalStatus: WorkflowStatusResponse): string {
+  // Determine the terminal from the DAG (the job refs), NOT from which downloads
+  // exist: if the `post` job is in the graph it IS the deliverable even when it
+  // FAILED and produced no download — filtering to it then yields no artifact +
+  // the failure surfaces via the status, rather than silently exposing the
+  // successful intermediate sole_op artifact (codex).
+  const refs = (finalStatus.jobs ?? []).map((j) => j.ref);
+  const soleOpRef = refs.find((r) => SOLE_OP_TYPES.has(r)) ?? '';
+  return refs.includes(_POST_STEP_JOB_REF) ? _POST_STEP_JOB_REF : soleOpRef;
+}
+
+/**
+ * Split a single-input operation chain into a `job_output`-linked job chain at
+ * its `sole_op` boundary (IQc01rj0). A `sole_op` op (ADR-0025) MUST be the ONLY
+ * op in its job, so `.textWatermark('x').compress()` cannot lower to one
+ * co-bundled job — the `text_watermark` runs alone (job id = its op type) and
+ * the trailing steps lower into a downstream `post` job that consumes it via
+ * `job_output`; steps that PRECEDE the sole_op run in an upstream `pre` job.
+ *
+ * Returns a single job verbatim (NO `id`) when no split is needed — no sole_op,
+ * or a lone sole_op already alone — so the vast majority of recipes keep their
+ * byte-identical one-job shape. Throws when the chain carries more than one
+ * sole_op op (a single-input recipe reaches at most one sole_op verb today;
+ * supporting N is a follow-up).
+ */
+function _splitSingleInputJobs(ops: readonly OperationDef[], fileId: string): JobDefinitionPayload[] {
+  const soleCount = ops.reduce((n, op) => (SOLE_OP_TYPES.has(op.type) ? n + 1 : n), 0);
+  if (soleCount > 1) {
+    throw new GislConfigError(
+      'This recipe chains more than one sole_op operation (e.g. two textWatermark() steps), ' +
+        'which is not supported yet — apply them as separate workflows.',
+      { reason: 'multi_sole_op_unsupported' },
+    );
+  }
+  const i = ops.findIndex((op) => SOLE_OP_TYPES.has(op.type));
+  if (i === -1 || (i === 0 && ops.length === 1)) {
+    // No sole_op, or a lone sole_op already alone → one job, no id (unchanged).
+    return [{ source: uploadSource(fileId), operations: [...ops] }];
+  }
+  const preOps = ops.slice(0, i);
+  const soleOp = ops[i]!;
+  const postOps = ops.slice(i + 1);
+  const jobs: JobDefinitionPayload[] = [];
+  if (preOps.length > 0) {
+    jobs.push({ id: _PRE_STEP_JOB_REF, source: uploadSource(fileId), operations: [...preOps] });
+  }
+  jobs.push({
+    id: soleOp.type,
+    source: preOps.length > 0 ? jobOutputSource(_PRE_STEP_JOB_REF) : uploadSource(fileId),
+    operations: [soleOp],
+  });
+  if (postOps.length > 0) {
+    jobs.push({ id: _POST_STEP_JOB_REF, source: jobOutputSource(soleOp.type), operations: [...postOps] });
+  }
+  return jobs;
+}
+
+/**
+ * The single job of a NESTED single-input lowering, asserting it did not split
+ * (IQc01rj0). A nested Recipe used as a watermark base/overlay or a fan-out
+ * entry that itself carries a `sole_op` op alongside OTHER steps splits into a
+ * job chain; folding that chain into the OUTER DAG (as a `src_{i}`/`file-{i}`
+ * job) is not supported yet, so fail fast rather than silently drop the
+ * split-off downstream job (the whole point of the split).
+ */
+function _nestedSingleJob(payload: WorkflowCreatePayload, context: string): JobDefinitionPayload {
+  if (payload.jobs.length !== 1) {
+    throw new GislConfigError(
+      `A ${context} recipe chains a sole_op op (e.g. textWatermark()) alongside other steps, which ` +
+        'is not supported here yet — apply the sole_op step in a standalone recipe.',
+      { reason: 'nested_sole_op_unsupported' },
+    );
+  }
+  return payload.jobs[0]!;
 }
 
 /**
@@ -992,10 +1136,11 @@ export class Recipe {
    */
   toWorkflowPayload(fileId: string, callbackUrl?: string): WorkflowCreatePayload {
     const operations: OperationDef[] = this.steps.map((step, i) => this.lowerStep(step, i));
-    // Key order (source, operations) matches the PHP `toWire()` so the
-    // JSON-string serialisation is byte-identical across languages.
-    const job: JobDefinitionPayload = { source: uploadSource(fileId), operations };
-    return callbackUrl === undefined ? { jobs: [job] } : { jobs: [job], callback_url: callbackUrl };
+    // Split at any `sole_op` boundary into a `job_output`-linked chain (IQc01rj0);
+    // a chain with no sole_op stays a single byte-identical job. Job key order
+    // (id?, source, operations) matches the PHP `toWire()` — byte-identical JSON.
+    const jobs = _splitSingleInputJobs(operations, fileId);
+    return callbackUrl === undefined ? { jobs } : { jobs, callback_url: callbackUrl };
   }
 
   /**
@@ -1007,7 +1152,10 @@ export class Recipe {
    * not the upload id, so this is a faithful preflight (0azjb6Rg).
    */
   private assertOperationsLowerable(): void {
-    this.steps.forEach((step, i) => this.lowerStep(step, i));
+    const ops = this.steps.map((step, i) => this.lowerStep(step, i));
+    // Also run the sole_op split so a multi-sole_op recipe fails pre-upload
+    // (IQc01rj0). The placeholder id is discarded — only the throw matters.
+    _splitSingleInputJobs(ops, 'preflight');
   }
 
   /** The result-addressing key passed to `file()`, or undefined. */
@@ -1116,10 +1264,17 @@ export class Recipe {
     // Download URLs from getWorkflowDownloads are pre-signed and require no SDK
     // auth, so the downloader issues a plain unauthenticated fetch.
     const downloader = new LazyHttpDownloader();
+    // A single-input `sole_op` split (IQc01rj0, e.g. textWatermark().compress())
+    // produces a job chain — project ONLY the terminal deliverable, filtering the
+    // intermediate sole_op artifact (mirrors the merge/watermark terminal filter
+    // and Handle.project so submit()/reattach agree with run()).
+    const runDownloads = isSoleOpChainStatus(finalStatus)
+      ? downloads.downloads.filter((d) => d.ref === soleOpChainDeliverableRef(finalStatus))
+      : downloads.downloads;
     return projectDownloadsToRunResult(
       created.workflowId,
       finalStatus,
-      downloads.downloads,
+      runDownloads,
       this.recipeKey ?? null,
       downloader,
     );
@@ -2011,7 +2166,7 @@ export class FilesRecipe {
   toWorkflowPayload(fileIds: readonly string[], callbackUrl?: string): WorkflowCreatePayload {
     const jobs: JobDefinitionPayload[] = this.inputs.map((input, i) => {
       const single = new Recipe(input, undefined, this.steps, this.presetDefaults, this.scopedPresetDefaults);
-      const oneJob = single.toWorkflowPayload(fileIds[i]).jobs[0];
+      const oneJob = _nestedSingleJob(single.toWorkflowPayload(fileIds[i]), 'fan-out');
       // Key order (id, source, operations) matches the PHP `toWire()` so the
       // JSON-string serialisation is byte-identical across languages.
       return { id: `file-${i}`, source: oneJob.source, operations: oneJob.operations };
@@ -2910,13 +3065,16 @@ export class WatermarkedRecipe {
     // src_0: the base (its preceding steps, else a lossless passthrough).
     const baseOps: OperationDef[] =
       this.baseSteps.length > 0
-        ? new Recipe(this.baseInput, undefined, this.baseSteps, this.presetDefaults, this.scopedPresetDefaults)
-            .toWorkflowPayload(baseId).jobs[0].operations
+        ? _nestedSingleJob(
+            new Recipe(this.baseInput, undefined, this.baseSteps, this.presetDefaults, this.scopedPresetDefaults)
+              .toWorkflowPayload(baseId),
+            'watermark base',
+          ).operations
         : [{ type: 'passthrough' }];
     // src_1: the overlay recipe (its own steps, else a lossless passthrough).
     const overlayOps: OperationDef[] =
       this.overlay.recipeSteps.length > 0
-        ? this.overlay.toWorkflowPayload(overlayId).jobs[0].operations
+        ? _nestedSingleJob(this.overlay.toWorkflowPayload(overlayId), 'watermark overlay').operations
         : [{ type: 'passthrough' }];
 
     // Key order (id, source, operations) matches PHP toWire() — byte-identical JSON.
@@ -3328,7 +3486,7 @@ export class BatchRecipe {
    */
   toWorkflowPayload(fileIds: readonly string[], callbackUrl?: string): WorkflowCreatePayload {
     const jobs: JobDefinitionPayload[] = this.recipes.map((entry, i) => {
-      const oneJob = entry.toWorkflowPayload(fileIds[i]).jobs[0];
+      const oneJob = _nestedSingleJob(entry.toWorkflowPayload(fileIds[i]), 'batch');
       // Positional id `b{i}` — a namespace DISTINCT from the fan-out `file-{i}` /
       // merge `src_{i}` refs. Key order (id, source, operations) matches the PHP
       // `toWire()` so the JSON serialisation is byte-identical across languages.

@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { Recipe, fileInput, type FileInput } from '../src/file-first.js';
+import {
+  Recipe,
+  fileInput,
+  type FileInput,
+  isSoleOpChainStatus,
+  soleOpChainDeliverableRef,
+} from '../src/file-first.js';
+import type { WorkflowStatusResponse } from '@giveitsmaller/contracts/openapi';
 import { create } from '../src/gisl.js';
 import { resolveCompressOptions } from '../src/ergonomic/preset_resolver.js';
 import { presetDefaults } from '../src/ergonomic/presets/index.js';
@@ -69,6 +76,72 @@ describe('Recipe — client.file() entry point', () => {
     const r = client.file(fileInput.uploadId('uploaded-123')).convert('webp');
 
     expect(loweredJob(r).source).toEqual({ type: 'upload', file_id: FILE_ID });
+  });
+});
+
+describe('Recipe — single-input sole_op split (IQc01rj0)', () => {
+  it('textWatermark().compress() splits into a text_watermark job + downstream post job', () => {
+    const wire = recipe('photo.jpg').textWatermark('X').compress(OptimizeFor.Balanced).toWorkflowPayload(FILE_ID);
+    expect(wire.jobs).toHaveLength(2);
+    // text_watermark is sole_op: alone in its job, consuming the upload.
+    expect(wire.jobs[0]).toEqual({
+      id: 'text_watermark',
+      source: { type: 'upload', file_id: FILE_ID },
+      operations: [{ type: 'text_watermark', options: { text: 'X' } }],
+    });
+    // post steps consume the sole_op output via job_output (the DAG the ergonomic
+    // chain hides — the fix for FE's "complex generated code" concern).
+    expect(wire.jobs[1].id).toBe('post');
+    expect(wire.jobs[1].source).toEqual({ type: 'job_output', from: 'text_watermark' });
+    expect(wire.jobs[1].operations.map((o) => o.type)).toEqual(['compress']);
+  });
+
+  it('textWatermark() alone stays a single byte-identical job (no split, no id)', () => {
+    const wire = recipe('photo.jpg').textWatermark('X').toWorkflowPayload(FILE_ID);
+    expect(wire.jobs).toEqual([
+      { source: { type: 'upload', file_id: FILE_ID }, operations: [{ type: 'text_watermark', options: { text: 'X' } }] },
+    ]);
+  });
+
+  it('a sole_op mid-chain splits with an upstream pre job', () => {
+    const wire = recipe('photo.jpg')
+      .compress(OptimizeFor.Balanced)
+      .textWatermark('X')
+      .convert('webp')
+      .toWorkflowPayload(FILE_ID);
+    expect(wire.jobs).toHaveLength(3);
+    expect(wire.jobs[0].id).toBe('pre');
+    expect(wire.jobs[0].source).toEqual({ type: 'upload', file_id: FILE_ID });
+    expect(wire.jobs[0].operations.map((o) => o.type)).toEqual(['compress']);
+    expect(wire.jobs[1]).toEqual({
+      id: 'text_watermark',
+      source: { type: 'job_output', from: 'pre' },
+      operations: [{ type: 'text_watermark', options: { text: 'X' } }],
+    });
+    expect(wire.jobs[2].id).toBe('post');
+    expect(wire.jobs[2].source).toEqual({ type: 'job_output', from: 'text_watermark' });
+    expect(wire.jobs[2].operations.map((o) => o.type)).toEqual(['convert']);
+  });
+
+  it('chaining two sole_op ops throws multi_sole_op_unsupported', () => {
+    try {
+      recipe('photo.jpg').textWatermark('a').textWatermark('b').toWorkflowPayload(FILE_ID);
+      throw new Error('expected throw');
+    } catch (e) {
+      expect((e as GislConfigError).reason).toBe('multi_sole_op_unsupported');
+    }
+  });
+
+  it('a splitting recipe nested as a watermark base fails fast (nested_sole_op_unsupported)', () => {
+    // compress + textWatermark base splits — folding that chain into the src_0
+    // job is not supported yet, so it throws rather than silently dropping it.
+    const wm = recipe('photo.jpg').compress(OptimizeFor.Balanced).textWatermark('X').watermark(recipe('logo.png'));
+    try {
+      wm.toWorkflowPayload([FILE_ID, 'file_overlay']);
+      throw new Error('expected throw');
+    } catch (e) {
+      expect((e as GislConfigError).reason).toBe('nested_sole_op_unsupported');
+    }
   });
 });
 
@@ -249,3 +322,36 @@ const _typeArms: FileInput[] = [
   fileInput.uploadId('id'),
 ];
 void _typeArms;
+
+describe('isSoleOpChainStatus + soleOpChainDeliverableRef (IQc01rj0)', () => {
+  const status = (refs: string[]): WorkflowStatusResponse =>
+    ({ jobs: refs.map((ref) => ({ ref })) }) as unknown as WorkflowStatusResponse;
+
+  it('is true for a {text_watermark, post} chain (the textWatermark().compress() shape)', () => {
+    expect(isSoleOpChainStatus(status(['text_watermark', 'post']))).toBe(true);
+  });
+
+  it('is true for a {pre, text_watermark, post} chain', () => {
+    expect(isSoleOpChainStatus(status(['pre', 'text_watermark', 'post']))).toBe(true);
+  });
+
+  it('is false for a multi-input watermark DAG (has src_* refs)', () => {
+    expect(isSoleOpChainStatus(status(['src_0', 'src_1', 'watermark']))).toBe(false);
+  });
+
+  it('is false for a plain single-op chain (no sole_op ref)', () => {
+    expect(isSoleOpChainStatus(status(['op']))).toBe(false);
+  });
+
+  it('is false for an empty job list', () => {
+    expect(isSoleOpChainStatus(status([]))).toBe(false);
+  });
+
+  it('deliverable ref is the post job when the DAG has one (even if it produced no download), else the sole_op job', () => {
+    // Uses the graph (job refs), not which downloads exist — a failed post job
+    // is still the terminal (so the intermediate is never surfaced).
+    expect(soleOpChainDeliverableRef(status(['text_watermark', 'post']))).toBe('post');
+    // No post steps → the sole_op job itself is the deliverable.
+    expect(soleOpChainDeliverableRef(status(['text_watermark']))).toBe('text_watermark');
+  });
+});

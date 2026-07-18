@@ -55,6 +55,8 @@ import {
   isMergeStatus,
   isArchiveStatus,
   isWatermarkStatus,
+  isSoleOpChainStatus,
+  soleOpChainDeliverableRef,
   _POST_STEP_JOB_REF,
   type Downloader,
 } from './file-first.js';
@@ -332,6 +334,22 @@ export class Handle {
         finalStatus,
         watermarkDownloads,
         null,
+        downloader,
+      );
+    }
+    // A single-input `sole_op` chain — e.g. `.textWatermark('x').compress()`
+    // lowered to a `text_watermark` job + downstream `post` job (IQc01rj0).
+    // Project ONLY the terminal deliverable, filtering the intermediate sole_op
+    // artifact. The recipe key is preserved (unlike the multi-input branches):
+    // this is the single-file path with a terminal-ref filter.
+    if (isSoleOpChainStatus(finalStatus)) {
+      const soleOpRef = soleOpChainDeliverableRef(finalStatus);
+      const soleOpDownloads = jobDownloads.filter((d) => d.ref === soleOpRef);
+      return projectDownloadsToRunResult(
+        this.workflowId,
+        finalStatus,
+        soleOpDownloads,
+        this.#key,
         downloader,
       );
     }

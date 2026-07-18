@@ -34,7 +34,7 @@
  */
 import { GislConfigError, GislNetworkError, GislResultNotReadyError, GislTimeoutError, SseEndedWithoutTerminal, } from './errors.js';
 import { _consumeSseToTerminal, _pollToTerminal, _parseMaxWait, } from './builder.js';
-import { projectDownloadsToRunResult, projectMultiJobToRunResult, isFanoutStatus, isMergeStatus, isArchiveStatus, isWatermarkStatus, _POST_STEP_JOB_REF, } from './file-first.js';
+import { projectDownloadsToRunResult, projectMultiJobToRunResult, isFanoutStatus, isMergeStatus, isArchiveStatus, isWatermarkStatus, isSoleOpChainStatus, soleOpChainDeliverableRef, _POST_STEP_JOB_REF, } from './file-first.js';
 import { LazyHttpDownloader } from './lazy-downloader.js';
 /**
  * The terminal workflow states. A status response in any of these states
@@ -263,6 +263,16 @@ export class Handle {
             const watermarkOutputRef = terminalOutputRef(jobDownloads, 'watermark');
             const watermarkDownloads = jobDownloads.filter((d) => d.ref === watermarkOutputRef);
             return projectDownloadsToRunResult(this.workflowId, finalStatus, watermarkDownloads, null, downloader);
+        }
+        // A single-input `sole_op` chain — e.g. `.textWatermark('x').compress()`
+        // lowered to a `text_watermark` job + downstream `post` job (IQc01rj0).
+        // Project ONLY the terminal deliverable, filtering the intermediate sole_op
+        // artifact. The recipe key is preserved (unlike the multi-input branches):
+        // this is the single-file path with a terminal-ref filter.
+        if (isSoleOpChainStatus(finalStatus)) {
+            const soleOpRef = soleOpChainDeliverableRef(finalStatus);
+            const soleOpDownloads = jobDownloads.filter((d) => d.ref === soleOpRef);
+            return projectDownloadsToRunResult(this.workflowId, finalStatus, soleOpDownloads, this.#key, downloader);
         }
         return projectDownloadsToRunResult(this.workflowId, finalStatus, jobDownloads, this.#key, downloader);
     }
