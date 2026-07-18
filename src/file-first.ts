@@ -1962,9 +1962,25 @@ function _validateWatermarkOverlay(overlay: Recipe): void {
 }
 
 function _lowerWatermarkOp(wireOp: WatermarkWireOp, options: WatermarkOptions): OperationDef {
-  // Watermark options (anchor/opacity/margin_x/margin_y/overlay_width, or the
-  // multi-overlay overlays[] stack) are already wire keys; empty options omit
-  // the `options` key (byte-identical to PHP).
+  // `overlays[]` (the multi-overlay stack) is a live contract option but is NOT
+  // reachable through watermark(): the facade composites exactly ONE overlay —
+  // the positional `overlay` (wire source src_1) — so overlays[1..] reference
+  // sources it cannot create, any entry is invalid on a non-image base, and the
+  // contract's `minItems: 1` makes an empty array invalid too. Reject it here at
+  // lowering (mutation-safe — reads the FINAL options, catching a post-watermark()
+  // `opts.overlays = [...]`) and point callers at the single-overlay knobs.
+  // Real multi-overlay stacking is a future feature (Vbbdq9C4).
+  if (options.overlays !== undefined) {
+    throw new GislConfigError(
+      "watermark(): 'overlays[]' (multi-overlay stacking) is not supported — watermark() composites a " +
+        'single overlay (the positional overlay argument). Use the top-level anchor / opacity / margin_x / ' +
+        'margin_y / overlay_width options to place it. Multi-overlay stacking is a future feature.',
+      { reason: 'overlays_unsupported', conflictingFields: ['overlays'] },
+    );
+  }
+  // The remaining watermark options (anchor/opacity/margin_x/margin_y/
+  // overlay_width) are already wire keys; empty options omit the `options` key
+  // (byte-identical to PHP).
   const wire = { ...options };
   return Object.keys(wire).length === 0 ? { type: wireOp } : { type: wireOp, options: wire };
 }

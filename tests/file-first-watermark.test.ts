@@ -11,6 +11,7 @@ import type { GislClient } from '../src/client.js';
 import type { WorkflowStatusResponse } from '@giveitsmaller/contracts/openapi';
 import { OptimizeFor } from '../src/generated/sdk_spec/enums.js';
 import { GislConfigError, GislTimeoutError } from '../src/errors.js';
+import type { WatermarkOptions, WatermarkOverlay } from '../src/ergonomic/option_types.js';
 
 /**
  * FF4a (Z7zTr789) — the fluent `file(base).watermark(overlay, opts)` multi-input
@@ -296,6 +297,53 @@ describe('WatermarkedRecipe — overlay validation', () => {
       jobs: { id: string; operations: { type: string }[] }[];
     };
     expect(payload.jobs.find((j) => j.id === 'src_1')!.operations).toEqual([{ type: 'passthrough' }]);
+  });
+});
+
+describe('WatermarkedRecipe — overlays[] gate (Vbbdq9C4)', () => {
+  // watermark() composites exactly ONE overlay (the positional overlay, src_1),
+  // so overlays[] references sources the facade can't build and is invalid wire.
+  // The gate lives at LOWERING so a post-construction mutation can't slip past.
+  it('rejects a non-empty overlays[] at lowering', () => {
+    const wr = recipe('photo.jpg').watermark(overlay(), { overlays: [{ anchor: 'center' }] });
+    try {
+      wr.toWorkflowPayload(['b', 'o']);
+      throw new Error('expected throw');
+    } catch (e) {
+      expect((e as GislConfigError).reason).toBe('overlays_unsupported');
+      expect((e as GislConfigError).conflictingFields).toEqual(['overlays']);
+      expect((e as Error).message).toMatch(/overlays\[\]/);
+    }
+  });
+
+  it('rejects an empty overlays: [] at lowering (contract minItems: 1 makes it invalid too)', () => {
+    const wr = recipe('photo.jpg').watermark(overlay(), { overlays: [] });
+    expect(() => wr.toWorkflowPayload(['b', 'o'])).toThrow(/overlays\[\]/);
+  });
+
+  it('rejects overlays[] added by MUTATION after watermark() — the gate is at lowering', () => {
+    const opts: WatermarkOptions = { anchor: 'center' };
+    const wr = recipe('photo.jpg').watermark(overlay(), opts);
+    // A caller mutating the (by-reference) options object AFTER the verb must not
+    // slip past an eager construction-time guard — lowering re-reads the final options.
+    opts.overlays = [{ anchor: 'top_left' }];
+    expect(() => wr.toWorkflowPayload(['b', 'o'])).toThrow(/overlays\[\]/);
+  });
+
+  it('rejects a present overlays: null (reject-all — parity with PHP array_key_exists)', () => {
+    // `null` is off-type, but the reject-all gate keys on "present, not undefined",
+    // so it is rejected — matching the PHP array_key_exists('overlays') check.
+    const wr = recipe('photo.jpg').watermark(overlay(), { overlays: null as unknown as WatermarkOverlay[] });
+    expect(() => wr.toWorkflowPayload(['b', 'o'])).toThrow(/overlays\[\]/);
+  });
+
+  it('still lowers the flat single-overlay options when no overlays key is present', () => {
+    const wr = recipe('photo.jpg').watermark(overlay(), { anchor: 'center', overlay_width: '30%' });
+    const wm = watermarkJobOf(wr.toWorkflowPayload(['b', 'o']));
+    expect(wm.operations[0]).toEqual({
+      type: 'image_watermark',
+      options: { anchor: 'center', overlay_width: '30%' },
+    });
   });
 });
 
