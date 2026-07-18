@@ -92,6 +92,9 @@ export {
   GislMultipartSessionOwnershipError,
   GislMultipartSessionAuthRequiredError,
   GislTimeoutError,
+  // 4G4FaA9X — mapEach fan-out timed out mid-batch; carries the completed
+  // child ids + parent id so the caller can recover without a whole-batch re-run.
+  GislFanOutTimeoutError,
   GislAbortError,
   // FF2b / tywwynmN — transport-level failure (mirrors PHP GislNetworkError);
   // raised by the file-first HttpDownloader when an output URL cannot be read.

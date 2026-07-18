@@ -11,7 +11,10 @@ export { uploadSource, jobOutputSource, externalImportSource, connectionSource, 
 // Errors
 export { GislError, GislApiError, GislValidationError, GislBalanceExhaustedError, GislLongFormConcurrencyError, GislTierRestrictedError, GislFeatureTierRestrictedError, GislFeatureNotAvailableError, GislWorkflowExpiredError, GislProbePendingError, GislAuthError, GislUploadCapExceededError, GislMultipartPartError, GislMultipartPartCountError, 
 // SDK-3 (Wb6ebOMM) — typed errors for the 3 resume-support endpoints.
-GislMultipartSessionNotFoundError, GislMultipartSessionOwnershipError, GislMultipartSessionAuthRequiredError, GislTimeoutError, GislAbortError, 
+GislMultipartSessionNotFoundError, GislMultipartSessionOwnershipError, GislMultipartSessionAuthRequiredError, GislTimeoutError, 
+// 4G4FaA9X — mapEach fan-out timed out mid-batch; carries the completed
+// child ids + parent id so the caller can recover without a whole-batch re-run.
+GislFanOutTimeoutError, GislAbortError, 
 // FF2b / tywwynmN — transport-level failure (mirrors PHP GislNetworkError);
 // raised by the file-first HttpDownloader when an output URL cannot be read.
 GislNetworkError, 

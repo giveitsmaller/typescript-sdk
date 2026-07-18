@@ -506,6 +506,43 @@ export class GislTimeoutError extends GislError {
     }
 }
 /**
+ * A `mapEach` fan-out timed out mid-batch — the deadline elapsed either while a
+ * child was still running (the common case) or cleanly between child runs. The
+ * parent and some children have ALREADY completed, so re-running the whole batch
+ * re-does finished work. This carries their ids so the caller can poll them (via
+ * `client.getWorkflowStatus` / `getWorkflowDownloads`) to recover the finished
+ * work and re-run ONLY the children that were never created.
+ *
+ * Subclasses {@link GislTimeoutError}, so an existing
+ * `catch (e) { if (e instanceof GislTimeoutError) … }` still catches it. The
+ * inherited `workflowId` carries the IN-FLIGHT child — the one that was running
+ * when the deadline elapsed (a child's own timeout, the common path) — or stays
+ * `undefined` when the deadline elapsed cleanly BETWEEN children (no in-flight
+ * child). To recover, poll `workflowId` (if set) + {@link parentWorkflowId} +
+ * {@link completedWorkflowIds}, then re-run only the children that never started.
+ *
+ * NOTE on double-charge: the server-side create-dedupe (DSxwCetg) is what
+ * prevents a byte-identical child re-create from settling a SECOND charge within
+ * the dedup window; this error's job is efficient RECOVERY (skip the completed
+ * work) + defense-in-depth, not the sole charge guard.
+ */
+export class GislFanOutTimeoutError extends GislTimeoutError {
+    /** The child workflows that completed before the deadline elapsed. */
+    completedWorkflowIds;
+    /** The parent workflow, which ran to completion before the fan-out began. */
+    parentWorkflowId;
+    constructor(message, opts) {
+        // The inherited workflowId is the in-flight child (or undefined between children).
+        super(message, opts.workflowId);
+        this.name = 'GislFanOutTimeoutError';
+        this.completedWorkflowIds = [...opts.completedWorkflowIds];
+        this.parentWorkflowId = opts.parentWorkflowId === '' ? undefined : opts.parentWorkflowId;
+        if (opts.cause !== undefined) {
+            this.cause = opts.cause;
+        }
+    }
+}
+/**
  * Transport-level failure: the underlying `fetch` (or other transport) could
  * not produce a usable response — DNS, TCP, TLS, a mid-stream disconnect, or a
  * non-ok status / empty body when fetching a result download. Mirrors the PHP

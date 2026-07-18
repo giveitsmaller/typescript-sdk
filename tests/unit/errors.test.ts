@@ -7,6 +7,7 @@ import {
   GislBundleAlreadyArchivedError,
   GislConfigError,
   GislError,
+  GislFanOutTimeoutError,
   GislFeatureNotAvailableError,
   GislFeatureTierRestrictedError,
   GislLongFormConcurrencyError,
@@ -14,6 +15,7 @@ import {
   GislMultipartPartError,
   GislProbePendingError,
   GislTierRestrictedError,
+  GislTimeoutError,
   GislUploadCapExceededError,
   GislValidationError,
   GislWorkflowExpiredError,
@@ -42,6 +44,52 @@ describe('error classes', () => {
       expect(err).toBeInstanceOf(GislError);
       expect(err).toBeInstanceOf(Error);
       expect(err.name).toBe('GislBalanceExhaustedError');
+    });
+
+    it('GislFanOutTimeoutError extends GislTimeoutError and carries the recovery ids (4G4FaA9X)', () => {
+      const err = new GislFanOutTimeoutError('maxWait elapsed during fan-out (after 2 child runs)', {
+        completedWorkflowIds: ['wf_child_0', 'wf_child_1'],
+        parentWorkflowId: 'wf_parent',
+      });
+      // Subclasses GislTimeoutError so an existing `catch (e instanceof GislTimeoutError)`
+      // still catches the fan-out variant (consistency with oYumKo6y).
+      expect(err).toBeInstanceOf(GislFanOutTimeoutError);
+      expect(err).toBeInstanceOf(GislTimeoutError);
+      expect(err).toBeInstanceOf(GislError);
+      expect(err).toBeInstanceOf(Error);
+      expect(err.name).toBe('GislFanOutTimeoutError');
+      expect(err.completedWorkflowIds).toEqual(['wf_child_0', 'wf_child_1']);
+      expect(err.parentWorkflowId).toBe('wf_parent');
+      // No single faithful recovery handle for a fan-out — the inherited workflowId
+      // stays undefined (polling the parent id recovers the parent, not the children).
+      expect(err.workflowId).toBeUndefined();
+    });
+
+    it('GislFanOutTimeoutError normalises an empty parentWorkflowId + defensively copies the ids', () => {
+      const ids = ['a'];
+      const err = new GislFanOutTimeoutError('msg', { completedWorkflowIds: ids, parentWorkflowId: '' });
+      expect(err.parentWorkflowId).toBeUndefined();
+      // Defensive copy — mutating the caller's array must not change the error.
+      ids.push('b');
+      expect(err.completedWorkflowIds).toEqual(['a']);
+    });
+
+    it('GislFanOutTimeoutError carries the in-flight child workflowId + cause on a mid-child timeout', () => {
+      const cause = new GislTimeoutError('child did not complete', 'wf_child_2');
+      const err = new GislFanOutTimeoutError(
+        'maxWait elapsed during fan-out while a child was running (2 completed)',
+        {
+          completedWorkflowIds: ['wf_child_0', 'wf_child_1'],
+          parentWorkflowId: 'wf_parent',
+          workflowId: 'wf_child_2',
+          cause,
+        },
+      );
+      // The inherited workflowId is the in-flight child that timed out.
+      expect(err.workflowId).toBe('wf_child_2');
+      expect(err.completedWorkflowIds).toEqual(['wf_child_0', 'wf_child_1']);
+      expect(err.parentWorkflowId).toBe('wf_parent');
+      expect((err as Error & { cause?: unknown }).cause).toBe(cause);
     });
 
     it('GislLongFormConcurrencyError extends GislApiError with upgradeUrl getter', () => {

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PRESET_VERSION as GENERATED_PRESET_VERSION } from '../../src/generated/sdk_spec/version.js';
 import { OperationBuilder, type Result, type ProgressEvent } from '../../src/builder.js';
-import { GislTimeoutError } from '../../src/errors.js';
+import { GislTimeoutError, GislFanOutTimeoutError } from '../../src/errors.js';
 import { Handle } from '../../src/handle.js';
 import type { GislClient } from '../../src/client.js';
 
@@ -619,6 +619,54 @@ describe('T6 — .mapEach fan-out', () => {
       .run({ maxWait: 5, useSSE: false, pollIntervalMs: 100 });
     await expect(pending).rejects.toBeInstanceOf(GislTimeoutError);
     expect(fnCalls).toBe(0);
+  });
+
+  it('a CHILD timing out mid-run throws GislFanOutTimeoutError with parent + completed + in-flight ids (4G4FaA9X)', async () => {
+    // Parent + child 0 complete; child 1 never reaches terminal, so child 1's
+    // own deadline elapses. That common path must surface as a fan-out timeout
+    // carrying the parent + already-completed children + the in-flight child —
+    // NOT a bare GislTimeoutError that discards the recoverable ids.
+    const mock = makeMockClient();
+    let createCount = 0;
+    mock.createWorkflow.mockImplementation(async () => {
+      const id = createCount === 0 ? 'wf_parent' : `wf_child_${createCount - 1}`;
+      createCount += 1;
+      return { workflowId: id, status: 'running' };
+    });
+    // Everything reaches terminal EXCEPT wf_child_1 (stays running → it times out).
+    mock.getWorkflowStatus.mockImplementation(async (id: string) => ({
+      workflowId: id,
+      status: id === 'wf_child_1' ? 'running' : 'completed',
+      jobs: [{ jobId: 'j', ref: 'op', status: id === 'wf_child_1' ? 'running' : 'completed' }],
+    }));
+    // Parent yields 2 artifacts → 2 children; each child yields 1 artifact.
+    let downloadsCall = 0;
+    mock.getWorkflowDownloads.mockImplementation(async () => {
+      downloadsCall += 1;
+      const files =
+        downloadsCall === 1
+          ? [
+              { operation: 'convert', operationId: 'p1', filename: 'a.png', sizeBytes: 1, downloadUrl: 'https://x/a.png', pageIndex: 1 },
+              { operation: 'convert', operationId: 'p2', filename: 'b.png', sizeBytes: 1, downloadUrl: 'https://x/b.png', pageIndex: 2 },
+            ]
+          : [{ operation: 'compress', operationId: 'c', filename: 'c.png', sizeBytes: 1, downloadUrl: 'https://x/c.png' }];
+      return { downloads: [{ jobId: 'j', ref: 'op', files }] };
+    });
+
+    const err = await new OperationBuilder(mock.client, 'convert', 'doc.pdf', { to: 'png', pages: '1-2' })
+      .mapEach(() => new OperationBuilder(mock.client, 'compress', 'noop', {}))
+      .run({ maxWait: 300, useSSE: false, pollIntervalMs: 10 })
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(GislFanOutTimeoutError);
+    expect(err).toBeInstanceOf(GislTimeoutError);
+    const fanErr = err as GislFanOutTimeoutError;
+    expect(fanErr.parentWorkflowId).toBe('wf_parent');
+    expect(fanErr.completedWorkflowIds).toEqual(['wf_child_0']);
+    // The in-flight child that timed out is exposed on the inherited workflowId.
+    expect(fanErr.workflowId).toBe('wf_child_1');
+    // The original child timeout is chained as the cause.
+    expect((fanErr as Error & { cause?: unknown }).cause).toBeInstanceOf(GislTimeoutError);
   });
 });
 

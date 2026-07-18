@@ -44,7 +44,7 @@ import type {
   WorkflowCreatePayload,
 } from './types.js';
 import { uploadSource } from './types.js';
-import { GislTimeoutError, GislNetworkError, SseEndedWithoutTerminal } from './errors.js';
+import { GislTimeoutError, GislFanOutTimeoutError, GislNetworkError, SseEndedWithoutTerminal } from './errors.js';
 // Deferred-usage-only import: `Handle` is constructed inside submit() at call
 // time, not at module load, so the builder.ts <-> handle.ts cycle is safe
 // under ESM (handle.ts imports the await-primitives from this module).
@@ -739,15 +739,43 @@ export class MapEachBuilder {
       _checkAborted(options.signal);
       const remaining = deadline - Date.now();
       if (remaining <= 0) {
-        throw new GislTimeoutError(
-          `maxWait elapsed during fan-out (after ${collectedArtifacts.length} child runs)`,
+        // Clean timeout BETWEEN children (no child in flight): the parent + the
+        // children completed so far are recoverable — carry their ids so the
+        // caller polls them and re-runs ONLY the never-created children (4G4FaA9X).
+        throw new GislFanOutTimeoutError(
+          `maxWait elapsed during fan-out (after ${collectedChildResults.length} child runs)`,
+          {
+            completedWorkflowIds: collectedChildResults.map((r) => r.workflowId),
+            parentWorkflowId: parentResult.workflowId,
+          },
         );
       }
       const childBuilder = this.fn(art);
-      const childResult = await childBuilder.run({
-        ...options,
-        maxWait: remaining,
-      });
+      let childResult: Result;
+      try {
+        childResult = await childBuilder.run({
+          ...options,
+          maxWait: remaining,
+        });
+      } catch (err) {
+        // A CHILD's own deadline elapsed mid-run — the COMMON fan-out timeout
+        // path. Re-throw as a fan-out timeout so the parent + already-completed
+        // children + this in-flight child are ALL recoverable, instead of losing
+        // them behind the child's bare GislTimeoutError (4G4FaA9X). Other errors
+        // (config / API / item failure) propagate unchanged.
+        if (err instanceof GislTimeoutError) {
+          throw new GislFanOutTimeoutError(
+            `maxWait elapsed during fan-out while a child was running (${collectedChildResults.length} completed)`,
+            {
+              completedWorkflowIds: collectedChildResults.map((r) => r.workflowId),
+              parentWorkflowId: parentResult.workflowId,
+              workflowId: err.workflowId,
+              cause: err,
+            },
+          );
+        }
+        throw err;
+      }
       collectedChildResults.push(childResult);
       for (const childArt of childResult.artifacts) collectedArtifacts.push(childArt);
       for (const childJob of childResult.jobs) collectedJobs.push(childJob);

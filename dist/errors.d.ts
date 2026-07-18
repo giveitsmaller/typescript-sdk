@@ -460,6 +460,44 @@ export declare class GislTimeoutError extends GislError {
     constructor(message: string, workflowId?: string);
 }
 /**
+ * A `mapEach` fan-out timed out mid-batch — the deadline elapsed either while a
+ * child was still running (the common case) or cleanly between child runs. The
+ * parent and some children have ALREADY completed, so re-running the whole batch
+ * re-does finished work. This carries their ids so the caller can poll them (via
+ * `client.getWorkflowStatus` / `getWorkflowDownloads`) to recover the finished
+ * work and re-run ONLY the children that were never created.
+ *
+ * Subclasses {@link GislTimeoutError}, so an existing
+ * `catch (e) { if (e instanceof GislTimeoutError) … }` still catches it. The
+ * inherited `workflowId` carries the IN-FLIGHT child — the one that was running
+ * when the deadline elapsed (a child's own timeout, the common path) — or stays
+ * `undefined` when the deadline elapsed cleanly BETWEEN children (no in-flight
+ * child). To recover, poll `workflowId` (if set) + {@link parentWorkflowId} +
+ * {@link completedWorkflowIds}, then re-run only the children that never started.
+ *
+ * NOTE on double-charge: the server-side create-dedupe (DSxwCetg) is what
+ * prevents a byte-identical child re-create from settling a SECOND charge within
+ * the dedup window; this error's job is efficient RECOVERY (skip the completed
+ * work) + defense-in-depth, not the sole charge guard.
+ */
+export declare class GislFanOutTimeoutError extends GislTimeoutError {
+    /** The child workflows that completed before the deadline elapsed. */
+    readonly completedWorkflowIds: readonly string[];
+    /** The parent workflow, which ran to completion before the fan-out began. */
+    readonly parentWorkflowId?: string;
+    constructor(message: string, opts: {
+        completedWorkflowIds: readonly string[];
+        parentWorkflowId?: string;
+        /**
+         * The in-flight child that timed out mid-run (its own deadline elapsed);
+         * `undefined` for a clean between-children timeout with no child running.
+         */
+        workflowId?: string;
+        /** The underlying child {@link GislTimeoutError}, preserved for chaining. */
+        cause?: unknown;
+    });
+}
+/**
  * Transport-level failure: the underlying `fetch` (or other transport) could
  * not produce a usable response — DNS, TCP, TLS, a mid-stream disconnect, or a
  * non-ok status / empty body when fetching a result download. Mirrors the PHP
