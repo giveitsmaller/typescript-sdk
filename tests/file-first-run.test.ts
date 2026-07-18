@@ -358,9 +358,15 @@ describe('Recipe.run — timeout', () => {
       yield;
     });
     mock.getWorkflowStatus.mockResolvedValue({ workflowId: 'wf_1', status: 'running' });
+    // maxWait (100ms) is ~100x the instant mock upload + createWorkflow, so the
+    // workflow is created (id captured) well before the deadline, and the timeout
+    // then fires from the never-terminal poll carrying the id — rather than the
+    // pre-create deadline check firing first with no workflowId, the 1ms-race
+    // this test used to flake on (M6CxXj3u). The mock getWorkflowStatus repeats;
+    // the deadline is still wall-clock, so 100ms is the (generous) safety margin.
     const err = await recipe(mock)
       .compress()
-      .run({ maxWait: 1, pollIntervalMs: 5 })
+      .run({ maxWait: 100, pollIntervalMs: 5 })
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(GislTimeoutError);
     // oYumKo6y: the workflow was created (wf_1); only the wait timed out. The
