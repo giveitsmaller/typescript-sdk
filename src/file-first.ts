@@ -2017,6 +2017,14 @@ async function _uploadInputsAndCreate(
 ): Promise<WorkflowCreateResponse> {
   const { webhook, deadline, onProgress, signal, probeBeforeCreate, probeTimeoutMs, uploadsLabel, workflowLabel } =
     opts;
+  // Preflight: lower the composed chains with placeholder ids so a route-invalid
+  // option (or any lowering-time gate — overlays, sole_op split, route/enum) in
+  // ANY input's chain — a watermark base/overlay, a merge/archive member — throws
+  // BEFORE we spend a single upload byte. The multi-input analog of the
+  // single-input Recipe.assertOperationsLowerable preflight (0azjb6Rg); mirrors
+  // PHP. The placeholder ids never reach the wire — the payload is discarded
+  // (T3ltXsou). toWorkflowPayload is pure, so re-lowering at create is cheap.
+  toPayload(inputs.map((_, i) => `preflight_${i}`));
   const fileIds: string[] = [];
   // Track each freshly-uploaded input's probe-gate inputs (a pre-uploaded id
   // carries no local mime/size, so it is excluded — never probed).

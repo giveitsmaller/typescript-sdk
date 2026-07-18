@@ -495,6 +495,29 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe('FilesRecipe.run — preflight before upload (T3ltXsou)', () => {
+  it('a nested sole_op fan-out throws BEFORE any upload', async () => {
+    // The shared multi-input helper lowers with placeholder ids before
+    // uploading, so a fan-out whose per-file chain nests a sole_op
+    // (textWatermark + a following step) fails pre-upload — no wasted bytes.
+    const mock = makeMockClient();
+    const err = await new FilesRecipe(
+      [fileInput.path('a.jpg'), fileInput.path('b.jpg')],
+      [],
+      undefined,
+      undefined,
+      mock.client,
+    )
+      .textWatermark('draft')
+      .compress(OptimizeFor.Size)
+      .run({ maxWait: '30s' })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(GislConfigError);
+    expect(mock.uploadFile).not.toHaveBeenCalled();
+    expect(mock.createWorkflow).not.toHaveBeenCalled();
+  });
+});
+
 describe('FilesRecipe.run — happy path', () => {
   it('creates ONE multi-job workflow and partitions per input', async () => {
     const mock = makeMockClient();

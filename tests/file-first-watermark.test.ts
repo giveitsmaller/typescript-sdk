@@ -490,6 +490,23 @@ describe('WatermarkedRecipe.run — happy path through the shared helper', () =>
   });
 });
 
+describe('WatermarkedRecipe.run — preflight before upload (T3ltXsou)', () => {
+  it('a lowering error in the composed chain throws BEFORE any upload', async () => {
+    // The shared multi-input helper now lowers with placeholder ids before
+    // uploading, so a lowering-time gate (here overlays[]) fails pre-upload —
+    // no wasted upload bytes. Mirrors the single-input 0azjb6Rg preflight.
+    const mock = makeMockClient();
+    const err = await boundBase(mock)
+      .watermark(new Recipe(fileInput.path('logo.png')), { overlays: [{ anchor: 'center' }] })
+      .run({ maxWait: '30s' })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(GislConfigError);
+    expect((err as GislConfigError).reason).toBe('overlays_unsupported');
+    expect(mock.uploadFile).not.toHaveBeenCalled();
+    expect(mock.createWorkflow).not.toHaveBeenCalled();
+  });
+});
+
 describe('WatermarkedRecipe.run — SSE transport selection (wf133EDR)', () => {
   it('attempts the SSE stream by default (SSE-first)', async () => {
     const mock = makeMockClient();
