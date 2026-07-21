@@ -480,6 +480,102 @@ describe('resolveCompressOptions — invalid-combo validations', () => {
     }
   });
 
+  // cySAEZHR: `width` is a legal image resize, expressible via output(). It used
+  // to be blamed on video, because MEDIA_FIELDS.video owns width/height/fit and
+  // image does not — so the user attempting a resize was told they had passed
+  // video options to an image.
+  it('image presetOverrides with resize keys → names output(), never video', () => {
+    try {
+      resolveCompressOptions({
+        media: 'image',
+        op: 'compress',
+        presetOverrides: { width: 800 },
+        explicitOptions: {},
+      });
+      throw new Error('expected throw');
+    } catch (err) {
+      const e = err as GislConfigError;
+      expect(e.reason).toBe('type_mismatch');
+      expect(e.conflictingFields).toEqual(['width']);
+      expect(e.message).toContain('output()');
+      expect(e.message).not.toContain('video');
+      expect(e.suggestion).toContain('output(format');
+    }
+  });
+
+  // The suggestion must be COPY-PASTEABLE: OutputOptions is snake_case, so
+  // echoing the camelCase preset spelling back would hand the caller a call
+  // that does not compile.
+  it('image cross-verb suggestion uses the output() spelling, not the preset spelling', () => {
+    try {
+      resolveCompressOptions({
+        media: 'image',
+        op: 'compress',
+        presetOverrides: { autoOrient: true },
+        explicitOptions: {},
+      });
+      throw new Error('expected throw');
+    } catch (err) {
+      const e = err as GislConfigError;
+      expect(e.message).toContain('auto_orient');
+      expect(e.suggestion).toContain('auto_orient');
+      expect(e.suggestion).not.toContain('autoOrient');
+    }
+  });
+
+  it('image presetOverrides with several cross-verb keys → all listed, output() named once', () => {
+    try {
+      resolveCompressOptions({
+        media: 'image',
+        op: 'compress',
+        presetOverrides: { width: 800, height: 600, fit: 'max' },
+        explicitOptions: {},
+      });
+      throw new Error('expected throw');
+    } catch (err) {
+      const e = err as GislConfigError;
+      expect(e.conflictingFields).toEqual(['width', 'height', 'fit']);
+      expect(e.message).toContain('are options on output()');
+    }
+  });
+
+  // Classification is PER FIELD: a legal image `width` must still be reported
+  // as a resize on output() even when it arrives next to a genuinely bogus
+  // key, instead of the pair being blamed on video wholesale.
+  it('image presetOverrides mixing a resize key with a video-only key reports both, separately', () => {
+    try {
+      resolveCompressOptions({
+        media: 'image',
+        op: 'compress',
+        presetOverrides: { width: 800, codec: 'h264' },
+        explicitOptions: {},
+      });
+      throw new Error('expected throw');
+    } catch (err) {
+      const e = err as GislConfigError;
+      expect(e.reason).toBe('type_mismatch');
+      expect(e.message).toContain('output()');
+      expect(e.message).toContain('codec');
+      expect(e.conflictingFields).toEqual(['width', 'codec']);
+    }
+  });
+
+  it('audio presetOverrides with outputFormat → names convert()', () => {
+    try {
+      resolveCompressOptions({
+        media: 'audio',
+        op: 'compress',
+        presetOverrides: { outputFormat: 'mp3' },
+        explicitOptions: {},
+      });
+      throw new Error('expected throw');
+    } catch (err) {
+      const e = err as GislConfigError;
+      expect(e.reason).toBe('type_mismatch');
+      expect(e.message).toContain('convert()');
+    }
+  });
+
   it('unknown field in explicit (nonsense field name) → unknown_field defence-in-depth', () => {
     try {
       resolveCompressOptions({

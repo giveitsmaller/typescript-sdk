@@ -251,6 +251,20 @@ const MEDIA_FIELDS = Object.freeze({
     document_odf: new Set(['stripMetadata', 'stripUnusedStyles']),
     document_epub: new Set(['fontSubsetting', 'stripUnusedCss']),
 });
+const OUT = (key) => ({ verb: 'output', key });
+const CROSS_VERB_OVERRIDES = Object.freeze({
+    image: Object.freeze({
+        width: OUT('width'), height: OUT('height'), fit: OUT('fit'),
+        autoOrient: OUT('auto_orient'), colorProfile: OUT('color_profile'),
+        progressive: OUT('progressive'), lossless: OUT('lossless'),
+        qualityPreset: OUT('quality_preset'), encodingMode: OUT('encoding_mode'),
+        targetSizeBytes: OUT('target_size_bytes'), chromaSubsampling: OUT('chroma_subsampling'),
+        optimizationLevel: OUT('optimization_level'), avifSpeed: OUT('avif_speed'),
+    }),
+    // convert() takes the target format positionally, not as an option.
+    audio: Object.freeze({ outputFormat: { verb: 'convert', key: null } }),
+    video: Object.freeze({ outputFormat: { verb: 'convert', key: null } }),
+});
 function detectMismatchedOverrides(media, overrides) {
     const expected = MEDIA_FIELDS[media];
     const keys = Object.keys(overrides);
@@ -264,6 +278,37 @@ function detectMismatchedOverrides(media, overrides) {
     const unknownFields = keys.filter((k) => !expected.has(k));
     if (unknownFields.length === 0)
         return;
+    // Options that are real for THIS media but belong to another verb are
+    // answered with that verb, before the other-media guess below — otherwise a
+    // key both this media and another one recognises (image `width` vs video
+    // `width`) gets blamed on the wrong media.
+    // Classified PER FIELD, not all-or-nothing: `{ width, codec }` on an image
+    // must still tell the caller that `width` is a legal resize on output(),
+    // rather than reverting to "you passed video options" for the pair.
+    const crossVerb = CROSS_VERB_OVERRIDES[media];
+    const crossVerbFields = crossVerb === undefined ? [] : unknownFields.filter((k) => crossVerb[k] !== undefined);
+    if (crossVerbFields.length > 0 && crossVerb !== undefined) {
+        const strays = unknownFields.filter((k) => crossVerb[k] === undefined);
+        const byVerb = new Map();
+        for (const k of crossVerbFields) {
+            const target = crossVerb[k];
+            const list = byVerb.get(target.verb) ?? [];
+            list.push(target.key ?? k);
+            byVerb.set(target.verb, list);
+        }
+        const clauses = [...byVerb.entries()].map(([verb, keys]) => verb === 'convert'
+            ? `${keys.join(', ')} is the format argument of convert()`
+            : `${keys.join(', ')} ${keys.length === 1 ? 'is an option' : 'are options'} on ${verb}()`);
+        const outputKeys = byVerb.get('output');
+        throw new GislConfigError(`presetOverrides for '${media}' contained ${crossVerbFields.join(', ')}, which ${crossVerbFields.length === 1 ? 'does' : 'do'} not belong on the compress preset surface: ${clauses.join('; ')}.` +
+            (strays.length > 0 ? ` Also unrecognised for '${media}': ${strays.join(', ')}.` : ''), {
+            reason: 'type_mismatch',
+            conflictingFields: unknownFields,
+            suggestion: outputKeys !== undefined
+                ? `Move ${outputKeys.join(', ')} to output(): .output(format, { ${outputKeys[0]}: … }).`
+                : 'Use convert(format) to change the output format.',
+        });
+    }
     // Look up which OTHER media owns every unknown field — if a single
     // OTHER media's field set covers them all, that's a type_mismatch.
     for (const otherMedia of Object.keys(MEDIA_FIELDS)) {

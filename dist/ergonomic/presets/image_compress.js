@@ -12,10 +12,22 @@
 // `mode` + `iccProfile` were REMOVED — the worker is lossy-only and always
 // strips metadata, so advertising a lossless mode or ICC-profile policy was
 // an over-claim. `progressive` is still a per-JPEG wire option but is no
-// longer carried in the preset cell. `width`/`height`/`fit`/`autoOrient`
-// were removed earlier — the image-compress worker never resized (resize-fit
-// lives on thumbnail/convert; video keeps its own fit). Per-call knobs are
-// deliberately excluded — they belong on the per-call argument shape.
+// longer carried in the preset cell.
+//
+// `width`/`height`/`fit`/`autoOrient` were removed earlier on the grounds that
+// "the image-compress worker never resized". CAREFUL — that is still true of
+// the Rust optimiser crate and NOT true end-to-end. Since contract v2.97.0
+// ("resize lives inside Output") the API canonicalises an image compress
+// carrying width/height/fit into a `convert` op, and convert IS the resize
+// engine, so such a request returns a genuinely resized file. Their absence
+// here is therefore a SURFACE choice, not a capability limit: resize is
+// expressed via `output()` (see `OutputOptions`), which the compress
+// conformance gate records as CROSS_VERB_ROUTING and self-verifies. Reading
+// this comment as "unsupported" is what produced cySAEZHR. Whether compress()
+// should ALSO carry them is an open ergonomic-expansion decision, not a bug.
+//
+// Per-call knobs are deliberately excluded — they belong on the per-call
+// argument shape.
 import { shippedDefaultsFor as f3ShippedDefaultsFor } from '../../generated/sdk_spec/presets.js';
 import { translateEnum } from './_translate.js';
 export class ImageCompressPresetOptions {
