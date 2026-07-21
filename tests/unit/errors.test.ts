@@ -119,6 +119,30 @@ describe('error classes', () => {
       expect(err.payload.error).toBe('LONG_FORM_CONCURRENCY_LIMIT_EXCEEDED');
     });
 
+    // UO1xYecu — the base accessor is `isApiRetryableStatus(status) || taxonomy`,
+    // and 429 is in the status arm, so this reported `true` and told callers to
+    // back off from the ONE error where backing off can never help: it carries
+    // no Retry-After and clears only when an in-flight long-form workflow
+    // finishes. The class docblock said "do NOT back off" while the API said
+    // retry — code contradicting code, with the docstring the correct one.
+    it('GislLongFormConcurrencyError.retryable is false despite the 429', () => {
+      const err = new GislLongFormConcurrencyError(429, 'msg', {
+        success: false,
+        error: 'LONG_FORM_CONCURRENCY_LIMIT_EXCEEDED',
+        links: { upgrade: 'https://x/upgrade' },
+      });
+      expect(err.retryable).toBe(false);
+      // Still a GislApiError, so the override must survive the widened static
+      // type a caller most often holds.
+      const asBase: GislApiError = err;
+      expect(asBase.retryable).toBe(false);
+    });
+
+    it('a generic 429 stays retryable (the carve-out is per-code, not a 429 blanket)', () => {
+      const err = new GislApiError(429, 'slow down');
+      expect(err.retryable).toBe(true);
+    });
+
     it('GislLongFormConcurrencyError.upgradeUrl is undefined when links absent', () => {
       const err = new GislLongFormConcurrencyError(
         429,

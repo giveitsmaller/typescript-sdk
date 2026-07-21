@@ -159,6 +159,21 @@ export declare class GislBalanceExhaustedError extends GislApiError {
 export declare class GislLongFormConcurrencyError extends GislApiError {
     readonly payload: LongFormConcurrencyLimitResponse;
     constructor(statusCode: number, errorMessage: string, payload: LongFormConcurrencyLimitResponse, path?: string, extra?: Omit<GislApiErrorOptions, 'payload'>);
+    /**
+     * ALWAYS `false`, overriding the base 429-implies-retryable heuristic
+     * (UO1xYecu). This 429 is not a rate limit: it carries no `Retry-After` and
+     * clears only when an in-flight long-form workflow finishes, so a back-off
+     * retries into a wall that no amount of waiting-then-retrying opens. The base
+     * accessor reported `true` purely from the status, contradicting this class's
+     * own documented handling ("wait on completion or upgrade — do NOT back off")
+     * and instructing the one recovery that cannot work.
+     *
+     * Overridden per-class rather than via a code table because this is the only
+     * such code today; the general fix — an explicit taxonomy verdict outranking
+     * the status heuristic — arrives with the `error-taxonomy.yaml` `retryable`
+     * enum (contracts `plwcAqBr`), tracked on UO1xYecu.
+     */
+    get retryable(): boolean;
     /** The pricing / upgrade deep link (`links.upgrade`), or `undefined` when absent. */
     get upgradeUrl(): string | undefined;
 }
