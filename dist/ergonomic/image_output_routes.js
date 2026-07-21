@@ -296,10 +296,18 @@ export function dependsOnViolation(wireOptions, route) {
             continue;
         }
         // Scalar deps in this (compress-image) table are all on `encoding_mode`, a
-        // same_format optimiser key — validate them on same_format ONLY. A
-        // format_change routes via `convert`, which has no encoding_mode and carries
-        // its own output_format-based deps (a follow-up). The universal requiresAnyOf
-        // dep (fit → width|height) above runs on BOTH routes.
+        // same_format optimiser key — validate them on same_format ONLY. The
+        // universal requiresAnyOf dep (fit → width|height) above runs on BOTH routes.
+        //
+        // A format_change routes via `convert`, which has no encoding_mode and carries
+        // its own deps — but those need NO table here (L2Ay7Uak, resolved as a no-op).
+        // Every convert image dep is keyed on `output_format`, and the per-target
+        // `honored` set the lowering already enforces IS that constraint materialised:
+        // `output('gif', { quality: 80 })` is rejected by the honored gate, with a
+        // better message, before this function runs. That equivalence is PINNED by
+        // `output-route-conformance.test.ts` (+ the PHP mirror), which fails closed if
+        // convert ever gains a dep keyed on something other than output_format — which
+        // is the case that would genuinely need a gate here.
         if (route !== 'same_format')
             continue;
         const effective = wireOptions[rule.requiresKey] ?? DEPENDS_ON_KEY_DEFAULTS[rule.requiresKey];

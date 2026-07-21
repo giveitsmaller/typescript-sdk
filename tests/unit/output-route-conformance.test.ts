@@ -101,19 +101,21 @@ describe('IMAGE_OUTPUT_ROUTES conformance with image-output-routes.json', () => 
  * regen that adds/changes a compress-image enum member fails HERE. Mirrored by
  * the PHP `ImageOutputRouteConformanceTest`.
  */
+interface AvailabilityGroups {
+  mime_groups: Record<
+    string,
+    {
+      options: Record<
+        string,
+        { type?: string; values?: (string | number)[]; default?: unknown; depends_on?: Record<string, unknown> }
+      >;
+    }
+  >;
+}
 interface Availability {
   operations: {
-    compress: {
-      mime_groups: Record<
-        string,
-        {
-          options: Record<
-            string,
-            { type?: string; values?: (string | number)[]; default?: unknown; depends_on?: Record<string, unknown> }
-          >;
-        }
-      >;
-    };
+    compress: AvailabilityGroups;
+    convert: AvailabilityGroups;
   };
 }
 const availability = JSON.parse(
@@ -242,4 +244,141 @@ describe('output verb allowlist conformance', () => {
     // (rejected first by the positional guard, not the allowed-key check).
     expect([...allowedKeysFor('output')].sort()).toEqual([...projectionUnionAll()].sort());
   });
+});
+
+/**
+ * Convert (`format_change`) `depends_on` conformance — card L2Ay7Uak.
+ *
+ * L2Ay7Uak was filed to add a SECOND hand table of convert `depends_on` rules and
+ * validate it on the format_change route, because `dependsOnViolation` deliberately
+ * skips scalar deps there. Investigating it showed a runtime table would be dead
+ * code: every convert image `depends_on` is keyed on `output_format`, and the
+ * per-target `honored_options` projection the lowering ALREADY enforces is exactly
+ * that constraint materialised — `output('gif', { quality: 80 })` is rejected by the
+ * honored gate (quality is not honored on the gif format_change route) before
+ * `dependsOnViolation` is ever reached, with a better message.
+ *
+ * That equivalence is the load-bearing claim, and nothing pinned it. This suite does:
+ * for every convert image option carrying an `output_format` dependency, the option
+ * must appear in a format_change target's honored set IFF that target is in the
+ * dependency's allowed set. And it FAILS CLOSED on any dependency shape that is NOT
+ * expressible that way — a future convert dep keyed on something other than
+ * `output_format` is NOT implied by the honored projection and would genuinely need
+ * the runtime gate L2Ay7Uak proposed.
+ *
+ * Mirrored by the PHP `ImageOutputRouteConformanceTest`.
+ */
+describe('convert format_change depends_on is subsumed by the honored projection', () => {
+  const convertGroups = availability.operations.convert.mime_groups;
+  const imageGroups = Object.keys(convertGroups).filter((g) => g === 'image' || g.startsWith('image_'));
+  const targets = Object.keys(img.format_change);
+
+  /**
+   * The set of output formats a dependency permits, or `null` when the rule is a
+   * `logic: or` set-condition (e.g. `fit → width|height`), which is media-agnostic,
+   * already validated on BOTH routes by `dependsOnViolation`, and so is not an
+   * output_format constraint at all.
+   */
+  const allowedFormats = (group: string, option: string, dep: Record<string, unknown>): string[] | null => {
+    if ('logic' in dep) {
+      expect(dep.logic, `${group}.${option}: only 'or' set-logic is modelled`).toBe('or');
+      const conditions: string[] = [];
+      for (const [k, v] of Object.entries(dep)) {
+        if (k === 'logic') continue;
+        expect(v, `${group}.${option}: set-condition '${k}'`).toBe('set');
+        conditions.push(k);
+      }
+      // A set-condition is NOT an output_format rule, so the honored projection
+      // does not encode it — it is gated at runtime by OUTPUT_OPTION_DEPENDS_ON,
+      // which runs on BOTH routes. Skipping it here without checking would let a
+      // convert-side set-condition drift (or a brand-new one on a convert-only
+      // option) pass conformance while the runtime gate stayed stale or absent
+      // (codex). Assert the runtime rule exists and matches, exactly.
+      const handRule = OUTPUT_OPTION_DEPENDS_ON[option];
+      expect(
+        handRule,
+        `convert ${group}.${option} carries a set-condition depends_on, which the honored ` +
+          `projection cannot encode, but OUTPUT_OPTION_DEPENDS_ON has no rule for it — the ` +
+          `format_change route would be ungated`,
+      ).toBeDefined();
+      expect(
+        handRule !== undefined && 'requiresAnyOf' in handRule
+          ? [...handRule.requiresAnyOf].sort()
+          : undefined,
+        `convert ${group}.${option}: runtime rule must be the same set-condition as the contract`,
+      ).toEqual(conditions.sort());
+      return null;
+    }
+    const entries = Object.entries(dep);
+    // Fail closed: a multi-key AND, or a key other than output_format, is NOT
+    // encoded by the per-target honored sets and needs a real runtime gate.
+    expect(entries, `${group}.${option}: only single-key depends_on is modelled`).toHaveLength(1);
+    const [key, value] = entries[0]!;
+    expect(
+      key,
+      `${group}.${option}: depends_on '${key}' is not keyed on output_format, so the honored ` +
+        `projection does not encode it — this needs a runtime gate on the format_change route ` +
+        `(the L2Ay7Uak table), not just this conformance check`,
+    ).toBe('output_format');
+    if (Array.isArray(value)) {
+      for (const v of value) expect(typeof v).toBe('string');
+      return value as string[];
+    }
+    expect(typeof value, `${group}.${option}: scalar depends_on value`).toBe('string');
+    return [value as string];
+  };
+
+  const rules: Array<{ group: string; option: string; allowed: string[] }> = [];
+  for (const group of imageGroups) {
+    for (const [option, def] of Object.entries(convertGroups[group]!.options)) {
+      if (def.depends_on === undefined) continue;
+      const allowed = allowedFormats(group, option, def.depends_on);
+      if (allowed !== null) rules.push({ group, option, allowed });
+    }
+  }
+
+  it('there is at least one output_format dependency to check (guards a vacuous pass)', () => {
+    expect(rules.length).toBeGreaterThan(0);
+  });
+
+  // The checks above are driven BY the contract, so an option that LOSES its
+  // depends_on is simply not visited — and the flat runtime rule, which is pinned
+  // to the COMPRESS groups, would keep rejecting a request convert now considers
+  // legal (an over-rejection, pre-upload). Drive this one from the RUNTIME table
+  // instead: every convert image group that defines an option carrying a
+  // set-condition rule must still declare that same condition (codex).
+  for (const [option, rule] of Object.entries(OUTPUT_OPTION_DEPENDS_ON)) {
+    if (!('requiresAnyOf' in rule)) continue;
+    for (const group of imageGroups) {
+      const def = convertGroups[group]!.options[option];
+      if (def === undefined) continue;
+      it(`${group}.${option}: convert still declares the set-condition the runtime rule enforces`, () => {
+        expect(
+          def.depends_on,
+          `OUTPUT_OPTION_DEPENDS_ON gates '${option}' on ${JSON.stringify([...rule.requiresAnyOf])} for BOTH ` +
+            `routes, but convert group '${group}' no longer declares a depends_on for it — the ` +
+            `format_change route would reject a request the contract now allows`,
+        ).toBeDefined();
+        const dep = def.depends_on!;
+        expect(dep.logic, `${group}.${option}: expected an 'or' set-condition`).toBe('or');
+        const conditions = Object.keys(dep).filter((k) => k !== 'logic').sort();
+        expect(conditions).toEqual([...rule.requiresAnyOf].sort());
+      });
+    }
+  }
+
+  for (const { group, option, allowed } of rules) {
+    it(`${group}.${option}: honored exactly on its permitted format_change targets`, () => {
+      for (const target of targets) {
+        const honored = img.format_change[target]!.honored_options.includes(option);
+        expect(
+          honored,
+          `convert ${group}.${option} depends_on output_format ${JSON.stringify(allowed)}, but the ` +
+            `format_change '${target}' route ${honored ? 'HONORS' : 'does not honor'} it — the honored ` +
+            `gate and the contract dependency disagree, so the pre-upload rejection is no longer ` +
+            `equivalent to the contract`,
+        ).toBe(allowed.includes(target));
+      }
+    });
+  }
 });
