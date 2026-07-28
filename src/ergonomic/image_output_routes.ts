@@ -186,12 +186,39 @@ export function resolveOutputRoute(
   };
 }
 
-/** Input token → its `compress.image*` mime-group name (for per-value availability lookup). */
-function compressGroupForToken(token: string): string {
-  if (token === 'jpeg') return 'image_jpeg';
-  if (token === 'png') return 'image_png';
-  if (token === 'avif') return 'image_avif';
-  return 'image'; // webp / gif / svg / tiff
+/**
+ * Input token → EVERY `compress.image*` mime-group that can carry a per-value
+ * availability marker for it: the format-specific group when the metadata has one,
+ * PLUS the generic `image` group. Most specific first.
+ *
+ * Both are needed, and the old single-group version lost one or the other whichever
+ * way it chose (SB1wmTJz):
+ * - The generic group carries CROSS-FORMAT markers — `color_profile: 'srgb'` is planned
+ *   there and nowhere else, so a lookup that resolved only to `image_jpeg` never saw it.
+ * - A specific group carries FORMAT-ONLY markers — `image_svg` marks
+ *   `output_format: 'original'` planned (SVG→SVG optimisation is not built) and the
+ *   generic group does not, so a lookup that resolved only to `image` never saw THAT.
+ *
+ * The previous implementation hard-coded `jpeg|png|avif` and fell through to `image`
+ * with a trailing `// webp / gif / svg / tiff`. That comment was true when written and
+ * silently stopped being true when `image_svg` and `image_webp` were added to the
+ * metadata — so SVG inputs missed the one marker that mattered for them, on this gate
+ * AND on the `output()` gate that shares it. Deriving the list from the metadata rather
+ * than a hand-written token list is what stops it going stale a second time; the
+ * mapping is pinned by `output-route-conformance.test.ts`.
+ *
+ * `gif`/`tiff` correctly yield `['image']` alone — the metadata genuinely has no
+ * concrete group for them (verified against its actual key set, not inferred).
+ */
+function compressGroupsForToken(token: string): readonly string[] {
+  // The historical mapping, PRESERVED EXACTLY. Every verdict it produced today must
+  // keep being produced — see the note on additivity in `isPlannedValue`.
+  const legacy =
+    token === 'jpeg' ? 'image_jpeg' : token === 'png' ? 'image_png' : token === 'avif' ? 'image_avif' : 'image';
+  const specific = `image_${token}`;
+  return specific !== legacy && compressMetadata.mime_groups[specific] !== undefined
+    ? [specific, legacy]
+    : [legacy];
 }
 
 /**
@@ -201,13 +228,31 @@ function compressGroupForToken(token: string): string {
  * `compressMetadata` `per_value_availability`; same_format only (the only route
  * where value-level options like `metadata` are honored). Returns false when the
  * option / value / group is unknown (no gate).
+ *
+ * PURELY ADDITIVE (SB1wmTJz): planned if ANY consulted group marks this value planned.
+ * The historical group is still consulted, so **every verdict this returned before still
+ * holds** — the change can only turn a missed gate into a gate, never a gate into a
+ * pass. That direction matters: a new false ACCEPT would send a request the server
+ * rejects, which is the failure this function exists to prevent.
+ *
+ * Why not "most specific wins", which reads cleaner: it would flip `webp` +
+ * `color_profile: 'srgb'` from gated to un-gated, because `image_webp` defines
+ * `color_profile` with an empty `per_value_availability`. `RecipeOutputTest`
+ * deliberately pins webp srgb as GATED (v2.134 added `srgb: planned` to the generic
+ * group), and whether webp srgb actually works on the server is not something this
+ * layer can know. Un-gating it on an inference would be exactly the "confident answer
+ * from a check that could not tell you otherwise" pattern. Raised as a question instead.
+ *
+ * What this DOES fix: `image_svg` marks `output_format: 'original'` planned and the
+ * generic group does not, so an SVG input previously sailed through the one marker that
+ * mattered for it — on this gate and on the `output()` gate that shares it.
  */
 export function isPlannedValue(inputToken: string, optionKey: string, value: unknown): boolean {
-  const group = compressMetadata.mime_groups[compressGroupForToken(inputToken)];
-  const opt = group?.options[optionKey];
-  if (opt === undefined) return false;
-  const entry = opt.per_value_availability[String(value)];
-  return entry?.availability === 'planned';
+  for (const groupName of compressGroupsForToken(inputToken)) {
+    const opt = compressMetadata.mime_groups[groupName]?.options[optionKey];
+    if (opt?.per_value_availability[String(value)]?.availability === 'planned') return true;
+  }
+  return false;
 }
 
 /**

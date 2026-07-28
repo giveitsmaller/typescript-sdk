@@ -10,9 +10,11 @@ import {
   OUTPUT_OPTION_DEPENDS_ON,
   DEPENDS_ON_KEY_DEFAULTS,
   tokenForMime,
+  isPlannedValue,
 } from '../../src/ergonomic/image_output_routes.js';
 import { VERB_OPTION_KEYS } from '../../src/ergonomic/option_types.js';
 import { allowedKeysFor } from '../../src/ergonomic/option_validation.js';
+import { compressMetadata } from '@giveitsmaller/contracts/operations';
 
 /**
  * Output-route conformance guard (card YNLrGhNo).
@@ -381,4 +383,51 @@ describe('convert format_change depends_on is subsumed by the honored projection
       }
     });
   }
+});
+
+describe('group-mapping reachability pin (SB1wmTJz)', () => {
+  /**
+   * The pin that stops a FOURTH visit to this defect.
+   *
+   * `rtkzl9gr` fixed this class for the enum-membership gate and left the sibling
+   * per-value gate reading a hand-written token list whose trailing comment
+   * (`// webp / gif / svg / tiff`) was true when written and silently became false once
+   * `image_svg` and `image_webp` were added to the metadata. SVG inputs therefore missed
+   * the one marker that mattered for them — on the preset gate AND on `output()`.
+   *
+   * So this does NOT pin a token list; a token list is exactly what went stale. It
+   * asserts the PROPERTY, driven from the metadata's real groups: every planned
+   * per-value marker on a concrete `image_<token>` group must be reachable through
+   * `isPlannedValue` for that token. It exercises the shared function, so it covers
+   * EVERY gate that consults it, not just the one being fixed today.
+   */
+  it('every concrete-group marker is reachable for its token', () => {
+    let checked = 0;
+    for (const [groupName, group] of Object.entries(compressMetadata.mime_groups)) {
+      if (!groupName.startsWith('image_')) continue;
+      const token = groupName.slice('image_'.length);
+      for (const [optionKey, option] of Object.entries(group.options)) {
+        for (const [value, entry] of Object.entries(option.per_value_availability)) {
+          if (entry.availability !== 'planned') continue;
+          checked += 1;
+          expect(
+            isPlannedValue(token, optionKey, value),
+            `planned marker ${groupName}.${optionKey}=${value} is unreachable for token '${token}' — the group mapping has gone stale again`,
+          ).toBe(true);
+        }
+      }
+    }
+    // Positive control: if the metadata stops carrying concrete-group markers the loop
+    // becomes a no-op and would pass while proving nothing.
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it('the widening is additive — historical verdicts hold', () => {
+    // webp srgb stays GATED (RecipeOutputTest pins it) and jpeg srgb stays LIVE. If a
+    // future change flips either, that is a behaviour change to be argued, not absorbed.
+    expect(isPlannedValue('webp', 'color_profile', 'srgb')).toBe(true);
+    expect(isPlannedValue('jpeg', 'color_profile', 'srgb')).toBe(false);
+    // …and the marker this ticket exists for is now reachable.
+    expect(isPlannedValue('svg', 'output_format', 'original')).toBe(true);
+  });
 });

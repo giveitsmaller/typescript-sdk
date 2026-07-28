@@ -85,6 +85,24 @@ export declare function resolveOutputRoute(inputToken: string, outputFormat: str
  * `compressMetadata` `per_value_availability`; same_format only (the only route
  * where value-level options like `metadata` are honored). Returns false when the
  * option / value / group is unknown (no gate).
+ *
+ * PURELY ADDITIVE (SB1wmTJz): planned if ANY consulted group marks this value planned.
+ * The historical group is still consulted, so **every verdict this returned before still
+ * holds** — the change can only turn a missed gate into a gate, never a gate into a
+ * pass. That direction matters: a new false ACCEPT would send a request the server
+ * rejects, which is the failure this function exists to prevent.
+ *
+ * Why not "most specific wins", which reads cleaner: it would flip `webp` +
+ * `color_profile: 'srgb'` from gated to un-gated, because `image_webp` defines
+ * `color_profile` with an empty `per_value_availability`. `RecipeOutputTest`
+ * deliberately pins webp srgb as GATED (v2.134 added `srgb: planned` to the generic
+ * group), and whether webp srgb actually works on the server is not something this
+ * layer can know. Un-gating it on an inference would be exactly the "confident answer
+ * from a check that could not tell you otherwise" pattern. Raised as a question instead.
+ *
+ * What this DOES fix: `image_svg` marks `output_format: 'original'` planned and the
+ * generic group does not, so an SVG input previously sailed through the one marker that
+ * mattered for it — on this gate and on the `output()` gate that shares it.
  */
 export declare function isPlannedValue(inputToken: string, optionKey: string, value: unknown): boolean;
 /**
