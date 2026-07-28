@@ -77,6 +77,28 @@ export interface ResolveCompressOptionsOutput {
 export declare function _parseTargetSize(value: unknown): number;
 export declare const KNOWN_WIRE_FIELDS: Readonly<Record<PresetMedia, ReadonlySet<string>>>;
 /**
+ * Compress options that are `availability: planned` per mime-group, mirroring the
+ * shipped `availability/availability.json`
+ * `operations.compress.mime_groups.<group>.options.<opt>.availability`.
+ *
+ * Kept as a hand table (NOT a runtime read of the ~238KB availability sidecar) for
+ * the same reasons as {@link IMAGE_OUTPUT_ROUTES}: the gate stays browser-safe, and
+ * — decisively — it has NO dependency on which `@giveitsmaller/contracts` version a
+ * consumer resolved. A generated-metadata read would FAIL OPEN on an older published
+ * contracts (the rtkzl9gr failure mode), and fail-open is the wrong direction for a
+ * gate whose entire job is to fail closed.
+ *
+ * PINNED to `availability.json` by `tests/unit/preset-planned-conformance.test.ts`,
+ * which fails closed in BOTH directions — a contract regen that marks a new option
+ * `planned`, or unmarks one, breaks the build rather than the caller. Mirrored by PHP
+ * `PresetResolver::PLANNED_COMPRESS_OPTIONS`.
+ *
+ * `video.speed` is listed for a faithful projection even though no shipped preset
+ * cell emits it; the conformance test pins the whole projection, not just the keys
+ * we happen to use today.
+ */
+export declare const PLANNED_COMPRESS_OPTIONS: Readonly<Record<PresetMedia, ReadonlySet<string>>>;
+/**
  * Resolve the wire payload + introspection projection for a compress
  * operation call. Throws {@link GislConfigError} before any network
  * round-trip when the merged options violate a documented constraint.

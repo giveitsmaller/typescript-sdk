@@ -364,6 +364,35 @@ export const KNOWN_WIRE_FIELDS = Object.freeze({
     document_odf: new Set(['strip_metadata', 'strip_unused_styles']),
     document_epub: new Set(['font_subsetting', 'strip_unused_css']),
 });
+/**
+ * Compress options that are `availability: planned` per mime-group, mirroring the
+ * shipped `availability/availability.json`
+ * `operations.compress.mime_groups.<group>.options.<opt>.availability`.
+ *
+ * Kept as a hand table (NOT a runtime read of the ~238KB availability sidecar) for
+ * the same reasons as {@link IMAGE_OUTPUT_ROUTES}: the gate stays browser-safe, and
+ * — decisively — it has NO dependency on which `@giveitsmaller/contracts` version a
+ * consumer resolved. A generated-metadata read would FAIL OPEN on an older published
+ * contracts (the rtkzl9gr failure mode), and fail-open is the wrong direction for a
+ * gate whose entire job is to fail closed.
+ *
+ * PINNED to `availability.json` by `tests/unit/preset-planned-conformance.test.ts`,
+ * which fails closed in BOTH directions — a contract regen that marks a new option
+ * `planned`, or unmarks one, breaks the build rather than the caller. Mirrored by PHP
+ * `PresetResolver::PLANNED_COMPRESS_OPTIONS`.
+ *
+ * `video.speed` is listed for a faithful projection even though no shipped preset
+ * cell emits it; the conformance test pins the whole projection, not just the keys
+ * we happen to use today.
+ */
+export const PLANNED_COMPRESS_OPTIONS = Object.freeze({
+    image: new Set([]),
+    audio: new Set([]),
+    video: new Set(['speed']),
+    document_office: new Set(['strip_hidden_data', 'strip_macros', 'strip_unused_fonts']),
+    document_odf: new Set(['strip_metadata', 'strip_unused_styles']),
+    document_epub: new Set(['font_subsetting', 'strip_unused_css']),
+});
 function validateMerged(media, merged, explicitKeys, winners) {
     // Unknown-field defence-in-depth: every key must belong to the
     // media's wire surface OR be one of the resolver-derived wire keys
@@ -571,6 +600,26 @@ export function resolveCompressOptions(input) {
     if (media === 'audio' && audioLossless === true && acc.winners.get('bitrate') === 'sdkDefault') {
         delete acc.merged.bitrate;
         acc.winners.delete('bitrate');
+    }
+    // A shipped preset must never put an `availability: planned` option on the wire.
+    // The API rejects a planned option when the KEY IS PRESENT and ignores it when
+    // absent (`CreateWorkflowCommandHandler::recordPlannedFromMap` — a materialized
+    // default deliberately does NOT trigger it), so a value WE synthesized becomes a
+    // 422 `feature_not_available` at create that the caller never asked for. That is
+    // what broke every document compress with an `optimizeFor` in 0.21.0 (5Eksm9s7).
+    //
+    // Drop ONLY the sdkDefault-sourced ones. A planned option from any other layer is
+    // a caller choice — `clientDefault` and `scopedDefault` are user-registered via
+    // `gisl.create({ presetDefaults })` / `client.withPresetDefaults(...)`, not baked
+    // in by us — and is left in place for the server to refuse honestly. Same rule and
+    // same reason as the lossless-bitrate drop above: never silently swallow a key the
+    // caller chose. Do NOT "simplify" either of these into an always-drop; a silent
+    // no-op on an explicit request is worse than an honest 422.
+    for (const key of PLANNED_COMPRESS_OPTIONS[media]) {
+        if (acc.winners.get(key) === 'sdkDefault') {
+            delete acc.merged[key];
+            acc.winners.delete(key);
+        }
     }
     // 7. Validate the merged payload (post-merge — catches cross-layer
     // disagreements). May throw GislConfigError with resolvedSnapshot.

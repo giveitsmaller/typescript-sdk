@@ -151,6 +151,29 @@ export interface MergeOptions {
   readonly preset?: string;
   /** Video output dimensions `WxH` (e.g. `"1920x1080"`); omit to inherit from inputs. Video merge only. */
   readonly targetResolution?: string;
+  /**
+   * Target output size (bytes, or a `'50MB'`-style string). Lowered to wire
+   * `target_size_bytes`, and the SDK also sets `encoding_mode: 'target_size'` alongside
+   * it. Video merge only.
+   *
+   * **UNITS ARE DECIMAL HERE (1 KB = 1000), UNLIKE `compress`.** `compress`'s
+   * `targetSize` parses the same strings as BINARY (1 KB = 1024), so `'50MB'` means
+   * 50,000,000 bytes on a merge and 52,428,800 bytes on a compress. That divergence is
+   * NOT deliberate — it contradicts the pinned convention that every human-readable
+   * size string in this SDK is binary — and it has a sharp edge: the contract floor for
+   * `target_size_bytes` is 1 MiB (1,048,576), so `'1MB'` here resolves to 1,000,000 and
+   * is rejected as below the minimum. Prefer an explicit byte count until this is
+   * reconciled. Tracked by `YOCz0i74`; changing it moves bytes for existing callers, so
+   * it is a deliberate decision rather than a silent correction.
+   *
+   * **NOT AVAILABLE FOR LONG INPUTS.** Merges whose summed input duration routes to
+   * the long-form Fargate path reject both keys — that path is single-pass-CRF by
+   * construction and two-pass target-size is unbuilt. The request fails during
+   * execution, and the SDK cannot warn earlier: the routing decision is made
+   * server-side at create-plan time, so there is nothing here to check it against.
+   * Short-form merges honour it normally. Tracked by `zJN6XIi5`, blocked on a
+   * contract that can express per-execution-path availability.
+   */
   readonly targetSize?: string | number;
   readonly transitionDuration?: number;
   readonly fps?: number;
