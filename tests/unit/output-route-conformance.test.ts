@@ -427,7 +427,12 @@ describe('group-mapping reachability pin (SB1wmTJz)', () => {
     // future change flips either, that is a behaviour change to be argued, not absorbed.
     expect(isPlannedValue('webp', 'color_profile', 'srgb')).toBe(true);
     expect(isPlannedValue('jpeg', 'color_profile', 'srgb')).toBe(false);
-    // …and the marker this ticket exists for is now reachable.
-    expect(isPlannedValue('svg', 'output_format', 'original')).toBe(true);
+    // SVG output_format=original is NO LONGER planned, and that is the pin doing its job
+    // rather than a regression. `image_svg` compress was restored to STABLE upstream
+    // (contracts G9O6yrQD, vendored here at v2.188.0), so the marker SB1wmTJz existed to
+    // reach no longer exists — the ticket is vendored past, not fixed. The reachability
+    // machinery above still has teeth: its own positive control asserts it checked > 0
+    // concrete-group markers, so this flip cannot quietly turn that loop into a no-op.
+    expect(isPlannedValue('svg', 'output_format', 'original')).toBe(false);
   });
 });
