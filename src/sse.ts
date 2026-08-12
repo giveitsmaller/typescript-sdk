@@ -114,7 +114,55 @@ export async function* parseSseStream(
         }
 
         if (line.startsWith(':')) {
-          // Comment line (keep-alive), skip
+          // Comment line (keep-alive), skip.
+          //
+          // ⚠️ DO NOT "FIX" THIS INTO SURFACING COMMENT FRAMES WITHOUT READING
+          // THIS. Dropping them is CORRECT per the SSE spec — a comment carries
+          // no event — but it is also LOAD-BEARING FOR A CONSUMER, and that
+          // consumer is in another repo.
+          //
+          // The frontend does NOT close its SSE reader on the terminal event:
+          // `workflow_completed` patches status and breaks WITHOUT aborting.
+          // What actually closes the stream is an IDLE WATCHDOG at 20s. That
+          // watchdog only fires because heartbeats are never yielded here, so
+          // they never re-arm it — roughly 20s after the last real event the
+          // reader closes and the PHP worker is released.
+          //
+          // HEARTBEAT ~16s vs IDLE TIMEOUT 20s: a FOUR-SECOND MARGIN that holds
+          // only while the heartbeats are invisible. Surfacing comment frames —
+          // a completely reasonable change, since EventSource semantics treat
+          // keep-alive comments as liveness signals that legitimately reset
+          // timeouts — would CONTINUOUSLY re-arm the watchdog. The stream would
+          // never go idle, and every completed job left on screen would hold a
+          // PHP worker for the full 570s. That is worker exhaustion from
+          // ordinary users leaving tabs open.
+          //
+          // A ONE-LINE CHANGE HERE SILENTLY CONVERTS THE FRONTEND FROM BOUNDED
+          // TO UNBOUNDED, and nothing on either side would flag it.
+          //
+          // ⚠️ THIS NOTE IS PERMANENT. DO NOT DELETE IT WHEN THE FRONTEND
+          // ADDS AN EXPLICIT CLOSE-ON-TERMINAL. That fix removes the TERMINAL
+          // case and does NOT remove the dependency, because closing finished
+          // streams was never the watchdog's job — that was a side effect
+          // nobody knew about until 2026-08-12.
+          //
+          // THE WATCHDOG'S ACTUAL JOB IS DETECTING A STREAM THAT HAS GONE
+          // SILENT WHILE THE WORKFLOW IS STILL RUNNING, and resuming the
+          // fallback poll. That case survives every fix in flight, and it is
+          // not exotic: a long operation between progress events produces it
+          // exactly — heartbeats flowing, no data frames, job still running.
+          //
+          // If this parser surfaced comment frames, heartbeats at ~16s would
+          // re-arm the 20s watchdog FOREVER and STALL DETECTION WOULD NEVER
+          // FIRE AT ALL, on a stream that is genuinely stuck. The UI would go
+          // on believing a dead job is fine. That is worse than the worker
+          // leak: a leak is bounded by 570s, a missed stall is not bounded at
+          // all.
+          //
+          // The PHP SDK does the same thing at GislClient.php (`$line[0] === ':'`),
+          // verified 2026-08-12 — the two languages agree on this axis, and
+          // they must stay agreed: this property governs whether a stuck
+          // stream is EVER detected, so a divergence here is not cosmetic.
           continue;
         }
 
