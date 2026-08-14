@@ -66,12 +66,22 @@ Live progress is served from a **separate host** to the rest of the API, and tha
 
 | what you are doing | works? |
 |---|---|
-| Uploads, workflow create, status, downloads | **Yes** — these stay on the main API host, which is not origin-restricted |
+| Uploads, workflow create, status, downloads | **Yes** — these stay on the main API host, which allows a **list** of origins (per environment) |
 | `streamEvents()` / SSE progress | **No** — blocked at the CORS preflight |
 
 **Affected consumers:** third-party sites embedding the SDK, embedded/iframe use, and **local
 development against staging** — which is the one most likely to bite first, because it looks like a
 bug in your code.
+
+⚠️ **Local dev against staging is the sharp edge, and the reason is worth stating:** the two hosts
+have *different* CORS policies, for a platform reason rather than an oversight. The main API host
+allows a **list** of origins — and the **staging** list includes the usual localhost dev ports — so a
+browser on `localhost` works against staging today. The stream host allows exactly **one** origin,
+because it is a different API product with no native CORS configuration and nowhere to put a second
+value. So everything keeps working right up until live progress, and then fails with a CORS error —
+which reads like a mistake in your own application rather than a platform limitation.
+
+**Production allows only the production web app on both hosts**, and always has.
 
 **Workaround:** pass `useSSE: false` to `run()`. The SDK falls back to polling, which goes to the
 main API host and is unaffected. Everything else about the call is identical.
@@ -81,6 +91,11 @@ forbids combining `Access-Control-Allow-Credentials: true` with `Access-Control-
 The header also accepts exactly one origin — a comma-separated list is not valid. Supporting more
 origins requires the server to validate and echo the request's `Origin`, which is planned but not
 shipped.
+
+**On authentication:** prefer an API key (`bearerAuth`) or the anonymous capability token on the
+stream host. Cookie/session auth is accepted by the endpoint but a *credentialed cross-origin*
+request additionally needs the browser to opt in and the server to answer with matching credential
+headers — cookie domain scope alone is not sufficient, and this path is not verified.
 
 **Node consumers are unaffected** — CORS is a browser mechanism. The PHP SDK is unaffected for the
 same reason.
