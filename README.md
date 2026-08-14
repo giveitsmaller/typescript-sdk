@@ -56,6 +56,39 @@ for (const artifact of many.artifacts) console.log(artifact.url);
 > only under the same auth that created it; the upload-then-create flow above is
 > consistent by construction. Anonymous-intake uploads are unaffected.
 
+## Known limitation — browser SSE is restricted to one origin
+
+**Applies to the browser build only** (`@giveitsmaller/sdk/browser`), and **only to live progress
+streaming** — `streamEvents()`, and the `run({ useSSE: true })` default that uses it.
+
+Live progress is served from a **separate host** to the rest of the API, and that host allows
+**exactly one browser origin**: the Give It Smaller web app. So from a browser on any other origin:
+
+| what you are doing | works? |
+|---|---|
+| Uploads, workflow create, status, downloads | **Yes** — these stay on the main API host, which is not origin-restricted |
+| `streamEvents()` / SSE progress | **No** — blocked at the CORS preflight |
+
+**Affected consumers:** third-party sites embedding the SDK, embedded/iframe use, and **local
+development against staging** — which is the one most likely to bite first, because it looks like a
+bug in your code.
+
+**Workaround:** pass `useSSE: false` to `run()`. The SDK falls back to polling, which goes to the
+main API host and is unaffected. Everything else about the call is identical.
+
+**Why it cannot simply be widened:** the stream is cookie-credentialed, and the CORS specification
+forbids combining `Access-Control-Allow-Credentials: true` with `Access-Control-Allow-Origin: *`.
+The header also accepts exactly one origin — a comma-separated list is not valid. Supporting more
+origins requires the server to validate and echo the request's `Origin`, which is planned but not
+shipped.
+
+**Node consumers are unaffected** — CORS is a browser mechanism. The PHP SDK is unaffected for the
+same reason.
+
+> ⚠️ This limitation is invisible to automated testing: our own app's origin is allowed, so every
+> test and canary we run passes while a consumer on another origin fails. It is written here because
+> nothing else would tell you.
+
 ## Documentation
 
 Full documentation — getting started and concepts, the `GislClient` reference and operation
