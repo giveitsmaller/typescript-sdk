@@ -123,6 +123,34 @@ describe('parseSseStream', () => {
     expect(events[0].event).toBe('job.completed');
   });
 
+  // ⚠️ CROSS-REPO GUARD — this is NOT a duplicate of 'ignores comment lines'
+  // above. That one proves a comment beside a real event does not corrupt it.
+  // THIS one pins the property another repo's correctness rests on: a stream
+  // carrying ONLY heartbeats must yield NOTHING AT ALL.
+  //
+  // The frontend detects a stalled workflow with a ~20s idle watchdog that is
+  // re-armed by every YIELDED event. Server heartbeats arrive at ~16s. If this
+  // parser ever surfaced comment frames, they would re-arm that watchdog
+  // forever and STALL DETECTION WOULD NEVER FIRE — a genuinely stuck job would
+  // look healthy indefinitely. The same silence also bounds their
+  // stale-terminal window to ~20s instead of the SSE deadline.
+  //
+  // Surfacing heartbeats is a REASONABLE change to make — it is the obvious way
+  // to give SDK consumers liveness/idle detection, which this SDK does not have
+  // (there is no idle watchdog here; recovery waits for the server close). So
+  // the change will be proposed, it will look like a pure improvement, and
+  // NOTHING IN EITHER REPO WOULD FAIL. Hence a test, not a comment: the note at
+  // src/sse.ts:120-166 explains why, and this asserts it.
+  //
+  // If you need liveness in this SDK, add it WITHOUT changing what the iterator
+  // yields (a separate callback or a client-level timer), or tell the frontend
+  // before it ships so they can decouple their watchdog first.
+  it('yields NOTHING for a heartbeat-only stream (frontend stall detection depends on this)', async () => {
+    const response = makeResponse(': keep-alive\n\n: keep-alive\n\n: keep-alive\n\n');
+    const events = await collectEvents(response);
+    expect(events).toHaveLength(0);
+  });
+
   it('handles events split across chunk boundaries', async () => {
     const response = makeChunkedResponse([
       'event: operation.pro',
