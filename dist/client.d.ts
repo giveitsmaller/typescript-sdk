@@ -13,6 +13,13 @@ export interface ValidationDetail {
 }
 export declare class GislClient {
     private readonly baseUrl;
+    /**
+     * Declared SSE stream host, or `null` when nothing declares one for this
+     * configuration. `null` is a legitimate state, not a misconfiguration —
+     * see `streamEvents`, which fails closed on it rather than falling back to
+     * `baseUrl`.
+     */
+    private readonly streamBaseUrl;
     private readonly headers;
     private readonly timeoutMs;
     private readonly multipartThreshold;

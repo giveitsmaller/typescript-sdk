@@ -74,23 +74,26 @@ development against staging** — which is the one most likely to bite first, be
 bug in your code.
 
 ⚠️ **Local dev against staging is the sharp edge, and the reason is worth stating:** the two hosts
-have *different* CORS policies, for a platform reason rather than an oversight. The main API host
-allows a **list** of origins — and the **staging** list includes the usual localhost dev ports — so a
-browser on `localhost` works against staging today. The stream host allows exactly **one** origin,
-because it is a different API product with no native CORS configuration and nowhere to put a second
-value. So everything keeps working right up until live progress, and then fails with a CORS error —
-which reads like a mistake in your own application rather than a platform limitation.
+have *different* CORS policies today. The main API host allows a **list** of origins — and the
+**staging** list includes the usual localhost dev ports — so a browser on `localhost` works against
+staging today. The stream host is configured with exactly **one** origin. So everything keeps
+working right up until live progress, and then fails with a CORS error — which reads like a mistake
+in your own application rather than a deployment setting.
 
 **Production allows only the production web app on both hosts**, and always has.
 
 **Workaround:** pass `useSSE: false` to `run()`. The SDK falls back to polling, which goes to the
 main API host and is unaffected. Everything else about the call is identical.
 
-**Why it cannot simply be widened:** the stream is cookie-credentialed, and the CORS specification
-forbids combining `Access-Control-Allow-Credentials: true` with `Access-Control-Allow-Origin: *`.
-The header also accepts exactly one origin — a comma-separated list is not valid. Supporting more
-origins requires the server to validate and echo the request's `Origin`, which is planned but not
-shipped.
+**Why it is not a one-line config change — and why it is NOT impossible.** An earlier version of
+this section said multi-origin support could not be done on this host. **That was wrong, and it is
+corrected here.** What is true: `Access-Control-Allow-Origin` accepts exactly one origin (a
+comma-separated list is not valid), and because the stream can be cookie-credentialed, the CORS
+specification also forbids answering `*` alongside `Access-Control-Allow-Credentials: true`. What
+does **not** follow is that more origins are unreachable. The server can validate the request's
+`Origin` and echo it back, which is how every multi-origin credentialed endpoint works. That is a
+**change somebody has to build and get right**, not a platform prohibition — so treat this as
+unshipped work with its own correctness risk, not as a closed door.
 
 **On authentication:** prefer an API key (`bearerAuth`) or the anonymous capability token on the
 stream host. Cookie/session auth is accepted by the endpoint but a *credentialed cross-origin*
@@ -103,6 +106,36 @@ same reason.
 > ⚠️ This limitation is invisible to automated testing: our own app's origin is allowed, so every
 > test and canary we run passes while a consumer on another origin fails. It is written here because
 > nothing else would tell you.
+
+## Pointing the event stream at its own host
+
+Live progress is served from a **second host**, separate from `baseUrl`. The SDK reads that host
+from the contract's declaration — it **never derives** `stream.*` from `api.*`.
+
+```ts
+// Resolved from the environment's declared stream host.
+const client = await gisl.create({ apiKey, environment: 'staging' });
+
+// Or point it explicitly. This moves the STREAM only — uploads, workflow-create
+// and downloads still go to baseUrl.
+const client = await gisl.create({
+  apiKey,
+  environment: 'staging',
+  streamBaseUrl: 'https://stream.example.com',
+});
+```
+
+`GISL_STREAM_BASE_URL` does the same thing from the environment. Precedence matches `baseUrl`:
+explicit argument, then `environment`, then the env var.
+
+⚠️ **If nothing declares a stream host, the SDK does not fall back to `baseUrl`.** `streamEvents()`
+throws `GislStreamHostNotDeclaredError` (a `GislConfigError`), and `run()` silently uses polling
+instead, which is a working transport. **This is deliberate.** Guessing the stream host from the API
+host is a convention, and the last time a client did that it streamed into a gateway that cannot
+stream, invisibly — a silent fallback looks exactly like a working one.
+
+**Production has no declared stream host yet**, so a production configuration takes the poll path
+today. Pass `streamBaseUrl` explicitly if you have one.
 
 ## Documentation
 

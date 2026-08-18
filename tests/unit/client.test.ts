@@ -37,6 +37,11 @@ describe('GislClient', () => {
     client = new GislClient({
       baseUrl: 'https://api.example.com',
       apiKey: 'test-key',
+      // VUozk5Bc — the SSE stream lives on a second host and is NEVER derived
+      // from `baseUrl`. The shared fixture declares one so the streamEvents
+      // cases below exercise the parser rather than the fail-closed guard;
+      // the guard itself is proved in `tests/unit/stream-host.test.ts`.
+      streamBaseUrl: 'https://stream.example.com',
     });
     fetchSpy = vi.fn();
     vi.stubGlobal('fetch', fetchSpy);

@@ -20,6 +20,7 @@ import { GislConfigError } from './errors.js';
 export const GISL_API_KEY_ENV = 'GISL_API_KEY';
 export const GISL_BASE_URL_ENV = 'GISL_BASE_URL';
 export const GISL_ENVIRONMENT_ENV = 'GISL_ENVIRONMENT';
+export const GISL_STREAM_BASE_URL_ENV = 'GISL_STREAM_BASE_URL';
 /**
  * Named environments → base URLs. Kept colocated with the resolver so the
  * mapping table doesn't leak into `gisl.ts`.
@@ -29,6 +30,44 @@ export const ENVIRONMENT_ENDPOINTS = {
     staging: 'https://api.staging.giveitsmaller.com',
 };
 export const DEFAULT_ENDPOINT = ENVIRONMENT_ENDPOINTS.prod;
+/**
+ * Named environments → **SSE stream host**. A SECOND host, deliberately
+ * separate from {@link ENVIRONMENT_ENDPOINTS}: the API host fronts an
+ * integration with no response-streaming mode, so the event stream lives on
+ * its own public entry point.
+ *
+ * ⚠️ **DECLARED, NEVER DERIVED.** This table exists because the alternative —
+ * transforming `api.*` into `stream.*` by string surgery — is a *convention*,
+ * and a convention is exactly what put production on the gateway path: the
+ * frontend's prod build had no `VITE_SSE_BASE_URL`, silently fell back to the
+ * API host, and nobody could see it. A host is a fact somebody states, not a
+ * pattern somebody guesses.
+ *
+ * PINNED to the generated `availability.json`
+ * `endpoints['GET /api/workflows/{id}/events'].servers` by
+ * `tests/unit/stream-host-conformance.test.ts`, which fails **closed**: if the
+ * contract declares a host this table does not carry (or vice versa), the
+ * build breaks. Hand-maintained rather than read at runtime because the SDK
+ * ships a browser entry point and does not load `availability.json` — the same
+ * table+conformance shape used by `COMPRESS_OPTION_VALUES`,
+ * `OUTPUT_OPTION_DEPENDS_ON`, the preset planned gate and the watermark gate.
+ *
+ * ⚠️ **THERE IS NO `prod` ENTRY, AND ITS ABSENCE IS THE CONTRACT'S, NOT AN
+ * OVERSIGHT HERE.** The contract's `servers` block for the stream operation
+ * carries localhost and staging only; contracts deliberately did not invent a
+ * production URL. Until it is declared, a production configuration has **no
+ * stream host** and {@link resolveStreamEndpoint} returns `null` — see
+ * `GislClient.streamEvents`, which fails closed rather than quietly reusing
+ * `baseUrl`. Add `prod` here in the same change that vendors the contract
+ * entry, never ahead of it.
+ *
+ * `localhost` is intentionally absent too: it is declared in the contract as a
+ * development server, but there is no `localhost` *environment* name to key it
+ * off. Local callers pass `{streamBaseUrl}` or set `GISL_STREAM_BASE_URL`.
+ */
+export const ENVIRONMENT_STREAM_ENDPOINTS = {
+    staging: 'https://stream.staging.giveitsmaller.com',
+};
 // ---------------------------------------------------------------------------
 // Public resolvers
 // ---------------------------------------------------------------------------
@@ -104,6 +143,70 @@ export function resolveEndpoint(opts = {}) {
         }
     }
     return DEFAULT_ENDPOINT;
+}
+/**
+ * Resolve the **SSE stream host**, or `null` when no host is declared for this
+ * configuration. Explicit `streamBaseUrl` wins; otherwise an explicit
+ * `environment` name; otherwise `GISL_STREAM_BASE_URL`; otherwise the
+ * `GISL_ENVIRONMENT` env var.
+ *
+ * ⚠️ **RETURNS `null` RATHER THAN FALLING BACK TO `baseUrl`, AND THAT IS THE
+ * WHOLE POINT OF THIS FUNCTION.** Deriving the stream host from the API host
+ * would reproduce, inside a published SDK, the exact failure this resolver
+ * exists to prevent: prod had no stream host configured, fell back to the API
+ * host by convention, and landed on the gateway path where the stream cannot
+ * work. A silent fallback is not a lenient control — it is the absence of one
+ * wearing the control's name. Callers decide what `null` means; see
+ * `GislClient.streamEvents`, which fails closed and names the missing
+ * declaration.
+ *
+ * Unlike {@link resolveEndpoint}, there is no default: prod has no declared
+ * stream host yet (see {@link ENVIRONMENT_STREAM_ENDPOINTS}), so a default
+ * could only be a guess.
+ *
+ * Throws `GislConfigError` on an unknown explicit `environment` name — the
+ * same fail-closed behaviour as {@link resolveEndpoint}, for the same reason
+ * (a typo must not silently re-route a stream).
+ */
+export function resolveStreamEndpoint(opts = {}) {
+    // TRIM BEFORE THE PRESENCE CHECK. A whitespace-only value is unset (the
+    // client normaliser treats it that way too), and if it were allowed to
+    // count as "supplied" here it would SUPPRESS the environment's declared
+    // host and then normalise to nothing — silently disabling a stream that
+    // was perfectly well declared. codex a7f5ec9f0d32.
+    const explicit = opts.streamBaseUrl?.trim() ?? '';
+    if (explicit !== '') {
+        return explicit;
+    }
+    if (typeof opts.environment === 'string') {
+        if (!(opts.environment in ENVIRONMENT_ENDPOINTS)) {
+            throw new GislConfigError(`Unknown environment '${opts.environment}'. Valid values: ${Object.keys(ENVIRONMENT_ENDPOINTS).join(', ')}.`);
+        }
+        // A KNOWN environment with no declared stream host resolves to `null`, not
+        // to an error and not to `baseUrl`. That is today's `prod`: the config is
+        // valid, the declaration is simply missing upstream.
+        return ENVIRONMENT_STREAM_ENDPOINTS[opts.environment] ?? null;
+    }
+    const envStreamBaseUrl = readEnv(GISL_STREAM_BASE_URL_ENV);
+    if (envStreamBaseUrl !== null && envStreamBaseUrl.length > 0) {
+        return envStreamBaseUrl;
+    }
+    const envEnvironment = readEnv(GISL_ENVIRONMENT_ENV);
+    if (envEnvironment !== null) {
+        const envMapped = ENVIRONMENT_STREAM_ENDPOINTS[envEnvironment];
+        if (envMapped !== undefined) {
+            return envMapped;
+        }
+    }
+    return null;
+}
+/**
+ * Human-readable list of the environments that currently declare a stream
+ * host. Used in the fail-closed error message so the caller is told what IS
+ * available rather than only what is missing.
+ */
+export function declaredStreamEnvironments() {
+    return Object.keys(ENVIRONMENT_STREAM_ENDPOINTS);
 }
 // ---------------------------------------------------------------------------
 // Internals

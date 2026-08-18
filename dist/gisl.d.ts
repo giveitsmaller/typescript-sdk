@@ -41,7 +41,7 @@ import { Handle } from './handle.js';
  * @internal
  */
 export declare const ANONYMOUS_ALLOWLIST: readonly [];
-export interface GislCreateOptions extends ResolveCredentialsOptions, ResolveEndpointOptions, Omit<GislClientConfig, 'baseUrl' | 'apiKey' | 'useSessionCookie'> {
+export interface GislCreateOptions extends ResolveCredentialsOptions, ResolveEndpointOptions, Omit<GislClientConfig, 'baseUrl' | 'apiKey' | 'useSessionCookie' | 'streamBaseUrl'> {
     /**
      * Layered ergonomic preset defaults (T4a / VhIj4S7T). Built via
      * `presetDefaults().<cell>(level, overrides?)…`. The resolver wiring

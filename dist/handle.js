@@ -32,7 +32,7 @@
  *
  * Mirrors the PHP `Gisl\Sdk\Ergonomic\Handle` + `Gisl\Sdk\Ergonomic\StatusSnapshot`.
  */
-import { GislConfigError, GislNetworkError, GislResultNotReadyError, GislTimeoutError, SseEndedWithoutTerminal, } from './errors.js';
+import { GislConfigError, GislNetworkError, GislResultNotReadyError, GislTimeoutError, GislStreamHostNotDeclaredError, SseEndedWithoutTerminal, } from './errors.js';
 import { _consumeSseToTerminal, _pollToTerminal, _parseMaxWait, } from './builder.js';
 import { projectDownloadsToRunResult, projectMultiJobToRunResult, isFanoutStatus, isMergeStatus, isArchiveStatus, isWatermarkStatus, isSoleOpChainStatus, soleOpChainDeliverableRef, _POST_STEP_JOB_REF, } from './file-first.js';
 import { LazyHttpDownloader } from './lazy-downloader.js';
@@ -172,7 +172,17 @@ export class Handle {
             // (GislNetworkError). Everything else (timeout, abort, API, an onProgress
             // callback throw, anything unexpected) MUST propagate — re-issuing the same
             // doomed request via poll would mask the real failure.
-            if (!(err instanceof SseEndedWithoutTerminal || err instanceof GislNetworkError)) {
+            if (!(err instanceof SseEndedWithoutTerminal ||
+                err instanceof GislNetworkError ||
+                // VUozk5Bc: no stream host is DECLARED for this configuration (today,
+                // any production config — the contract declares stream `servers` for
+                // localhost and staging only). That is not a failure to recover from,
+                // it is SSE being unavailable here, and polling is a working
+                // transport. Failing hard instead would strand every caller on a host
+                // nobody has declared yet. A DIRECT `streamEvents` caller still gets
+                // the hard error — they asked for the stream specifically; a `run()`
+                // caller asked for a result.
+                err instanceof GislStreamHostNotDeclaredError)) {
                 throw err;
             }
             finalStatus = await _pollToTerminal(client, {

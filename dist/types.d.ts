@@ -2,6 +2,24 @@ import type { OperationType, OperationsSchemaResponse, OperationCapability, Outp
 import type { JobInputV2RoleEnum, NotifyConfig } from '@giveitsmaller/contracts/openapi';
 export interface GislClientConfig {
     baseUrl: string;
+    /**
+     * Host for the **SSE event stream** (`streamEvents`). The stream is served
+     * from a SECOND public entry point, separate from `baseUrl`: the API host
+     * fronts an integration with no response-streaming mode.
+     *
+     * Setting this moves the stream and **nothing else** — uploads,
+     * workflow-create and downloads keep using `baseUrl`. That is the reason it
+     * exists as its own field rather than being expressed by overriding
+     * `baseUrl`, which moves every call.
+     *
+     * When omitted, `gisl.create()` resolves it from the `environment` against
+     * the contract-declared stream hosts. It is **never derived from `baseUrl`**
+     * — if nothing declares a stream host for your configuration, `streamEvents`
+     * throws `GislStreamHostNotDeclaredError` rather than silently reusing the
+     * API host, and `run()` falls back to polling. See
+     * `ENVIRONMENT_STREAM_ENDPOINTS`.
+     */
+    streamBaseUrl?: string;
     apiKey?: string;
     headers?: Record<string, string>;
     timeout?: number;

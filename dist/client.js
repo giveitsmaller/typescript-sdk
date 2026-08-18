@@ -5,7 +5,11 @@
 // dynamic one) so `vi.mock('node:fs/promises')` still intercepts it in tests.
 import { open, stat, basename } from './node-fs.js';
 import { AudioWatermarkDecodeRequestToJSON, AudioWatermarkDecodeResponseFromJSON, ExternalImportCreatedResponseFromJSON, ExternalImportRequestToJSON, LoginUser200ResponseDataFromJSON, AccountLimitsFromJSON, CreditsBalanceResponseFromJSON, CreditsUsageResponseFromJSON, UploadResponseFromJSON, UploadProbeResponseFromJSON, MultipartInitiateResponseFromJSON, MultipartInitiateRequestMetadataHintToJSON, MultipartCompleteResponseFromJSON, MultipartCompleteRequestToJSON, WorkflowCancelResponseFromJSON, WorkflowCreateResponseFromJSON, WorkflowResumeResponseFromJSON, WorkflowStatusResponseFromJSON, WorkflowListResponseFromJSON, WorkflowDownloadResponseFromJSON, MetadataResponseFromJSON, OperationsSchemaResponseFromJSON, RetryResponseFromJSON, WorkflowStatus, AuthErrorResponseFromJSON, AuthErrorType, AuthRejectionEnvelopeFromJSON, AuthRejectionEnvelopeErrorTypeEnum, BalanceExhaustedResponseFromJSON, BalanceExhaustedResponseRequiredActionEnum, FeatureNotAvailableResponseFromJSON, FeatureTierRestrictedResponseFromJSON, LongFormConcurrencyLimitResponseFromJSON, TierRestrictionKind, TierRestrictionResponseFromJSON, UserTier, WorkflowExpiredResponseFromJSON, ProbePendingResponseFromJSON, UploadSizeExceedsTierResponseFromJSON, UploadDurationExceedsTierResponseFromJSON, UploadConstraintsAppliedProcessingClassPreAssignmentEnum, UploadThresholdsSingleShotMaxBytesEnum, UploadThresholdsMultipartChunkSizeEnum, UploadThresholdsMultipartConcurrencyDefaultEnum, } from '@giveitsmaller/contracts/openapi';
-import { GislAbortError, GislApiError, GislAuthError, GislAuthRejectionError, GislBalanceExhaustedError, GislError, GislFeatureNotAvailableError, GislFeatureTierRestrictedError, GislLongFormConcurrencyError, GislMultipartPartCountError, GislMultipartPartError, GislMultipartSessionNotFoundError, GislMultipartSessionOwnershipError, GislMultipartSessionAuthRequiredError, GislTierRestrictedError, GislTimeoutError, GislProbePendingError, GislUploadCapExceededError, GislValidationError, GislWorkflowExpiredError, } from './errors.js';
+import { GislAbortError, GislApiError, GislAuthError, GislAuthRejectionError, GislBalanceExhaustedError, GislConfigError, GislError, GislFeatureNotAvailableError, GislFeatureTierRestrictedError, GislLongFormConcurrencyError, GislMultipartPartCountError, GislMultipartPartError, GislMultipartSessionNotFoundError, GislMultipartSessionOwnershipError, GislMultipartSessionAuthRequiredError, GislTierRestrictedError, GislTimeoutError, GislProbePendingError, GislStreamHostNotDeclaredError, GislUploadCapExceededError, GislValidationError, GislWorkflowExpiredError, } from './errors.js';
+// Stream-host vocabulary for the fail-closed `streamEvents` guard. The
+// resolver itself runs in `gisl.create()`; the client only reports what a
+// caller can do about an absent host.
+import { declaredStreamEnvironments, GISL_STREAM_BASE_URL_ENV, } from './credentials.js';
 // The `Retry-After` millisecond parser lives in the shared retry-metadata
 // module (extracted to break the client ↔ errors circular import); re-imported
 // here so the retry-loop timing stays byte-identical.
@@ -350,8 +354,60 @@ function fileByteSource(path, size) {
         },
     };
 }
+/**
+ * Normalise a configured stream host to an absolute origin, or `null` when
+ * none was supplied. Trailing slashes are stripped so path concatenation does
+ * not double-separate.
+ *
+ * ⚠️ **A PRESENT-BUT-MALFORMED VALUE THROWS RATHER THAN DEGRADING TO `null`,
+ * and the distinction is deliberate.** Absent means "nobody declared one" — a
+ * legitimate state that `run()` handles by polling. A caller who passed
+ * `'/'` or `'stream.example.com'` did declare one, and got it wrong.
+ * Quietly converting that to "absent" would send their stream somewhere they
+ * did not choose (a bare `'/'` normalises to `''`, which concatenates into a
+ * RELATIVE url) and hand them a poll they never asked for — the silent
+ * degradation this whole mechanism exists to refuse, one layer further down.
+ *
+ * An empty OR WHITESPACE-ONLY string is treated as unset — the two are
+ * indistinguishable in intent — matching how `locale` handles `''` elsewhere in
+ * this config.
+ */
+function normaliseStreamBaseUrl(value) {
+    if (value === undefined)
+        return null;
+    const trimmed = value.trim();
+    if (trimmed === '')
+        return null;
+    let parsed;
+    try {
+        parsed = new URL(trimmed);
+    }
+    catch {
+        throw new GislConfigError(`streamBaseUrl must be an absolute http(s) URL (e.g. https://stream.example.com); got '${value}'.`);
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        throw new GislConfigError(`streamBaseUrl must use http or https; got protocol '${parsed.protocol}' in '${value}'.`);
+    }
+    // A query or fragment cannot survive path concatenation: the events path
+    // is appended as a STRING, so `https://host?token=x` would request `/`
+    // with the whole events path buried inside the query value. Rejecting is
+    // right rather than stripping — a caller who put a token there meant it to
+    // be sent, and silently dropping it would fail later and further away.
+    // codex 5793a3be0f7b.
+    if (parsed.search !== '' || parsed.hash !== '') {
+        throw new GislConfigError(`streamBaseUrl must not carry a query or fragment (the events path is appended to it); got '${value}'.`);
+    }
+    return trimmed.replace(/\/+$/, '');
+}
 export class GislClient {
     baseUrl;
+    /**
+     * Declared SSE stream host, or `null` when nothing declares one for this
+     * configuration. `null` is a legitimate state, not a misconfiguration —
+     * see `streamEvents`, which fails closed on it rather than falling back to
+     * `baseUrl`.
+     */
+    streamBaseUrl;
     headers;
     timeoutMs;
     multipartThreshold;
@@ -361,6 +417,11 @@ export class GislClient {
     useSessionCookie;
     constructor(config) {
         this.baseUrl = config.baseUrl.replace(/\/+$/, '');
+        // NOT defaulted to `baseUrl`. An absent stream host stays absent so
+        // `streamEvents` can fail closed and name the missing declaration; a
+        // default here would be the silent derivation this whole mechanism exists
+        // to prevent, hidden one layer deeper than the resolver.
+        this.streamBaseUrl = normaliseStreamBaseUrl(config.streamBaseUrl);
         this.timeoutMs = config.timeout ?? DEFAULT_TIMEOUT_MS;
         this.useSessionCookie = config.useSessionCookie ?? false;
         // Floor the threshold at the first-chunk size: the multipart initiate
@@ -399,7 +460,7 @@ export class GislClient {
         if (opts.signal?.aborted) {
             throw new GislAbortError(`Request to ${method} ${path} aborted`);
         }
-        const url = `${this.baseUrl}${path}`;
+        const url = `${opts.baseUrl ?? this.baseUrl}${path}`;
         const headers = { ...this.headers, ...opts.headers };
         let body;
         if (opts.json !== false && opts.body && !(opts.body instanceof FormData)) {
@@ -1748,6 +1809,25 @@ export class GislClient {
      */
     async streamEvents(workflowId, opts = {}) {
         const eventsPath = `/api/workflows/${encodeURIComponent(workflowId)}/events`;
+        // FAIL CLOSED. The stream lives on a second host and this SDK will not
+        // guess it. Falling back to `this.baseUrl` here would be the one line that
+        // re-creates, inside a published SDK, the failure this mechanism exists to
+        // prevent: production had no stream host configured, fell back to the API
+        // host by convention, and streamed into a gateway that cannot stream —
+        // invisibly, because a silent fallback looks exactly like a working one.
+        // `run()` handles this case by polling; a direct `streamEvents` caller
+        // asked for the stream specifically and is told plainly that there isn't
+        // one.
+        if (this.streamBaseUrl === null) {
+            const declared = declaredStreamEnvironments();
+            throw new GislStreamHostNotDeclaredError('No SSE stream host is declared for this configuration, and the SDK does not derive one ' +
+                `from baseUrl. ${declared.length > 0
+                    ? `Environments that declare a stream host: ${declared.join(', ')}.`
+                    : 'No environment currently declares a stream host.'} Pass {streamBaseUrl} to gisl.create() / new GislClient(), set ` +
+                `${GISL_STREAM_BASE_URL_ENV}, or construct with an {environment} that declares one. ` +
+                'The production stream host is not yet declared in the contract ' +
+                "(GET /api/workflows/{id}/events `servers`), so a production configuration has none to resolve.");
+        }
         // SSE-lifetime AbortController. `request()` builds its own controller
         // and tears it down (`clearTimeout(timer); unbind()`) in its `finally`
         // the instant the response headers arrive — BEFORE the SSE body
@@ -1771,6 +1851,8 @@ export class GislClient {
                 rawResponse: true,
                 signal: controller.signal,
                 headers: workflowCapabilityHeaders(opts.capability),
+                // The one call in the SDK that does NOT go to `baseUrl`.
+                baseUrl: this.streamBaseUrl,
             });
         }
         catch (err) {

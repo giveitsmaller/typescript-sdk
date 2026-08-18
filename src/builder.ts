@@ -44,7 +44,7 @@ import type {
   WorkflowCreatePayload,
 } from './types.js';
 import { uploadSource } from './types.js';
-import { GislTimeoutError, GislFanOutTimeoutError, GislNetworkError, SseEndedWithoutTerminal } from './errors.js';
+import { GislTimeoutError, GislFanOutTimeoutError, GislNetworkError, GislStreamHostNotDeclaredError, SseEndedWithoutTerminal } from './errors.js';
 // Deferred-usage-only import: `Handle` is constructed inside submit() at call
 // time, not at module load, so the builder.ts <-> handle.ts cycle is safe
 // under ESM (handle.ts imports the await-primitives from this module).
@@ -693,7 +693,21 @@ export class OperationBuilder {
         // Everything else — timeout, abort, API error, an onProgress callback
         // throw, anything unexpected — MUST propagate; re-issuing the same doomed
         // request via poll would mask the real failure.
-        if (!(err instanceof SseEndedWithoutTerminal || err instanceof GislNetworkError)) {
+        if (
+          !(
+            err instanceof SseEndedWithoutTerminal ||
+            err instanceof GislNetworkError ||
+            // VUozk5Bc: no stream host is DECLARED for this configuration (today,
+            // any production config — the contract declares stream `servers` for
+            // localhost and staging only). That is not a failure to recover from,
+            // it is SSE being unavailable here, and polling is a working
+            // transport. Failing hard instead would strand every caller on a host
+            // nobody has declared yet. A DIRECT `streamEvents` caller still gets
+            // the hard error — they asked for the stream specifically; a `run()`
+            // caller asked for a result.
+            err instanceof GislStreamHostNotDeclaredError
+          )
+        ) {
           throw err;
         }
         // Genuine SSE stream-end / transport error — fall through to poll fallback.

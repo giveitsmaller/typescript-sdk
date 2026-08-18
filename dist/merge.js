@@ -26,7 +26,7 @@
  * assets both fail fast so the caller saves bandwidth on typo'd composes.
  */
 import { uploadSource, jobOutputSource } from './types.js';
-import { GislConfigError, GislNetworkError, GislPerInputOptionsNotSupportedError, GislTimeoutError, GislUndeclaredAssetError, GislUnusedAssetError, SseEndedWithoutTerminal, } from './errors.js';
+import { GislConfigError, GislNetworkError, GislPerInputOptionsNotSupportedError, GislTimeoutError, GislUndeclaredAssetError, GislUnusedAssetError, GislStreamHostNotDeclaredError, SseEndedWithoutTerminal, } from './errors.js';
 import { _cappedProbeTimeoutMs, _checkAborted, _consumeSseToTerminal, _detectCompressMedia, _parseMaxWait, _pollToTerminal, _projectResult, } from './builder.js';
 import { Handle } from './handle.js';
 /**
@@ -445,7 +445,17 @@ export class MergeBuilder {
                 // TDqmkWpX: poll-fallback ONLY on a clean SSE stream-end or a typed
                 // transport error; rethrow everything else (timeout, abort, API, an
                 // onProgress callback throw, anything unexpected) so it isn't masked.
-                if (!(err instanceof SseEndedWithoutTerminal || err instanceof GislNetworkError)) {
+                if (!(err instanceof SseEndedWithoutTerminal ||
+                    err instanceof GislNetworkError ||
+                    // VUozk5Bc: no stream host is DECLARED for this configuration (today,
+                    // any production config — the contract declares stream `servers` for
+                    // localhost and staging only). That is not a failure to recover from,
+                    // it is SSE being unavailable here, and polling is a working
+                    // transport. Failing hard instead would strand every caller on a host
+                    // nobody has declared yet. A DIRECT `streamEvents` caller still gets
+                    // the hard error — they asked for the stream specifically; a `run()`
+                    // caller asked for a result.
+                    err instanceof GislStreamHostNotDeclaredError)) {
                     throw err;
                 }
             }

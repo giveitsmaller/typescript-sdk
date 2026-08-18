@@ -102,6 +102,9 @@ export {
   // T1 / wVU4xHx3 — local config-error tree (pre-I/O; sibling of GislApiError).
   GislConfigError,
   GislMissingCredentialsError,
+  // VUozk5Bc — `streamEvents` on a client with no DECLARED stream host. The
+  // SDK refuses to derive `stream.*` from `api.*`; `run()` polls instead.
+  GislStreamHostNotDeclaredError,
   GislFeatureRequiresAuthError,
   // T3 / cuecCmb5 — merge-compose local validation errors.
   GislUndeclaredAssetError,

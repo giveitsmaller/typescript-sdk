@@ -18,7 +18,7 @@
  */
 import { GislClient } from './client.js';
 import { GislConfigError, GislFeatureRequiresAuthError, GislMissingCredentialsError, } from './errors.js';
-import { resolveApiKey, resolveEndpoint, } from './credentials.js';
+import { resolveApiKey, resolveEndpoint, resolveStreamEndpoint, } from './credentials.js';
 import { OperationBuilder } from './builder.js';
 import { validateVerbOptions, validateSingleOpConvertOptions, assertThumbnailDimensions, } from './ergonomic/option_validation.js';
 import { MergeBuilder, asset } from './merge.js';
@@ -279,13 +279,19 @@ function isMergeOptions(value) {
  * @internal
  */
 async function _createInternal(opts) {
-    const { apiKey: explicitKey, profile, profilePath, useSessionCookie, baseUrl, environment, allowAnonymous, 
+    const { apiKey: explicitKey, profile, profilePath, useSessionCookie, baseUrl, environment, streamBaseUrl, allowAnonymous, 
     // T4a slot — stripped from transportConfig so it does not leak
     // into the low-level `GislClientConfig` spread. The T4b resolver
     // reads `opts.presetDefaults` directly via its own path.
     presetDefaults: _presetDefaults, ...transportConfig } = opts;
     void _presetDefaults;
     const resolvedBaseUrl = resolveEndpoint({ baseUrl, environment });
+    // Resolved SEPARATELY and never from `resolvedBaseUrl`. `null` here means
+    // "nothing declares a stream host for this configuration" — a legitimate
+    // state that `streamEvents` reports and `run()` handles by polling. Both
+    // resolvers throw on an unknown explicit `environment`, so a typo cannot
+    // split the two hosts across environments.
+    const resolvedStreamBaseUrl = resolveStreamEndpoint({ baseUrl, environment, streamBaseUrl });
     // Anonymous mode entirely BYPASSES the credential chain. Any env / profile
     // key that happens to exist on the host MUST NOT leak into the request
     // (codex r1 high e9e1c1182d56). Cookie-mode also bypasses, since the
@@ -295,6 +301,9 @@ async function _createInternal(opts) {
             baseUrl: resolvedBaseUrl,
             ...transportConfig,
         };
+        if (resolvedStreamBaseUrl !== null) {
+            config.streamBaseUrl = resolvedStreamBaseUrl;
+        }
         if (useSessionCookie !== undefined) {
             config.useSessionCookie = useSessionCookie;
         }
@@ -327,6 +336,9 @@ async function _createInternal(opts) {
         baseUrl: resolvedBaseUrl,
         ...transportConfig,
     };
+    if (resolvedStreamBaseUrl !== null) {
+        config.streamBaseUrl = resolvedStreamBaseUrl;
+    }
     if (resolvedKey !== null) {
         config.apiKey = resolvedKey;
     }

@@ -26,6 +26,7 @@ import {
 import {
   resolveApiKey,
   resolveEndpoint,
+  resolveStreamEndpoint,
   type ResolveCredentialsOptions,
   type ResolveEndpointOptions,
 } from './credentials.js';
@@ -75,7 +76,10 @@ export const ANONYMOUS_ALLOWLIST = [] as const satisfies readonly string[];
 export interface GislCreateOptions
   extends ResolveCredentialsOptions,
     ResolveEndpointOptions,
-    Omit<GislClientConfig, 'baseUrl' | 'apiKey' | 'useSessionCookie'> {
+    // `streamBaseUrl` is omitted here and inherited from `ResolveEndpointOptions`
+    // instead: both declare it, and the resolver's `readonly` form is the one
+    // this factory's options should carry.
+    Omit<GislClientConfig, 'baseUrl' | 'apiKey' | 'useSessionCookie' | 'streamBaseUrl'> {
   /**
    * Layered ergonomic preset defaults (T4a / VhIj4S7T). Built via
    * `presetDefaults().<cell>(level, overrides?)…`. The resolver wiring
@@ -535,6 +539,7 @@ async function _createInternal(opts: _InternalCreateOptions): Promise<GislClient
     useSessionCookie,
     baseUrl,
     environment,
+    streamBaseUrl,
     allowAnonymous,
     // T4a slot — stripped from transportConfig so it does not leak
     // into the low-level `GislClientConfig` spread. The T4b resolver
@@ -545,6 +550,12 @@ async function _createInternal(opts: _InternalCreateOptions): Promise<GislClient
   void _presetDefaults;
 
   const resolvedBaseUrl = resolveEndpoint({ baseUrl, environment });
+  // Resolved SEPARATELY and never from `resolvedBaseUrl`. `null` here means
+  // "nothing declares a stream host for this configuration" — a legitimate
+  // state that `streamEvents` reports and `run()` handles by polling. Both
+  // resolvers throw on an unknown explicit `environment`, so a typo cannot
+  // split the two hosts across environments.
+  const resolvedStreamBaseUrl = resolveStreamEndpoint({ baseUrl, environment, streamBaseUrl });
 
   // Anonymous mode entirely BYPASSES the credential chain. Any env / profile
   // key that happens to exist on the host MUST NOT leak into the request
@@ -555,6 +566,9 @@ async function _createInternal(opts: _InternalCreateOptions): Promise<GislClient
       baseUrl: resolvedBaseUrl,
       ...transportConfig,
     };
+    if (resolvedStreamBaseUrl !== null) {
+      config.streamBaseUrl = resolvedStreamBaseUrl;
+    }
     if (useSessionCookie !== undefined) {
       config.useSessionCookie = useSessionCookie;
     }
@@ -591,6 +605,9 @@ async function _createInternal(opts: _InternalCreateOptions): Promise<GislClient
     baseUrl: resolvedBaseUrl,
     ...transportConfig,
   };
+  if (resolvedStreamBaseUrl !== null) {
+    config.streamBaseUrl = resolvedStreamBaseUrl;
+  }
   if (resolvedKey !== null) {
     config.apiKey = resolvedKey;
   }

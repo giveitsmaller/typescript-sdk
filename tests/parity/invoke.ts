@@ -64,6 +64,13 @@ const ERGONOMIC_MULTI_INPUT_VERBS: ReadonlySet<string> = new Set(['merge']);
 
 const DEFAULT_CLIENT_CONFIG = {
   baseUrl: 'https://api.test.example.com',
+  // VUozk5Bc — the SSE stream lives on a second host and is never derived from
+  // `baseUrl`, so the parity harness must declare one or every sse-mode fixture
+  // fails closed before reaching the parser it exists to compare. MUST stay
+  // byte-identical to the PHP harness in `tests/parity/Invoke.php`: a host that
+  // differs by language would make the two SDKs stream to different places
+  // while the fixtures still passed (the request matcher keys on path only).
+  streamBaseUrl: 'https://stream.test.example.com',
   apiKey: 'test-api-key',
   // Force deterministic S3 PUT order for the multipart fixture.
   multipartConcurrency: 1,

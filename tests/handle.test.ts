@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Handle, StatusSnapshot } from '../src/handle.js';
 import { RunResult } from '../src/file-first.js';
-import { GislConfigError, GislItemFailedError, GislResultNotReadyError } from '../src/errors.js';
+import {
+  GislConfigError,
+  GislItemFailedError,
+  GislResultNotReadyError,
+  GislStreamHostNotDeclaredError,
+} from '../src/errors.js';
 import type { GislClient } from '../src/client.js';
 
 /**
@@ -160,6 +165,37 @@ describe('Handle.wait', () => {
     expect(result.state).toBe('completed');
     expect(result.ok).toBe(true);
     expect(result.artifacts).toHaveLength(1);
+  });
+
+  it('falls back to polling when no stream host is declared (VUozk5Bc)', async () => {
+    const mock = makeMockClient();
+    mock.streamEvents.mockRejectedValue(
+      new GislStreamHostNotDeclaredError('No SSE stream host is declared for this configuration'),
+    );
+
+    const result = await new Handle('wf_1', undefined, mock.client).wait('30s');
+
+    // A `wait()`/`run()` caller asked for a RESULT, not for a transport. With
+    // no declared stream host (today: any prod configuration) SSE is simply
+    // unavailable, and polling is a working path — so the caller gets their
+    // result rather than a hard failure about a host that does not exist yet.
+    // A DIRECT `streamEvents()` caller still gets the error; see
+    // `tests/unit/stream-host.test.ts`.
+    expect(mock.getWorkflowStatus).toHaveBeenCalled();
+    expect(result.state).toBe('completed');
+    expect(result.ok).toBe(true);
+  });
+
+  it('still propagates unrelated config errors instead of masking them with a poll', async () => {
+    const mock = makeMockClient();
+    // Negative control for the assertion above. The fallback is scoped to ONE
+    // error type; widening it to `GislConfigError` would swallow real
+    // misconfiguration and re-issue the same doomed request as a poll.
+    mock.streamEvents.mockRejectedValue(new GislConfigError('some other configuration fault'));
+
+    await expect(new Handle('wf_1', undefined, mock.client).wait('30s')).rejects.toThrow(
+      GislConfigError,
+    );
   });
 });
 
