@@ -26,7 +26,7 @@
  */
 import { SseEventType, SseOperationProgressDataFromJSON, } from '@giveitsmaller/contracts/openapi';
 import { uploadSource } from './types.js';
-import { GislTimeoutError, GislFanOutTimeoutError, GislNetworkError, GislStreamHostNotDeclaredError, SseEndedWithoutTerminal } from './errors.js';
+import { GislTimeoutError, GislFanOutTimeoutError, GislNetworkError, GislStreamHostNotDeclaredError, GislTransportError, SseEndedWithoutTerminal } from './errors.js';
 // Deferred-usage-only import: `Handle` is constructed inside submit() at call
 // time, not at module load, so the builder.ts <-> handle.ts cycle is safe
 // under ESM (handle.ts imports the await-primitives from this module).
@@ -602,7 +602,7 @@ export async function _consumeSseToTerminal(client, args) {
             // GislNetworkError so the await-terminal callers poll-fallback on it
             // (and ONLY on it / a clean stream-end), never on an onProgress throw.
             if (err instanceof TypeError) {
-                throw new GislNetworkError(`SSE connect to workflow ${args.workflowId} events failed: ${err.message}`);
+                throw new GislTransportError(`SSE connect to workflow ${args.workflowId} events failed: ${err.message}`);
             }
             throw err;
         }
@@ -684,11 +684,12 @@ export async function _consumeSseToTerminal(client, args) {
                 throw new GislTimeoutError(`Workflow ${args.workflowId} did not complete before maxWait deadline`, args.workflowId);
             }
             // A genuine mid-stream TRANSPORT failure (reader disconnect) surfaces as a
-            // raw `TypeError` from the iterator — wrap as GislNetworkError so callers
+            // raw `TypeError` from the iterator — wrap as GislTransportError so callers
             // poll-fallback. (An onProgress throw was already handled above, so a
-            // TypeError here is unambiguously transport.)
+            // TypeError here is unambiguously transport.) It stays a GislNetworkError
+            // by inheritance, so the poll-fallback gates below are unchanged.
             if (innerErr instanceof TypeError) {
-                throw new GislNetworkError(`SSE stream for workflow ${args.workflowId} failed mid-stream: ${innerErr.message}`);
+                throw new GislTransportError(`SSE stream for workflow ${args.workflowId} failed mid-stream: ${innerErr.message}`);
             }
             throw innerErr;
         }

@@ -96,9 +96,20 @@ export {
   // child ids + parent id so the caller can recover without a whole-batch re-run.
   GislFanOutTimeoutError,
   GislAbortError,
-  // FF2b / tywwynmN — transport-level failure (mirrors PHP GislNetworkError);
+  // FF2b / tywwynmN — off-envelope failure base (mirrors PHP GislNetworkError);
   // raised by the file-first HttpDownloader when an output URL cannot be read.
+  // t2qCrjdr: NEVER THROWN DIRECTLY any more — it is the hierarchy node the two
+  // subclasses below share, kept so existing `instanceof GislNetworkError`
+  // narrowing (including the SSE poll-fallback) is unchanged.
   GislNetworkError,
+  // t2qCrjdr — the split. One `retryable` could not be honest for both a DNS
+  // failure and a 404, so each case is now its own class with its own answer.
+  GislTransportError,
+  GislDownloadHttpError,
+  // The request never left the client — never retryable. TS detects only what
+  // it can see BEFORE the call (an unparseable URL); PHP also classifies
+  // PSR-18's RequestExceptionInterface, which `fetch` gives no equivalent of.
+  GislRequestNotSentError,
   // T1 / wVU4xHx3 — local config-error tree (pre-I/O; sibling of GislApiError).
   GislConfigError,
   GislMissingCredentialsError,

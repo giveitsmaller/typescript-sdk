@@ -538,16 +538,114 @@ export declare class GislFanOutTimeoutError extends GislTimeoutError {
     });
 }
 /**
- * Transport-level failure: the underlying `fetch` (or other transport) could
- * not produce a usable response — DNS, TCP, TLS, a mid-stream disconnect, or a
- * non-ok status / empty body when fetching a result download. Mirrors the PHP
- * `Gisl\Sdk\Errors\GislNetworkError`. Subclasses `GislError` (not
- * `GislApiError`) because it carries no contract error envelope. The concrete
- * file-first {@link Downloader} raises this when the output URL cannot be read
- * (a destination-WRITE failure is `GislSinkError` reason `write_failed`).
+ * Base for every failure that happened **off the contract envelope** — the
+ * request did not come back as a typed API error, it came back (or failed to)
+ * at the transport or raw-HTTP level. Subclasses `GislError` rather than
+ * `GislApiError` because there is no error envelope to carry.
+ *
+ * ⚠️ **NEVER THROWN DIRECTLY — it is a hierarchy node, not an error code
+ * (`t2qCrjdr`).** Everything that used to throw it now throws
+ * {@link GislTransportError} or {@link GislDownloadHttpError}, because the two
+ * cases cannot share one honest answer to "should I retry this?":
+ *
+ * | case | retry? |
+ * |---|---|
+ * | DNS / TCP / TLS / mid-stream disconnect | **yes** — transient by nature |
+ * | a `404` on a signed download URL | **no** — permanent, retrying burns time |
+ *
+ * `retryable: true` would recommend retrying a permanent failure and
+ * `retryable: false` would discourage retrying a genuine transient one, so
+ * contracts correctly refused to declare this class in
+ * `sdk-spec/error-taxonomy.yaml` at all. The fix is the split, not a caveat in
+ * a description field: **a claim must hold on every path that reaches it.**
+ *
+ * **Kept as the base ON PURPOSE, so this is not a breaking change.** Every
+ * existing `catch (e) { if (e instanceof GislNetworkError) … }` — including the
+ * SSE poll-fallback in `builder.ts` / `merge.ts` / `handle.ts` /
+ * `file-first.ts` — keeps catching exactly what it caught before. Narrow to a
+ * subclass only where you actually need to tell the two apart.
+ *
+ * Mirrors the PHP `Gisl\Sdk\Errors\GislNetworkError`.
  */
 export declare class GislNetworkError extends GislError {
     constructor(message: string);
+}
+/**
+ * The transport could not deliver a usable response: DNS, TCP, TLS, a
+ * mid-stream disconnect, a `fetch` rejection, or a 2xx that arrived with no
+ * body at all. **Always retryable** — nothing about these says the request was
+ * wrong, only that it did not get through.
+ *
+ * The empty-body case lives here rather than with
+ * {@link GislDownloadHttpError} deliberately: the server said 2xx, so it is not
+ * an HTTP-level refusal — a response that promised bytes and delivered none is
+ * a delivery failure, and retrying is the right advice.
+ *
+ * The concrete file-first `Downloader` raises this when an output URL cannot be
+ * read (a destination-WRITE failure is `GislSinkError` reason `write_failed`).
+ */
+export declare class GislTransportError extends GislNetworkError {
+    constructor(message: string);
+    /**
+     * Always `true`. The request did not get through; nothing about that says it
+     * was wrong, so retrying is the correct advice.
+     *
+     * Present as a real accessor rather than only as prose — an unbacked claim in
+     * a docblock is the exact defect `t2qCrjdr` exists to remove, and shipping
+     * the split without it would have reproduced it one level down.
+     */
+    get retryable(): boolean;
+}
+/**
+ * The request was never put on the wire because the client refused to send it —
+ * a malformed URI or an otherwise unsendable request. **Never retryable:**
+ * re-issuing the identical request fails identically, so backing off only
+ * wastes the caller's deadline.
+ *
+ * ⚠️ **THE TWO LANGUAGES DETECT THIS DIFFERENTLY, AND TS DETECTS LESS.** PSR-18
+ * distinguishes a network failure (`NetworkExceptionInterface`) from an
+ * unsendable request (`RequestExceptionInterface`), so the PHP SDK classifies
+ * every such failure. `fetch` surfaces both as an indistinguishable
+ * `TypeError`, so the TS SDK can only catch the cases it can see BEFORE the
+ * call — today, a URL that does not parse (`http-downloader`). A `fetch`
+ * rejection is still reported as {@link GislTransportError}, because guessing
+ * would put a permanent failure back in the retryable bucket, which is the very
+ * thing this split removed.
+ *
+ * So: same class, same meaning, same `retryable` in both SDKs — narrower
+ * detection in TypeScript. Stated here because a cross-language consumer would
+ * otherwise reasonably assume parity of COVERAGE from parity of TYPE.
+ */
+export declare class GislRequestNotSentError extends GislNetworkError {
+    constructor(message: string);
+    /** Always `false` — the request never left, and re-sending it will not change that. */
+    get retryable(): boolean;
+}
+/**
+ * A download URL answered with a **non-2xx status**. The server was reached and
+ * replied; it simply refused. Distinct from {@link GislTransportError} because
+ * retrying is usually pointless — and `retryable` says so honestly, derived
+ * from the status rather than fixed for the class.
+ *
+ * `status` is carried as a field so a consumer distinguishing a permanent `404`
+ * from a transient `503` does not have to parse the message string — the second
+ * half of `t2qCrjdr`.
+ *
+ * Raised on result-download fetches (signed URLs), NOT on GISL-API calls: an
+ * API non-2xx carries a contract error envelope and surfaces as the matching
+ * {@link GislApiError} subclass instead.
+ */
+export declare class GislDownloadHttpError extends GislNetworkError {
+    /** The HTTP status the download URL responded with. */
+    readonly status: number;
+    constructor(message: string, status: number);
+    /**
+     * Whether retrying this download could plausibly succeed. Derived from the
+     * status by the same rule the API errors use (`408` / `429` / `5xx`), so a
+     * `404` reports `false` and a `503` reports `true` — the distinction the
+     * unsplit class could not express.
+     */
+    get retryable(): boolean;
 }
 /**
  * Internal control-flow marker (TDqmkWpX): the SSE event stream closed cleanly

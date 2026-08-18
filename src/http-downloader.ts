@@ -9,7 +9,12 @@ import { Readable } from 'node:stream';
 import type { ReadableStream as NodeWebReadableStream } from 'node:stream/web';
 import { pipeline } from 'node:stream/promises';
 import type { Downloader } from './file-first.js';
-import { GislNetworkError, GislSinkError } from './errors.js';
+import {
+  GislDownloadHttpError,
+  GislRequestNotSentError,
+  GislSinkError,
+  GislTransportError,
+} from './errors.js';
 
 /**
  * Streams a (typically pre-signed) URL to a local path without buffering the
@@ -24,23 +29,41 @@ export class HttpDownloader implements Downloader {
     // on the RunResult sink side. Parity-critical: the FF1 sink contract tells
     // callers to narrow with instanceof, so the source-read error type must
     // match across languages.
+    // codex f46340e1d58a: a malformed URL fails DETERMINISTICALLY, so it must
+    // not land in the always-retryable bucket with DNS and TLS. `fetch` rejects
+    // both with an indistinguishable TypeError, so the only way to tell them
+    // apart is to check BEFORE the call — which also gives
+    // GislRequestNotSentError a real throw site in TypeScript rather than
+    // leaving it declared-but-dormant.
+    try {
+      new URL(url);
+    } catch {
+      throw new GislRequestNotSentError(`Download source is not a valid URL: ${url}`);
+    }
+
     let res: Response;
     try {
       res = await fetch(url);
     } catch (cause) {
       // A rejected fetch (DNS, TCP, TLS, mid-flight disconnect) must surface as
-      // GislNetworkError too — not the raw TypeError — so callers can narrow
-      // every download-source failure with `instanceof GislNetworkError`
-      // (codex review medium).
-      throw new GislNetworkError(
+      // a typed error — not the raw TypeError — so callers can narrow every
+      // download-source failure with `instanceof GislNetworkError`
+      // (codex review medium). t2qCrjdr: TRANSPORT specifically, so the
+      // retry advice is `true` here and status-derived below.
+      throw new GislTransportError(
         `Failed to fetch download source: ${cause instanceof Error ? cause.message : String(cause)}`,
       );
     }
     if (!res.ok) {
-      throw new GislNetworkError(`Download failed with status ${res.status}`);
+      // t2qCrjdr: the server was REACHED and refused. Carries the status so a
+      // consumer telling a permanent 404 from a transient 503 never has to
+      // parse the message.
+      throw new GislDownloadHttpError(`Download failed with status ${res.status}`, res.status);
     }
     if (res.body === null) {
-      throw new GislNetworkError('Download response had no body');
+      // 2xx with nothing in it — the server did not refuse, it under-delivered.
+      // Transport rather than HTTP, and retrying is the right advice.
+      throw new GislTransportError('Download response had no body');
     }
     // `fetch`'s WHATWG ReadableStream and Node's `stream/web` ReadableStream
     // are structurally the same at runtime but typed in two different lib
