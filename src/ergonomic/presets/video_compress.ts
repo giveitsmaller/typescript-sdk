@@ -34,9 +34,15 @@ export interface VideoCompressPresetOptionsInput {
    * single-pass-CRF by construction and two-pass target-size is unbuilt. The request
    * fails during execution, and the SDK cannot warn earlier — routing is decided
    * server-side at create-plan time, so there is nothing here to check it against.
-   * Short-form compresses honour it normally. Tracked by `zJN6XIi5`, blocked on a
-   * contract that can express per-execution-path availability. The same limit applies
-   * to {@link MergeOptions.targetSize}.
+   * The same limit applies to {@link MergeOptions.targetSize}.
+   * Short-form compresses honour it normally.
+   *
+   * The contract CAN now express this — `per_class_availability` scopes an option to
+   * a processing class, vendored at v2.195.0 and pinned by
+   * `tests/unit/per-class-availability-conformance.test.ts`. That buys an honest 422
+   * from the API at CREATE rather than a job dying mid-execution; it does NOT become
+   * a client-side gate, because routing is still decided server-side and a duration
+   * heuristic here would be wrong at the boundary. Tracked by `zJN6XIi5`.
    */
   readonly targetSize?: string | number;
   readonly crf?: number;
