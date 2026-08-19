@@ -134,8 +134,11 @@ instead, which is a working transport. **This is deliberate.** Guessing the stre
 host is a convention, and the last time a client did that it streamed into a gateway that cannot
 stream, invisibly — a silent fallback looks exactly like a working one.
 
-**Production has no declared stream host yet**, so a production configuration takes the poll path
-today. Pass `streamBaseUrl` explicitly if you have one.
+Both `prod` and `staging` resolve to their contract-declared hosts (production landed with
+contracts `v2.195.0`), and an **unconfigured** client resolves production for the stream just as it
+already did for the API. What still fails closed is a **custom** host: pass your own `baseUrl` (or
+set `GISL_BASE_URL`) with no `streamBaseUrl` and `streamEvents()` raises rather than guessing that
+your proxy's stream lives at production.
 
 ## Documentation
 

@@ -52,20 +52,21 @@ export const DEFAULT_ENDPOINT = ENVIRONMENT_ENDPOINTS.prod;
  * table+conformance shape used by `COMPRESS_OPTION_VALUES`,
  * `OUTPUT_OPTION_DEPENDS_ON`, the preset planned gate and the watermark gate.
  *
- * ⚠️ **THERE IS NO `prod` ENTRY, AND ITS ABSENCE IS THE CONTRACT'S, NOT AN
- * OVERSIGHT HERE.** The contract's `servers` block for the stream operation
- * carries localhost and staging only; contracts deliberately did not invent a
- * production URL. Until it is declared, a production configuration has **no
- * stream host** and {@link resolveStreamEndpoint} returns `null` — see
- * `GislClient.streamEvents`, which fails closed rather than quietly reusing
- * `baseUrl`. Add `prod` here in the same change that vendors the contract
- * entry, never ahead of it.
+ * `prod` landed with contracts `v2.195.0` (#410), which declared the production
+ * stream host. It is here because the CONTRACT declares it — the entry and the
+ * vendored declaration moved in the same change, never ahead of it.
+ *
+ * ⚠️ **A CONFIGURATION WITH NO DECLARED HOST STILL FAILS CLOSED.** Both entries
+ * being present does not soften the rule: {@link resolveStreamEndpoint} returns
+ * `null` for anything it cannot resolve from a declaration, and
+ * `GislClient.streamEvents` raises rather than quietly reusing `baseUrl`.
  *
  * `localhost` is intentionally absent too: it is declared in the contract as a
  * development server, but there is no `localhost` *environment* name to key it
  * off. Local callers pass `{streamBaseUrl}` or set `GISL_STREAM_BASE_URL`.
  */
 export const ENVIRONMENT_STREAM_ENDPOINTS = {
+    prod: 'https://stream.giveitsmaller.com',
     staging: 'https://stream.staging.giveitsmaller.com',
 };
 // ---------------------------------------------------------------------------
@@ -183,8 +184,8 @@ export function resolveStreamEndpoint(opts = {}) {
             throw new GislConfigError(`Unknown environment '${opts.environment}'. Valid values: ${Object.keys(ENVIRONMENT_ENDPOINTS).join(', ')}.`);
         }
         // A KNOWN environment with no declared stream host resolves to `null`, not
-        // to an error and not to `baseUrl`. That is today's `prod`: the config is
-        // valid, the declaration is simply missing upstream.
+        // to an error and not to `baseUrl`: the config is valid, the declaration is
+        // simply missing upstream. Both current environments declare one.
         return ENVIRONMENT_STREAM_ENDPOINTS[opts.environment] ?? null;
     }
     const envStreamBaseUrl = readEnv(GISL_STREAM_BASE_URL_ENV);
@@ -197,6 +198,25 @@ export function resolveStreamEndpoint(opts = {}) {
         if (envMapped !== undefined) {
             return envMapped;
         }
+    }
+    // SYMMETRY WITH `resolveEndpoint`, and a correctness fix rather than a
+    // convenience (codex 480e8b865b90). `resolveEndpoint` FALLS THROUGH to the
+    // production API host when nothing is configured — so an unconfigured
+    // `gisl.create({apiKey})` already talks to production, while its stream
+    // resolved to `null`. That made THE DEFAULT CONFIGURATION the one that could
+    // not stream: `streamEvents()` threw and `run()` silently polled, against a
+    // production host whose stream IS declared. The two resolvers have to agree
+    // about what "unconfigured" means.
+    //
+    // ⚠️ ONLY when the API host ALSO defaulted. An explicit `baseUrl` (or
+    // `GISL_BASE_URL`) names a host we were told about and cannot reason about —
+    // a proxy, a self-host, a test double — so we still refuse rather than assume
+    // production's stream host. Assuming there would be deriving one host from
+    // another, which is precisely what this mechanism exists to refuse.
+    const apiHostWasConfigured = (typeof opts.baseUrl === 'string' && opts.baseUrl.trim() !== '') ||
+        readEnv(GISL_BASE_URL_ENV) !== null;
+    if (!apiHostWasConfigured) {
+        return ENVIRONMENT_STREAM_ENDPOINTS.prod ?? null;
     }
     return null;
 }

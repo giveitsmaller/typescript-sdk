@@ -401,10 +401,10 @@ export declare class GislMissingCredentialsError extends GislConfigError {
  * was invisible until it was measured. Raising here is the loud version of
  * that same situation.
  *
- * Today this is reachable in a production configuration because the contract
- * declares stream `servers` for localhost and staging only — contracts
- * deliberately did not invent a prod URL. Once the prod entry lands, a prod
- * client resolves normally and this stops firing for that case.
+ * Both named environments resolve as of contracts `v2.195.0` (#410), which
+ * declared the production stream host. This now fires only for a
+ * configuration nothing declares — e.g. a bare `baseUrl` with no
+ * `environment` and no `streamBaseUrl`.
  *
  * Recover by passing `{streamBaseUrl}` to `gisl.create()` / `new GislClient()`,
  * setting `GISL_STREAM_BASE_URL`, or constructing with an `{environment}` that

@@ -49,14 +49,14 @@ export declare const DEFAULT_ENDPOINT: "https://api.giveitsmaller.com";
  * table+conformance shape used by `COMPRESS_OPTION_VALUES`,
  * `OUTPUT_OPTION_DEPENDS_ON`, the preset planned gate and the watermark gate.
  *
- * ⚠️ **THERE IS NO `prod` ENTRY, AND ITS ABSENCE IS THE CONTRACT'S, NOT AN
- * OVERSIGHT HERE.** The contract's `servers` block for the stream operation
- * carries localhost and staging only; contracts deliberately did not invent a
- * production URL. Until it is declared, a production configuration has **no
- * stream host** and {@link resolveStreamEndpoint} returns `null` — see
- * `GislClient.streamEvents`, which fails closed rather than quietly reusing
- * `baseUrl`. Add `prod` here in the same change that vendors the contract
- * entry, never ahead of it.
+ * `prod` landed with contracts `v2.195.0` (#410), which declared the production
+ * stream host. It is here because the CONTRACT declares it — the entry and the
+ * vendored declaration moved in the same change, never ahead of it.
+ *
+ * ⚠️ **A CONFIGURATION WITH NO DECLARED HOST STILL FAILS CLOSED.** Both entries
+ * being present does not soften the rule: {@link resolveStreamEndpoint} returns
+ * `null` for anything it cannot resolve from a declaration, and
+ * `GislClient.streamEvents` raises rather than quietly reusing `baseUrl`.
  *
  * `localhost` is intentionally absent too: it is declared in the contract as a
  * development server, but there is no `localhost` *environment* name to key it

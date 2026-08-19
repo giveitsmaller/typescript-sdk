@@ -1825,8 +1825,7 @@ export class GislClient {
                     ? `Environments that declare a stream host: ${declared.join(', ')}.`
                     : 'No environment currently declares a stream host.'} Pass {streamBaseUrl} to gisl.create() / new GislClient(), set ` +
                 `${GISL_STREAM_BASE_URL_ENV}, or construct with an {environment} that declares one. ` +
-                'The production stream host is not yet declared in the contract ' +
-                "(GET /api/workflows/{id}/events `servers`), so a production configuration has none to resolve.");
+                'Hosts are read from the contract declaration and are never derived from baseUrl.');
         }
         // SSE-lifetime AbortController. `request()` builds its own controller
         // and tears it down (`clearTimeout(timer); unbind()`) in its `finally`

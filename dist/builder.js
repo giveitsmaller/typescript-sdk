@@ -405,9 +405,9 @@ export class OperationBuilder {
                 // request via poll would mask the real failure.
                 if (!(err instanceof SseEndedWithoutTerminal ||
                     err instanceof GislNetworkError ||
-                    // VUozk5Bc: no stream host is DECLARED for this configuration (today,
-                    // any production config — the contract declares stream `servers` for
-                    // localhost and staging only). That is not a failure to recover from,
+                    // VUozk5Bc: no stream host is DECLARED for this configuration (a
+                    // configuration nothing declares; both named environments resolve as of
+                    // contracts v2.195.0). That is not a failure to recover from,
                     // it is SSE being unavailable here, and polling is a working
                     // transport. Failing hard instead would strand every caller on a host
                     // nobody has declared yet. A DIRECT `streamEvents` caller still gets

@@ -19,6 +19,8 @@ import { GislConfigError, GislStreamHostNotDeclaredError } from '../../src/error
 
 const STAGING_API = 'https://api.staging.giveitsmaller.com';
 const STAGING_STREAM = 'https://stream.staging.giveitsmaller.com';
+const PROD_API = 'https://api.giveitsmaller.com';
+const PROD_STREAM = 'https://stream.giveitsmaller.com';
 
 function sseResponse(body = ''): Response {
   return new Response(body, {
@@ -131,32 +133,79 @@ describe('SSE stream host (VUozk5Bc)', () => {
   // Fail closed — the control this card exists for
   // -----------------------------------------------------------------------
 
-  it('throws rather than falling back to baseUrl when no stream host is declared', async () => {
-    // `prod` has no declared stream host: the contract's stream `servers` block
-    // carries localhost + staging only. This is THE case that must not silently
-    // reuse the API host.
+  it('sends streamEvents to the PRODUCTION stream host (gGVJtQzg)', async () => {
+    // Landed with contracts v2.195.0 (#410). Until then `prod` had no declared
+    // host and this case asserted the fail-closed path; the conformance
+    // tripwire that guarded the gap is deleted, not weakened.
+    fetchSpy.mockResolvedValueOnce(sseResponse());
     const client = await create({ apiKey: 'k', environment: 'prod' });
 
+    await client.streamEvents('wf_1');
+
+    expect(requestedUrls()).toEqual([`${PROD_STREAM}/api/workflows/wf_1/events`]);
+  });
+
+  it('keeps production NON-stream calls on the production API host', async () => {
+    fetchSpy.mockResolvedValue(statusResponse());
+    const client = await create({ apiKey: 'k', environment: 'prod' });
+
+    await client.getWorkflowStatus('wf_1');
+
+    // The negative half, in prod too: declaring a second host must not move
+    // anything else.
+    expect(requestedUrls()).toEqual([`${PROD_API}/api/workflows/wf_1/status`]);
+  });
+
+  it('streams to production for a DEFAULT-configured client (codex 480e8b865b90)', async () => {
+    // `resolveEndpoint` falls through to the production API host when nothing
+    // is configured, so `create({apiKey})` already talks to production. Before
+    // this, its stream resolved to null — making THE DEFAULT CONFIGURATION the
+    // one client that could not stream, against a host whose stream is
+    // declared. The two resolvers have to agree about what "unconfigured"
+    // means.
+    fetchSpy.mockResolvedValueOnce(sseResponse());
+    const client = await create({ apiKey: 'k' });
+
+    await client.streamEvents('wf_1');
+
+    expect(requestedUrls()).toEqual([`${PROD_STREAM}/api/workflows/wf_1/events`]);
+  });
+
+  it('does NOT assume production when an explicit baseUrl was given', async () => {
+    // The load-bearing half of the same fix. An explicit baseUrl names a host
+    // we were told about and cannot reason about — a proxy, a self-host, a test
+    // double — so defaulting its stream to production would be deriving one
+    // host from another, which is the thing this mechanism refuses.
+    const client = await create({ apiKey: 'k', baseUrl: 'https://api.internal.test' });
+
     await expect(client.streamEvents('wf_1')).rejects.toThrow(GislStreamHostNotDeclaredError);
-    // No I/O at all — the guard runs before the request is built.
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it('names what the caller can actually do about it', async () => {
-    const client = await create({ apiKey: 'k', environment: 'prod' });
+  it('does NOT assume production when GISL_BASE_URL was given', async () => {
+    process.env.GISL_BASE_URL = 'https://api.internal.test';
 
-    await expect(client.streamEvents('wf_1')).rejects.toThrow(/streamBaseUrl/);
-    await expect(client.streamEvents('wf_1')).rejects.toThrow(/GISL_STREAM_BASE_URL/);
-    // Says which environments DO work, not merely that this one does not.
-    await expect(client.streamEvents('wf_1')).rejects.toThrow(/staging/);
+    const client = await create({ apiKey: 'k' });
+
+    await expect(client.streamEvents('wf_1')).rejects.toThrow(GislStreamHostNotDeclaredError);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it('is catchable as GislConfigError', async () => {
-    const client = await create({ apiKey: 'k', environment: 'prod' });
+  it('still fails closed when NOTHING declares a stream host', async () => {
+    // Both named environments now resolve, so the fail-closed path is reached
+    // via a bare baseUrl — a configuration the SDK cannot resolve from any
+    // declaration. The rule did not soften when prod landed.
+    const client = new GislClient({ baseUrl: PROD_API, apiKey: 'k' });
 
-    // Subclassing matters: a consumer with an existing `catch (GislConfigError)`
-    // should not need to learn a new type to keep working.
+    await expect(client.streamEvents('wf_1')).rejects.toThrow(GislStreamHostNotDeclaredError);
+    await expect(client.streamEvents('wf_1')).rejects.toThrow(/streamBaseUrl/);
+    await expect(client.streamEvents('wf_1')).rejects.toThrow(/GISL_STREAM_BASE_URL/);
+    // Names the environments that DO work — now both of them.
+    await expect(client.streamEvents('wf_1')).rejects.toThrow(/prod/);
+    await expect(client.streamEvents('wf_1')).rejects.toThrow(/staging/);
+    // Subclassing keeps an existing `catch (GislConfigError)` working.
     await expect(client.streamEvents('wf_1')).rejects.toBeInstanceOf(GislConfigError);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it('does not derive a stream host from an api.* baseUrl', async () => {
@@ -186,7 +235,7 @@ describe('SSE stream host (VUozk5Bc)', () => {
     expect(requestedUrls()).toEqual(['https://stream.example.test/api/workflows/wf_1/events']);
   });
 
-  it('lets an explicit streamBaseUrl rescue a configuration with no declared host', async () => {
+  it('lets an explicit streamBaseUrl override the production host', async () => {
     fetchSpy.mockResolvedValueOnce(sseResponse());
     const client = await create({
       apiKey: 'k',
@@ -313,12 +362,13 @@ describe('SSE stream host (VUozk5Bc)', () => {
     expect(requestedUrls()).toEqual([`${STAGING_STREAM}/api/workflows/wf_1/events`]);
   });
 
-  it('fails closed when GISL_ENVIRONMENT names an environment with no stream host', async () => {
+  it('resolves the PRODUCTION stream host from a GISL_ENVIRONMENT name', async () => {
     process.env.GISL_ENVIRONMENT = 'prod';
+    fetchSpy.mockResolvedValueOnce(sseResponse());
 
     const client = await create({ apiKey: 'k' });
+    await client.streamEvents('wf_1');
 
-    await expect(client.streamEvents('wf_1')).rejects.toThrow(GislStreamHostNotDeclaredError);
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(requestedUrls()).toEqual([`${PROD_STREAM}/api/workflows/wf_1/events`]);
   });
 });

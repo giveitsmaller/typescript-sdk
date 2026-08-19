@@ -102,18 +102,4 @@ describe('ENVIRONMENT_STREAM_ENDPOINTS conformance with availability.json', () =
       expect(Object.keys(ENVIRONMENT_ENDPOINTS)).toContain(environment);
     }
   });
-
-  it('pins that production has NO declared stream host yet', () => {
-    // This assertion is written to FAIL when the gap closes, on purpose. It is
-    // the tripwire for the one prerequisite this card cannot close itself: the
-    // contract's stream `servers` block carries localhost + staging only.
-    //
-    // WHEN THIS GOES RED, that is the good news — the prod entry has landed.
-    // Add `prod` to ENVIRONMENT_STREAM_ENDPOINTS in BOTH languages, and delete
-    // this test. Do NOT relax it to keep the suite green: a client falling back
-    // to the API host in prod is the exact failure VUozk5Bc exists to prevent,
-    // and this is the only thing that will tell anyone the wait is over.
-    expect(ENVIRONMENT_STREAM_ENDPOINTS.prod).toBeUndefined();
-    expect(declaredNonLocalServerUrls()).not.toContain('https://stream.giveitsmaller.com');
-  });
 });
