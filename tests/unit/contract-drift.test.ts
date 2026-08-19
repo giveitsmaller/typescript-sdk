@@ -31,7 +31,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { parse as parseYaml } from 'yaml';
-import { CLIENT_SRC_PATH, resolveContractsRepoSpec } from './_contract-paths.js';
+import { CLIENT_SRC_PATH, readContractsRepoSpec } from './_contract-paths.js';
 
 function extractSdkPaths(clientSource: string): string[] {
   const paths = new Set<string>();
@@ -64,9 +64,24 @@ function extractContractPaths(apiYaml: string): string[] {
 }
 
 describe('contract drift', () => {
+  // Read ONCE, and record WHERE FROM. A cross-repo count whose source commit
+  // is unstated is an anecdote: the sibling is another session's live working
+  // directory and moves between commands. `readContractsRepoSpec` prefers the
+  // committed tree at our pin precisely so this line names a commit.
+  const contracts = readContractsRepoSpec();
+
+  it('reads the contract from a reproducible source', () => {
+    // Positive control on the provenance itself: a suite that cannot say which
+    // tree it measured has not measured anything. Not an assertion that the
+    // working-tree path is forbidden — it stays legal, and stays NAMED.
+    expect(contracts.provenance).not.toBe('');
+    expect(contracts.yaml.length).toBeGreaterThan(0);
+    console.info(`contract drift measured against: ${contracts.provenance}`);
+  });
+
   it('every SDK URL template matches an OpenAPI contract path', () => {
     const clientSource = readFileSync(CLIENT_SRC_PATH, 'utf8');
-    const contractYaml = readFileSync(resolveContractsRepoSpec(), 'utf8');
+    const contractYaml = contracts.yaml;
 
     const sdkPaths = extractSdkPaths(clientSource);
     const contractPaths = new Set(extractContractPaths(contractYaml));
@@ -82,9 +97,7 @@ describe('contract drift', () => {
     // asserts the placeholder fold in extractContractPaths is load-bearing —
     // if a future edit drops the fold, these become `{uploadId}` and the
     // primary drift test above false-fails (ticket S9WHtXre).
-    const contractPaths = new Set(
-      extractContractPaths(readFileSync(resolveContractsRepoSpec(), 'utf8')),
-    );
+    const contractPaths = new Set(extractContractPaths(contracts.yaml));
     expect(contractPaths.has('/api/uploads/multipart/{id}/status')).toBe(true);
     expect(contractPaths.has('/api/uploads/multipart/{id}/presign')).toBe(true);
     expect(contractPaths.has('/api/uploads/multipart/{id}/keepalive')).toBe(true);
