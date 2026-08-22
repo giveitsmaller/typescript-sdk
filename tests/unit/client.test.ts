@@ -3387,6 +3387,69 @@ describe('GislClient', () => {
       }
     });
 
+    // 🔴 `basic` IS THE BASE TIER AS OF CONTRACTS v2.196.0, and `free` is
+    // DEPRECATED IN PLACE — one tier under two names, same ordinal position.
+    // The contract requires a tolerance artefact from both SDKs (`tkRA9Bim`)
+    // and warns that code handling `free` and not `basic` "will silently take
+    // a different branch the day the producer switches".
+    //
+    // Acceptance runs through `isInEnum(p.currentTier, UserTier)`, so `basic`
+    // is tolerated automatically — and NOTHING ASSERTED IT. Every tier fixture
+    // in this suite used 'free', so the day the producer switches, a typed
+    // error would silently degrade to a bare GislApiError and no test would
+    // notice. Automatic tolerance is not the same as demonstrated tolerance.
+    it('403 tier_restriction with current_tier "basic" still yields the TYPED error', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'File too large for tier',
+            error_type: 'tier_restriction',
+            restriction_kind: 'file_size',
+            current_tier: 'basic',
+            required_tier: 'pro',
+          },
+          403,
+        ),
+      );
+
+      try {
+        await client.getWorkflowStatus('wf-1');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislTierRestrictedError);
+        const tierErr = err as GislTierRestrictedError;
+        expect(tierErr.payload.currentTier).toBe('basic');
+        expect(tierErr.payload.requiredTier).toBe('pro');
+      }
+    });
+
+    it('403 tier_restriction with an UNKNOWN tier degrades to a bare GislApiError', async () => {
+      // The negative control for the above. Without it, a validator that
+      // accepted anything would pass the `basic` test for the wrong reason.
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'File too large for tier',
+            error_type: 'tier_restriction',
+            restriction_kind: 'file_size',
+            current_tier: 'platinum',
+            required_tier: 'pro',
+          },
+          403,
+        ),
+      );
+
+      try {
+        await client.getWorkflowStatus('wf-1');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).not.toBeInstanceOf(GislTierRestrictedError);
+        expect(err).toBeInstanceOf(GislApiError);
+      }
+    });
+
     it('403 feature_tier_restricted → GislFeatureTierRestrictedError with violations[]', async () => {
       fetchSpy.mockResolvedValueOnce(
         jsonResponse(
