@@ -43,7 +43,33 @@ type MetafileInputs = Awaited<ReturnType<typeof esbuild.build>>['metafile'] exte
     : never
   : never;
 
+// MEMOISED: five identical metafile builds became one. `s9lRKBym`.
+//
+// ⚠️ THIS IS NOT THE ENOMEM FIX, and the branch name says otherwise. esbuild's
+// `ensureServiceIsRunning` caches one module-level service, so the healthy path
+// already spawned once — memoising reduces requests to that process, not spawns
+// of it. The `spawn ENOMEM` cause is parent heap at fork time, addressed by the
+// cap in vitest.config.ts.
+//
+// The last test in this file still runs a SIXTH build (no metafile), so the
+// count is five-to-two, not five-to-one.
+//
+// The memos CLEAR THEMSELVES ON REJECTION. `??=` would otherwise cache a
+// rejected promise, so `--retry` (a CLI flag — nothing in the repo prevents
+// someone passing it) would replay the cached failure instead of rebuilding,
+// turning a retry into a no-op that looks deterministic. Two lines to remove
+// the hazard rather than document it.
+let metafileInputsPromise: Promise<MetafileInputs> | undefined;
+
 async function browserMetafileInputs(): Promise<MetafileInputs> {
+  metafileInputsPromise ??= buildBrowserMetafileInputs().catch((err) => {
+    metafileInputsPromise = undefined;
+    throw err;
+  });
+  return metafileInputsPromise;
+}
+
+async function buildBrowserMetafileInputs(): Promise<MetafileInputs> {
   const result = await esbuild.build({
     entryPoints: [entry],
     bundle: true,
@@ -61,7 +87,21 @@ async function browserMetafileInputs(): Promise<MetafileInputs> {
   return result.metafile.inputs as MetafileInputs;
 }
 
-async function staticReachable(): Promise<Set<string>> {
+// Memoised for the same reason: called twice, rebuilt each time.
+let reachablePromise: Promise<Set<string>> | undefined;
+
+async function staticReachable(): Promise<ReadonlySet<string>> {
+  // ReadonlySet: the same Set object now goes to every caller, and a future
+  // test that added or deleted an entry would corrupt the others with no
+  // failure at the mutation site.
+  reachablePromise ??= computeStaticReachable().catch((err) => {
+    reachablePromise = undefined;
+    throw err;
+  });
+  return reachablePromise;
+}
+
+async function computeStaticReachable(): Promise<Set<string>> {
   const inputs = await browserMetafileInputs();
   const entryKey = Object.keys(inputs).find((f) => f.endsWith('src/index.browser.ts'));
   if (entryKey === undefined) throw new Error('browser entry not found in metafile');
@@ -99,6 +139,11 @@ async function staticNodeOffenders(): Promise<string[]> {
 }
 
 describe('browser entry — node-free static graph', () => {
+  // No `esbuild.stop()`: it would free the service for the rest of the run,
+  // but vitest transforms through esbuild too and whether that is the same
+  // service instance is unverified. Not worth a speculative gain in the suite
+  // being stabilised.
+
   it('has NO static node: import reachable from src/index.browser.ts', async () => {
     const offenders = await staticNodeOffenders();
     expect(offenders).toEqual([]);
