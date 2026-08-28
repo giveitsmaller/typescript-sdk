@@ -589,7 +589,13 @@ export type {
   CompressDocumentEpubOptions,
   ThumbnailImageOptions,
   ThumbnailVideoOptions,
-  ThumbnailDocumentOptions,
+  // Contracts v2.198.0 split the single `document` thumbnail group into per-format
+  // groups so each could carry the input ceiling that actually binds it. The generic
+  // `ThumbnailDocumentOptions` no longer exists; these three replace it, matching how
+  // compress already re-exports its document media above.
+  ThumbnailDocumentOfficeOptions,
+  ThumbnailDocumentPdfOptions,
+  ThumbnailDocumentEpubOptions,
   // Generated per-media transform option types (T4) — consistent with the other ops'
   // per-media option-type re-exports (the hand-written ergonomic bag is `TransformOptions`).
   TransformImageOptions,

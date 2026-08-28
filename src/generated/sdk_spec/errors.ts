@@ -41,6 +41,8 @@ export type ErrorCode =
   | "image_dimensions_too_large"
   | "upload_failed"
   | "workflow_failed"
+  | "sse_connection_limit_exceeded"
+  | "sse_capacity_exhausted"
   | "long_form_concurrency_limit_exceeded"
   | "unprocessable_entity"
   | "email_same"
@@ -579,6 +581,33 @@ export const ERROR_CODES: Readonly<Record<ErrorCode, ErrorEntry>> = Object.freez
       "jobErrors": "array",
     }),
   }),
+  "sse_connection_limit_exceeded": Object.freeze({
+    code: "sse_connection_limit_exceeded",
+    category: "api" as ErrorCategory,
+    source: "ErrorEnvelope.error",
+    status: "planned" as ErrorStatus,
+    httpStatus: 429,
+    retryable: true,
+    sdkClass: "GislSseConnectionLimitError",
+    description: "429 — the CALLER's own concurrent event-stream allowance is exhausted. Same semantics as the tier long-form concurrency limit and therefore the same status. NOT for a global-capacity refusal; see sse_capacity_exhausted.",
+    metadataSchema: Object.freeze({
+      "openStreams": "integer",
+      "maxStreams": "integer",
+    }),
+  }),
+  "sse_capacity_exhausted": Object.freeze({
+    code: "sse_capacity_exhausted",
+    category: "api" as ErrorCategory,
+    source: "ErrorEnvelope.error",
+    status: "planned" as ErrorStatus,
+    httpStatus: 503,
+    retryable: true,
+    sdkClass: "GislSseCapacityError",
+    description: "503 — GLOBAL event-stream capacity is exhausted, and it says nothing about this caller. A caller who has opened no streams can receive it. ⚠️ `EventSource` does not expose the HTTP status to page script, so a browser client cannot distinguish this from 500 — the status serves non-browser clients, proxies and observability.",
+    metadataSchema: Object.freeze({
+      "links": "object",
+    }),
+  }),
   "long_form_concurrency_limit_exceeded": Object.freeze({
     code: "long_form_concurrency_limit_exceeded",
     category: "api" as ErrorCategory,
@@ -732,6 +761,8 @@ export const ERROR_CATEGORIES: Readonly<Record<ErrorCategory, readonly ErrorCode
     "requires_reencode",
     "image_dimensions_too_large",
     "workflow_failed",
+    "sse_connection_limit_exceeded",
+    "sse_capacity_exhausted",
     "long_form_concurrency_limit_exceeded",
     "item_failed",
   ] as readonly ErrorCode[]),
