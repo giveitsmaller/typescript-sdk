@@ -6,7 +6,29 @@ import type { GislSseEvent, GislSseParseFailure } from './types.js';
  * - Chunk boundary buffering (events split across chunks)
  * - Multi-line `data:` fields (concatenated with newlines)
  * - Comment lines (`:` prefix) used as keep-alives
- * - `retry:` field (ignored, SDK manages its own reconnection)
+ * - `id:` and `retry:` fields — IGNORED, and neither is surfaced on
+ *   `GislSseEvent`
+ *
+ * 🔴 THIS SDK DOES NOT RECONNECT. It opens ONE stream and yields frames until
+ * the server ends it, the caller breaks, or the signal aborts. There is no
+ * retry loop, no backoff, and **no `Last-Event-ID` resumption** — so a dropped
+ * connection loses every event published while it was down, and the server
+ * cannot replay them.
+ *
+ * ⚠️ AN EARLIER VERSION OF THIS LINE READ "ignored, SDK manages its own
+ * reconnection", WHICH IS FALSE AND SAYS THE OPPOSITE OF THE TRUTH. A reader
+ * meeting it concluded retries were handled here. The poll-fallback in `run()`
+ * is a DIFFERENT TRANSPORT — it abandons the stream and polls
+ * `getWorkflowStatus` — not a reconnection, and it exists only on the
+ * ergonomic path. A direct `streamEvents` caller gets no recovery of any kind.
+ *
+ * ⇒ If you need to survive a drop, wrap this in your own loop AND reconcile
+ * the terminal state via `getWorkflowStatus` afterwards, because the gap is
+ * unrecoverable from the stream alone. See `docs/typescript/sse.md`.
+ *
+ * PHP and Python have carried this disclaimer since B2.2; TypeScript is the
+ * reference implementation both mirror and was the only one asserting the
+ * opposite (hub audit, 2026-08-29).
  *
  * `opts.signal` (optional): when it aborts, the underlying body reader is
  * cancelled. This is the ONLY way to promptly stop a stream parked on a
