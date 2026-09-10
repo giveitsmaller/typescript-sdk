@@ -1372,7 +1372,7 @@ export const WATERMARK_CAPABILITY = {
         image_bmp: { mimes: ['image/bmp'], availability: 'stable' },
     },
     video_watermark: {
-        video: { mimes: ['video/mp4', 'video/webm'], availability: 'beta' },
+        video: { mimes: ['video/mp4', 'video/webm'], availability: 'stable' },
     },
 };
 const _WATERMARK_SHIPPABLE = new Set(['stable', 'beta']);

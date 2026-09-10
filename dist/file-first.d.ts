@@ -671,7 +671,7 @@ export declare const WATERMARK_CAPABILITY: {
     readonly video_watermark: {
         readonly video: {
             readonly mimes: readonly ["video/mp4", "video/webm"];
-            readonly availability: "beta";
+            readonly availability: "stable";
         };
     };
 };

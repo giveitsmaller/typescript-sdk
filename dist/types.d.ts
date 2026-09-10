@@ -187,12 +187,25 @@ export interface WorkflowProcessingPayload {
 export interface WorkflowCreatePayload {
     jobs: JobDefinitionPayload[];
     /**
-     * Flat single-job form (with `operations`): top-level input source, exactly
-     * equivalent to `jobs: [{ source, operations }]` (contracts D0Gsri8V, v2.64.0).
-     * The spec's `oneOf` makes `jobs` and `source`+`operations` mutually exclusive;
-     * the SDK builders always emit the explicit `jobs[]` form, so these are typed
-     * optional for spec-completeness (a consumer hand-building the flat form omits
-     * `jobs`). Builder adoption of the flat form is a follow-up.
+     * Flat single-job form (with `operations`): top-level input source, described by
+     * the contract as equivalent to `jobs: [{ source, operations }]` (contracts
+     * D0Gsri8V, v2.64.0). The spec's `oneOf` makes `jobs` and `source`+`operations`
+     * mutually exclusive.
+     *
+     * 🔴 **DO NOT SEND IT. The flat form is `x-availability: planned` as of contracts
+     * v2.201.0 and the server does not accept it.** Send `jobs[]`, which is what both
+     * SDK builders always emit — these two fields are typed optional for
+     * spec-completeness only.
+     *
+     * ⚠️ **The equivalence above is the DESIGN, not observed behaviour**, and it
+     * carried no availability marker from v2.64.0 until 2026-09-10 — which per
+     * ADR-0001 §1.4 meant it read as `stable`, a GA claim about a shape nothing
+     * accepts. No shipped SDK was ever exposed; a hand-built payload was.
+     *
+     * ⚠️ **A flat request is rejected today with a generic "At least one job is
+     * required", not the `feature_not_available` 422 a `planned` shape owes you.**
+     * So do not read that message as a fault in your own payload. Tracked against
+     * `compression_api`.
      */
     source?: WorkflowSourcePayload;
     /** Flat-form operation set (with `source`); equivalent to one job's `operations`. */

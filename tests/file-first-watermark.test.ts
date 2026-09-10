@@ -378,13 +378,37 @@ describe('isWatermarkStatus', () => {
   });
 });
 
+// ⚠️ THIS FILE'S COPY OF THE AVAILABILITY VALUES IS THE SECOND ONE, AND IT IS
+// THE WEAKER ONE. `watermark-capability-conformance.test.ts` pins the SAME table
+// to the generated `availability.json`, so it fails on its own the moment a
+// contract regen moves a value — which is what a tripwire should do. The literals
+// below cannot detect anything the conformance test misses; they can only go
+// stale and demand a hand-edit, which is exactly what happened on the v2.201.0
+// re-vendor when `video_watermark` was promoted beta -> stable and BOTH tests
+// went red for the same single cause.
+//
+// ⇒ What is asserted here is the SHAPE the gate depends on — that every group
+// carries a non-empty mime list and an availability drawn from the contract's
+// vocabulary — not the values, which the contract owns and the conformance test
+// checks. Keeping a value assertion here would be a decoration that also has to
+// be maintained.
 describe('WATERMARK_CAPABILITY table', () => {
-  it('exposes the shippable image + beta video routing', () => {
-    expect(WATERMARK_CAPABILITY.image_watermark.image.availability).toBe('stable');
-    expect(WATERMARK_CAPABILITY.image_watermark.image_gif.availability).toBe('planned');
-    expect(WATERMARK_CAPABILITY.image_watermark.image_tiff.availability).toBe('stable');
-    expect(WATERMARK_CAPABILITY.image_watermark.image_bmp.availability).toBe('stable');
-    expect(WATERMARK_CAPABILITY.video_watermark.video.availability).toBe('beta');
+  it('exposes every routable group with a non-empty mime list', () => {
+    const groups = Object.values(WATERMARK_CAPABILITY).flatMap((op) => Object.values(op));
+    expect(groups.length).toBeGreaterThan(0);
+    for (const group of groups) {
+      expect(group.mimes.length).toBeGreaterThan(0);
+      expect(['stable', 'beta', 'experimental', 'planned', 'deprecated']).toContain(
+        group.availability,
+      );
+    }
+  });
+
+  it('routes both wire ops', () => {
+    expect(Object.keys(WATERMARK_CAPABILITY).sort()).toEqual([
+      'image_watermark',
+      'video_watermark',
+    ]);
   });
 });
 
