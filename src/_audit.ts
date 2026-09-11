@@ -192,6 +192,30 @@ import type {
 } from './index.js';
 import { ANONYMOUS_ALLOWLIST } from './gisl.js';
 
+// BQXpFV2R — the 13 ergonomic symbols the gate never pinned, plus the exact-equality
+// helper the signature pins need.
+//
+// ⚠️ SEVEN OF THESE ARE VALUE-ONLY and have no type meaning: `gisl`, `create`,
+// `fileInput`, `asset`, `handle`, `clip`, `verifyWebhook`. `accept<gisl>()` does not
+// compile; they are pinned as `accept<typeof X>()` below. The six classes take both
+// forms — `accept<X>()` pins the instance type, `accept<typeof X>()` the constructor.
+import type { Equal } from './ergonomic/option_types.js';
+import {
+  gisl,
+  create,
+  Recipe,
+  fileInput,
+  OperationBuilder,
+  MergeBuilder,
+  MergedRecipe,
+  ArchivedRecipe,
+  MapEachBuilder,
+  asset,
+  handle,
+  clip,
+  verifyWebhook,
+} from './index.js';
+
 // Pin the parked-allowlist invariant: `ANONYMOUS_ALLOWLIST` MUST stay empty
 // until the user-decision in `docs/plans/sdk-ergonomics/plan.md` §12 flips,
 // at which point the public `gisl.anonymous()` export also needs to land.
@@ -282,14 +306,116 @@ export function _runAudit(): void {
   // methods EXIST and their signatures/return types match (indexed access errors
   // if a method is missing; the typed LHS errors if the signature drifts). The
   // RHS is a type-only cast (`null as unknown as …`) — no runtime property read.
-  const _creditsSig: () => Promise<CreditsBalanceResponse> =
-    null as unknown as ErgonomicClient['credits'];
-  const _creditsUsageSig: (options?: CreditsUsageOptions) => Promise<CreditsUsageResponse> =
-    null as unknown as ErgonomicClient['creditsUsage'];
-  const _limitsSig: () => Promise<AccountLimits> = null as unknown as ErgonomicClient['limits'];
+  //
+  // 🔴 THE ASSIGNMENT FORM BELOW WAS WEAKER THAN IT LOOKED, AND IS NOW FIXED.
+  // A single assignment tests ONE-WAY assignability, so a drift to `any` — or to any
+  // broader callable — stays assignable and PASSES. Assigning both ways does not fix
+  // it either: `any` is assignable in both directions. Real equality needs a
+  // conditional-type helper, and this repo already had one in
+  // `ergonomic/option_types.ts`, used there to pin option key-sets to the contract.
+  // ⇒ These three have been decorative since 8yqUXLCS shipped them. Tightened here
+  // rather than left one-way beside sixteen correct ones.
+  const _creditsSig: Equal<ErgonomicClient['credits'], () => Promise<CreditsBalanceResponse>> = true;
+  const _creditsUsageSig: Equal<
+    ErgonomicClient['creditsUsage'],
+    (options?: CreditsUsageOptions) => Promise<CreditsUsageResponse>
+  > = true;
+  const _limitsSig: Equal<ErgonomicClient['limits'], () => Promise<AccountLimits>> = true;
   void _creditsSig;
   void _creditsUsageSig;
   void _limitsSig;
+
+  // ── BQXpFV2R — the thirteen unpinned ergonomic symbols ────────────────────────
+  //
+  // ⚠️ EXISTENCE IS NOW THE SNAPSHOT'S JOB, not this list's.
+  // `tests/api-surface.test.ts` computes all 381 exports from source and compares
+  // them to a committed file, so a symbol cannot go unpinned because nobody
+  // remembered it — which is exactly how these thirteen were missed, alongside the
+  // whole `Gisl*Error` tree and `GislClient` itself. What remains here is the part a
+  // name-and-kind snapshot CANNOT express: SIGNATURES.
+  //
+  // ⚠️ COVERAGE BOUNDARY, stated so the gate is not mistaken for complete:
+  // signatures are pinned for the nine builders' execution methods and the three
+  // ErgonomicClient accessors above. A signature change to `GislClient`, `gisl`,
+  // `create` or `parseSseStream` is caught by NOTHING here. That is a deliberate
+  // scope line — widening it is ticket `YebCTMuY`.
+  accept<typeof gisl>();
+  accept<typeof create>();
+  accept<typeof fileInput>();
+  accept<typeof asset>();
+  accept<typeof handle>();
+  accept<typeof clip>();
+  accept<typeof verifyWebhook>();
+  accept<Recipe>();
+  accept<typeof Recipe>();
+  accept<OperationBuilder>();
+  accept<typeof OperationBuilder>();
+  accept<MergeBuilder>();
+  accept<typeof MergeBuilder>();
+  accept<MergedRecipe>();
+  accept<typeof MergedRecipe>();
+  accept<ArchivedRecipe>();
+  accept<typeof ArchivedRecipe>();
+  accept<MapEachBuilder>();
+  accept<typeof MapEachBuilder>();
+
+  // ── Execution-method signatures: sixteen pins across nine classes ─────────────
+  //
+  // `run()` AND `submit()` on the seven that have both; `run()` ONLY on BatchRecipe
+  // and MapEachBuilder, which deliberately have no `submit()`. ⚠️ Pinning a
+  // `submit()` they do not have would INVENT API, so the asymmetry is the point.
+  // Each uses `Equal<>`, not assignment — see the note above.
+  // ⚠️ EACH PIN NAMES THE EXPECTED SIGNATURE EXPLICITLY. `Equal<X['run'], X['run']>`
+  // would be trivially true and assert NOTHING — a decoration of exactly the kind
+  // this ticket exists to remove. The right-hand side is written out, so a drift in
+  // parameters or return type fails here naming the symbol.
+  //
+  // The file-first builders share one `run` options bag and one `submit` shape;
+  // OperationBuilder and MergeBuilder take the typed `RunOptions` / `SubmitOptions`
+  // objects instead. ⚠️ THAT DIVERGENCE IS REAL AND DELIBERATE-BY-ACCIDENT — it is
+  // ticket `36AZ98FV`. Pinning both shapes here records it rather than hiding it.
+  type FileFirstRun<R> = (options?: {
+    maxWait?: string | number;
+    onProgress?: (event: ProgressEvent) => void;
+    signal?: AbortSignal;
+    useSSE?: boolean;
+    pollIntervalMs?: number;
+    probeBeforeCreate?: boolean;
+    probeTimeoutMs?: number;
+  }) => Promise<R>;
+  type FileFirstSubmit = (
+    webhook?: string,
+    options?: { probeBeforeCreate?: boolean; probeTimeoutMs?: number },
+  ) => Promise<Handle>;
+
+  const _recipeRun: Equal<Recipe['run'], FileFirstRun<RunResult>> = true;
+  const _recipeSubmit: Equal<Recipe['submit'], FileFirstSubmit> = true;
+  const _filesRun: Equal<FilesRecipe['run'], FileFirstRun<RunResult>> = true;
+  const _filesSubmit: Equal<FilesRecipe['submit'], FileFirstSubmit> = true;
+  const _mergedRun: Equal<MergedRecipe['run'], FileFirstRun<RunResult>> = true;
+  const _mergedSubmit: Equal<MergedRecipe['submit'], FileFirstSubmit> = true;
+  const _archivedRun: Equal<ArchivedRecipe['run'], FileFirstRun<RunResult>> = true;
+  const _archivedSubmit: Equal<ArchivedRecipe['submit'], FileFirstSubmit> = true;
+  const _watermarkedRun: Equal<WatermarkedRecipe['run'], FileFirstRun<RunResult>> = true;
+  const _watermarkedSubmit: Equal<WatermarkedRecipe['submit'], FileFirstSubmit> = true;
+  const _batchRun: Equal<BatchRecipe['run'], FileFirstRun<RunResult>> = true;
+
+  const _opRun: Equal<OperationBuilder['run'], (options: RunOptions) => Promise<Result>> = true;
+  const _opSubmit: Equal<OperationBuilder['submit'], (options: SubmitOptions) => Promise<Handle>> =
+    true;
+  const _mergeRun: Equal<MergeBuilder['run'], (options: RunOptions) => Promise<Result>> = true;
+  const _mergeSubmit: Equal<MergeBuilder['submit'], (options: SubmitOptions) => Promise<Handle>> =
+    true;
+  // ⚠️ `Promise<Result>`, NOT `Promise<Result[]>`. A fan-out returns ONE aggregate
+  // result carrying `childWorkflowIds`, not an array. I wrote `Result[]` from
+  // assumption and this pin failed on its first compile — the gate catching a wrong
+  // belief before any mutation test, which is the whole point of writing it out.
+  const _mapEachRun: Equal<MapEachBuilder['run'], (options: RunOptions) => Promise<Result>> = true;
+
+  void _recipeRun; void _recipeSubmit; void _filesRun; void _filesSubmit;
+  void _mergedRun; void _mergedSubmit; void _archivedRun; void _archivedSubmit;
+  void _watermarkedRun; void _watermarkedSubmit; void _batchRun;
+  void _opRun; void _opSubmit; void _mergeRun; void _mergeSubmit; void _mapEachRun;
   accept<Artifact>();
   accept<Handle>();
   accept<Result>();

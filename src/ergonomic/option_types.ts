@@ -270,7 +270,12 @@ const OUTPUT_OPTION_KEYS = [
 // `Equal<A, B>` is `true` only when A and B are the SAME union; assigning `true` to it
 // fails to compile if an interface key is added/removed without updating its tuple. The
 // tuples are themselves tied to the contract metadata by the wire-key conformance guard.
-type Equal<A, B> =
+// EXPORTED for `src/_audit.ts` (BQXpFV2R), which needs exact type EQUALITY for its
+// signature pins. ⚠️ It does NOT reach the public surface: `index.core.ts` pulls
+// `option_types` by named clause only, and the sole two `export *` in the entry graph
+// are `index.ts` and `index.browser.ts` -> `index.core.ts`. The committed export
+// snapshot in `tests/api-surface/` asserts that, so a leak becomes a red test.
+export type Equal<A, B> =
   (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
 
 const _convertKeysMatch: Equal<keyof ConvertOptions, (typeof CONVERT_OPTION_KEYS)[number]> = true;

@@ -215,6 +215,7 @@ export interface OutputOptions {
     /** JPEG/WebP lossless. Honored: same_format jpeg/webp (stable since v2.101.0). */
     lossless?: boolean;
 }
+export type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
 /**
  * The user-supplyable option keys per verb (excludes positional-owned keys).
  * Exported for the wire-key conformance guard, which asserts each tuple ∪ its

@@ -75,12 +75,90 @@ export function _runAudit() {
     // methods EXIST and their signatures/return types match (indexed access errors
     // if a method is missing; the typed LHS errors if the signature drifts). The
     // RHS is a type-only cast (`null as unknown as …`) — no runtime property read.
-    const _creditsSig = null;
-    const _creditsUsageSig = null;
-    const _limitsSig = null;
+    //
+    // 🔴 THE ASSIGNMENT FORM BELOW WAS WEAKER THAN IT LOOKED, AND IS NOW FIXED.
+    // A single assignment tests ONE-WAY assignability, so a drift to `any` — or to any
+    // broader callable — stays assignable and PASSES. Assigning both ways does not fix
+    // it either: `any` is assignable in both directions. Real equality needs a
+    // conditional-type helper, and this repo already had one in
+    // `ergonomic/option_types.ts`, used there to pin option key-sets to the contract.
+    // ⇒ These three have been decorative since 8yqUXLCS shipped them. Tightened here
+    // rather than left one-way beside sixteen correct ones.
+    const _creditsSig = true;
+    const _creditsUsageSig = true;
+    const _limitsSig = true;
     void _creditsSig;
     void _creditsUsageSig;
     void _limitsSig;
+    // ── BQXpFV2R — the thirteen unpinned ergonomic symbols ────────────────────────
+    //
+    // ⚠️ EXISTENCE IS NOW THE SNAPSHOT'S JOB, not this list's.
+    // `tests/api-surface.test.ts` computes all 381 exports from source and compares
+    // them to a committed file, so a symbol cannot go unpinned because nobody
+    // remembered it — which is exactly how these thirteen were missed, alongside the
+    // whole `Gisl*Error` tree and `GislClient` itself. What remains here is the part a
+    // name-and-kind snapshot CANNOT express: SIGNATURES.
+    //
+    // ⚠️ COVERAGE BOUNDARY, stated so the gate is not mistaken for complete:
+    // signatures are pinned for the nine builders' execution methods and the three
+    // ErgonomicClient accessors above. A signature change to `GislClient`, `gisl`,
+    // `create` or `parseSseStream` is caught by NOTHING here. That is a deliberate
+    // scope line — widening it is ticket `YebCTMuY`.
+    accept();
+    accept();
+    accept();
+    accept();
+    accept();
+    accept();
+    accept();
+    accept();
+    accept();
+    accept();
+    accept();
+    accept();
+    accept();
+    accept();
+    accept();
+    accept();
+    accept();
+    accept();
+    accept();
+    const _recipeRun = true;
+    const _recipeSubmit = true;
+    const _filesRun = true;
+    const _filesSubmit = true;
+    const _mergedRun = true;
+    const _mergedSubmit = true;
+    const _archivedRun = true;
+    const _archivedSubmit = true;
+    const _watermarkedRun = true;
+    const _watermarkedSubmit = true;
+    const _batchRun = true;
+    const _opRun = true;
+    const _opSubmit = true;
+    const _mergeRun = true;
+    const _mergeSubmit = true;
+    // ⚠️ `Promise<Result>`, NOT `Promise<Result[]>`. A fan-out returns ONE aggregate
+    // result carrying `childWorkflowIds`, not an array. I wrote `Result[]` from
+    // assumption and this pin failed on its first compile — the gate catching a wrong
+    // belief before any mutation test, which is the whole point of writing it out.
+    const _mapEachRun = true;
+    void _recipeRun;
+    void _recipeSubmit;
+    void _filesRun;
+    void _filesSubmit;
+    void _mergedRun;
+    void _mergedSubmit;
+    void _archivedRun;
+    void _archivedSubmit;
+    void _watermarkedRun;
+    void _watermarkedSubmit;
+    void _batchRun;
+    void _opRun;
+    void _opSubmit;
+    void _mergeRun;
+    void _mergeSubmit;
+    void _mapEachRun;
     accept();
     accept();
     accept();
