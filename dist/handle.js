@@ -32,6 +32,7 @@
  *
  * Mirrors the PHP `Gisl\Sdk\Ergonomic\Handle` + `Gisl\Sdk\Ergonomic\StatusSnapshot`.
  */
+import { DEFAULT_POLL_TIMEOUT_MS } from './client.js';
 import { GislConfigError, GislNetworkError, GislResultNotReadyError, GislTimeoutError, GislStreamHostNotDeclaredError, SseEndedWithoutTerminal, } from './errors.js';
 import { _consumeSseToTerminal, _pollToTerminal, _parseMaxWait, } from './builder.js';
 import { projectDownloadsToRunResult, projectMultiJobToRunResult, isFanoutStatus, isMergeStatus, isArchiveStatus, isWatermarkStatus, isSoleOpChainStatus, soleOpChainDeliverableRef, _POST_STEP_JOB_REF, } from './file-first.js';
@@ -154,7 +155,7 @@ export class Handle {
      * @throws {GislConfigError} reason `no_client` when no client is bound.
      * @throws {GislTimeoutError} when `maxWait` elapses before terminal.
      */
-    async wait(maxWait = 600_000, onProgress) {
+    async wait(maxWait = DEFAULT_POLL_TIMEOUT_MS, onProgress) {
         const client = this.requireClient();
         const deadline = Date.now() + _parseMaxWait(maxWait);
         let finalStatus;

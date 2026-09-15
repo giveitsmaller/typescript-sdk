@@ -20,12 +20,15 @@
  *   `SseOperationProgressData`. The `phase` discriminator is SDK-added;
  *   `status` values pass through verbatim from `SseOperationProgressDataStatusEnum`.
  *   The wire does NOT carry a `phase` field — see karen reality-check 2026-05-23.
- * - `.run()` requires `maxWait` (no default). The underlying `waitForWorkflow`
- *   has a 600s default for the poll fallback path; the ergonomic layer makes
- *   it MANDATORY in the type so callers consciously choose a deadline.
+ * - `.run()` takes an OPTIONAL options bag; `maxWait` defaults to
+ *   `DEFAULT_POLL_TIMEOUT_MS`, the same constant the poll fallback and every
+ *   file-first builder use. It was mandatory until 36AZ98FV, on the grounds
+ *   that inheriting that default would "leak silently" — while the SDK applied
+ *   it at fourteen sites regardless.
  */
 
 import type { GislClient } from './client.js';
+import { DEFAULT_POLL_TIMEOUT_MS } from './client.js';
 import type {
   OperationDownload,
   WorkflowStatusResponse,
@@ -373,12 +376,17 @@ export type ProgressEvent = UploadProgressEvent | ProcessingProgressEvent;
 export interface RunOptions {
   /**
    * Wall-clock deadline for the entire run (upload + create + wait + downloads).
-   * MANDATORY — the SDK does NOT supply a default because the underlying
-   * `waitForWorkflow` poll path has a 600s default that would otherwise
-   * leak silently. Pass `'2h'` / `'30m'` / `'120s'` as a string suffix or
-   * a number of milliseconds.
+   * Optional; defaults to {@link DEFAULT_POLL_TIMEOUT_MS}. Pass `'2h'` / `'30m'` /
+   * `'120s'` as a string suffix or a number of milliseconds.
+   *
+   * ⚠️ THIS WAS MANDATORY, on the stated grounds that a 600s default "would
+   * otherwise leak silently" (36AZ98FV). The same tree applied exactly that
+   * default at FOURTEEN sites across both SDKs, so the prohibition was refuted
+   * by the code it protected — and the file-first spelling of the same task
+   * accepted no arguments at all. One shared constant is what makes the rule
+   * unnecessary rather than what breaks it.
    */
-  readonly maxWait: string | number;
+  readonly maxWait?: string | number;
   /** Abort signal — terminates upload, SSE, and poll cleanly. */
   readonly signal?: AbortSignal;
   /** Progress callback receiving the SDK-synthesised discriminated union. */
@@ -404,8 +412,18 @@ export interface RunOptions {
 }
 
 export interface SubmitOptions {
-  /** Webhook URL — wired to `WorkflowCreateRequest.callback_url`. */
-  readonly webhook: string;
+  /**
+   * Webhook URL — wired to `WorkflowCreateRequest.callback_url`.
+   *
+   * Optional. `callback_url` is not in `WorkflowCreateRequest`'s required set and
+   * is typed `string | null`, so omitting it is contract-valid. It was mandatory
+   * here because the returned {@link Handle} carried no client and its
+   * `status()`/`wait()`/`result()` threw `no_client` — the webhook was the only
+   * channel by which the outcome could be learned. The handle is bound now
+   * (36AZ98FV), so omitting the webhook leaves a usable handle rather than a
+   * dead end.
+   */
+  readonly webhook?: string;
   /**
    * Best-effort probe-before-create for a VIDEO upload that went multipart.
    * Default `true`; set `false` to skip the wait. See {@link RunOptions}.
@@ -510,8 +528,8 @@ export class OperationBuilder {
    * fetches downloads, and projects to a flat `Result`. Throws
    * `GislTimeoutError` if `maxWait` elapses before terminal status.
    */
-  async run(options: RunOptions): Promise<Result> {
-    const deadline = Date.now() + _parseMaxWait(options.maxWait);
+  async run(options: RunOptions = {}): Promise<Result> {
+    const deadline = Date.now() + _parseMaxWait(options.maxWait ?? DEFAULT_POLL_TIMEOUT_MS);
     const signal = options.signal;
     const onProgress = options.onProgress;
     const useSSE = options.useSSE ?? true;
@@ -608,7 +626,7 @@ export class OperationBuilder {
    * `Handle` (workflowId + webhookSecret) without waiting. The webhook
    * receives completion + the `webhookSecret` is the verifier seed.
    */
-  async submit(options: SubmitOptions): Promise<Handle> {
+  async submit(options: SubmitOptions = {}): Promise<Handle> {
     // Resolve presets before any I/O so a GislConfigError fails the
     // call before the upload — same fail-early contract as run().
     const resolved = this._resolve();
@@ -627,17 +645,27 @@ export class OperationBuilder {
       source: uploadSource(uploadResp.fileId),
       operations: [{ type: this.opType as OperationDef['type'], options: resolved.wireOptions }],
     };
+    // ⚠️ OMIT THE KEY, do not set it to `undefined`. `JSON.stringify` drops an
+    // undefined value so the wire is the same either way — but an own property
+    // that exists with no value makes `'callback_url' in payload` TRUE, so any
+    // test asserting omission by key passes vacuously (codex 4763eb48189a).
     const payload: WorkflowCreatePayload = {
       jobs: [job],
-      callback_url: options.webhook,
+      ...(options.webhook !== undefined ? { callback_url: options.webhook } : {}),
     };
     const created = await this.client.createWorkflow(payload);
 
-    // No client passed → the returned Handle's status()/wait()/result()
-    // throw `no_client`; the operation-first submit reconciles via webhook.
+    // ⚠️ THE CLIENT IS THE POINT (36AZ98FV). Without it the returned Handle's
+    // status()/wait()/result() throw `no_client`, which made `webhook` the only
+    // channel for this call's outcome and is why it used to be mandatory. The
+    // file-first path has always passed it (`file-first.ts`); the operation-first
+    // path did not, which is the same "demands what file-first does not" defect
+    // this ticket is about, one layer down.
     return new Handle(
       created.workflowId,
       created.webhookSecret != null ? created.webhookSecret : undefined,
+      this.client,
+      null,
     );
   }
 
@@ -733,8 +761,8 @@ export class MapEachBuilder {
    * run + every child's full run — each child sees the REMAINING budget
    * after the parent and prior children completed. Signal aborts cascade.
    */
-  async run(options: RunOptions): Promise<Result> {
-    const deadline = Date.now() + _parseMaxWait(options.maxWait);
+  async run(options: RunOptions = {}): Promise<Result> {
+    const deadline = Date.now() + _parseMaxWait(options.maxWait ?? DEFAULT_POLL_TIMEOUT_MS);
 
     // 1. Run the parent.
     const remainingForParent = Math.max(1, deadline - Date.now());

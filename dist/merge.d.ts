@@ -168,8 +168,8 @@ export declare class MergeBuilder {
      * and deduped on upload (one upload per unique declared asset).
      */
     sequence(...entries: SequenceEntry[]): this;
-    run(options: RunOptions): Promise<Result>;
-    submit(options: SubmitOptions): Promise<Handle>;
+    run(options?: RunOptions): Promise<Result>;
+    submit(options?: SubmitOptions): Promise<Handle>;
     /**
      * Resolve the declared assets + sequence (or fall back to declared order),
      * dedupe by identity, and run the local validators. The returned plan

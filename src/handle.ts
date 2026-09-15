@@ -34,6 +34,7 @@
  */
 
 import type { GislClient } from './client.js';
+import { DEFAULT_POLL_TIMEOUT_MS } from './client.js';
 import {
   GislConfigError,
   GislNetworkError,
@@ -190,7 +191,7 @@ export class Handle {
    * @throws {GislTimeoutError} when `maxWait` elapses before terminal.
    */
   async wait(
-    maxWait: string | number = 600_000,
+    maxWait: string | number = DEFAULT_POLL_TIMEOUT_MS,
     onProgress?: (event: ProgressEvent) => void,
   ): Promise<RunResult> {
     const client = this.requireClient();

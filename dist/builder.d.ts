@@ -20,9 +20,11 @@
  *   `SseOperationProgressData`. The `phase` discriminator is SDK-added;
  *   `status` values pass through verbatim from `SseOperationProgressDataStatusEnum`.
  *   The wire does NOT carry a `phase` field — see karen reality-check 2026-05-23.
- * - `.run()` requires `maxWait` (no default). The underlying `waitForWorkflow`
- *   has a 600s default for the poll fallback path; the ergonomic layer makes
- *   it MANDATORY in the type so callers consciously choose a deadline.
+ * - `.run()` takes an OPTIONAL options bag; `maxWait` defaults to
+ *   `DEFAULT_POLL_TIMEOUT_MS`, the same constant the poll fallback and every
+ *   file-first builder use. It was mandatory until 36AZ98FV, on the grounds
+ *   that inheriting that default would "leak silently" — while the SDK applied
+ *   it at fourteen sites regardless.
  */
 import type { GislClient } from './client.js';
 import type { OperationDownload, WorkflowStatusResponse, SseOperationProgressDataStatusEnum } from '@giveitsmaller/contracts/openapi';
@@ -235,12 +237,17 @@ export type ProgressEvent = UploadProgressEvent | ProcessingProgressEvent;
 export interface RunOptions {
     /**
      * Wall-clock deadline for the entire run (upload + create + wait + downloads).
-     * MANDATORY — the SDK does NOT supply a default because the underlying
-     * `waitForWorkflow` poll path has a 600s default that would otherwise
-     * leak silently. Pass `'2h'` / `'30m'` / `'120s'` as a string suffix or
-     * a number of milliseconds.
+     * Optional; defaults to {@link DEFAULT_POLL_TIMEOUT_MS}. Pass `'2h'` / `'30m'` /
+     * `'120s'` as a string suffix or a number of milliseconds.
+     *
+     * ⚠️ THIS WAS MANDATORY, on the stated grounds that a 600s default "would
+     * otherwise leak silently" (36AZ98FV). The same tree applied exactly that
+     * default at FOURTEEN sites across both SDKs, so the prohibition was refuted
+     * by the code it protected — and the file-first spelling of the same task
+     * accepted no arguments at all. One shared constant is what makes the rule
+     * unnecessary rather than what breaks it.
      */
-    readonly maxWait: string | number;
+    readonly maxWait?: string | number;
     /** Abort signal — terminates upload, SSE, and poll cleanly. */
     readonly signal?: AbortSignal;
     /** Progress callback receiving the SDK-synthesised discriminated union. */
@@ -265,8 +272,18 @@ export interface RunOptions {
     readonly probeTimeoutMs?: number;
 }
 export interface SubmitOptions {
-    /** Webhook URL — wired to `WorkflowCreateRequest.callback_url`. */
-    readonly webhook: string;
+    /**
+     * Webhook URL — wired to `WorkflowCreateRequest.callback_url`.
+     *
+     * Optional. `callback_url` is not in `WorkflowCreateRequest`'s required set and
+     * is typed `string | null`, so omitting it is contract-valid. It was mandatory
+     * here because the returned {@link Handle} carried no client and its
+     * `status()`/`wait()`/`result()` threw `no_client` — the webhook was the only
+     * channel by which the outcome could be learned. The handle is bound now
+     * (36AZ98FV), so omitting the webhook leaves a usable handle rather than a
+     * dead end.
+     */
+    readonly webhook?: string;
     /**
      * Best-effort probe-before-create for a VIDEO upload that went multipart.
      * Default `true`; set `false` to skip the wait. See {@link RunOptions}.
@@ -341,14 +358,14 @@ export declare class OperationBuilder {
      * fetches downloads, and projects to a flat `Result`. Throws
      * `GislTimeoutError` if `maxWait` elapses before terminal status.
      */
-    run(options: RunOptions): Promise<Result>;
+    run(options?: RunOptions): Promise<Result>;
     /**
      * Fire-and-forget: upload the input + create the workflow with a
      * `callback_url` wired to the supplied `webhook`, then return a
      * `Handle` (workflowId + webhookSecret) without waiting. The webhook
      * receives completion + the `webhookSecret` is the verifier seed.
      */
-    submit(options: SubmitOptions): Promise<Handle>;
+    submit(options?: SubmitOptions): Promise<Handle>;
     /**
      * Fan-out chain: run this builder to completion, then for each artifact
      * in the resulting `Result`, call `fn(artifactRef)` to construct a
@@ -391,7 +408,7 @@ export declare class MapEachBuilder {
      * run + every child's full run — each child sees the REMAINING budget
      * after the parent and prior children completed. Signal aborts cascade.
      */
-    run(options: RunOptions): Promise<Result>;
+    run(options?: RunOptions): Promise<Result>;
 }
 /** @internal — exported for reuse by `merge.ts` (T3) and future builders. */
 export declare function _consumeSseToTerminal(client: GislClient, args: {

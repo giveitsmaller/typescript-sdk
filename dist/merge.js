@@ -25,6 +25,7 @@
  * Local validation runs BEFORE any upload — undeclared refs and unused
  * assets both fail fast so the caller saves bandwidth on typo'd composes.
  */
+import { DEFAULT_POLL_TIMEOUT_MS } from './client.js';
 import { uploadSource, jobOutputSource } from './types.js';
 import { GislConfigError, GislNetworkError, GislPerInputOptionsNotSupportedError, GislTimeoutError, GislUndeclaredAssetError, GislUnusedAssetError, GislStreamHostNotDeclaredError, SseEndedWithoutTerminal, } from './errors.js';
 import { _cappedProbeTimeoutMs, _checkAborted, _consumeSseToTerminal, _detectCompressMedia, _parseMaxWait, _pollToTerminal, _projectResult, } from './builder.js';
@@ -82,8 +83,8 @@ export class MergeBuilder {
         this.sequenceEntries = entries;
         return this;
     }
-    async run(options) {
-        const deadline = Date.now() + _parseMaxWait(options.maxWait);
+    async run(options = {}) {
+        const deadline = Date.now() + _parseMaxWait(options.maxWait ?? DEFAULT_POLL_TIMEOUT_MS);
         const signal = options.signal;
         const onProgress = options.onProgress;
         const useSSE = options.useSSE ?? true;
@@ -146,7 +147,7 @@ export class MergeBuilder {
         const mergeDownloads = downloads.downloads.filter((d) => d.ref === 'merge');
         return _projectResult(finalStatus, mergeDownloads, this.opOptionsForResolved(plan.mediaKind));
     }
-    async submit(options) {
+    async submit(options = {}) {
         const plan = this.planSequence();
         const probeTargets = [];
         const uploadedByAssetId = await this.uploadUniqueAssets(plan.uniqueAssets, { probeTargets });
@@ -154,11 +155,17 @@ export class MergeBuilder {
         // Fire-and-forget — no deadline, so no cap (mirrors Recipe::submit()).
         await this.waitForVideoProbes(probeTargets, options.probeBeforeCreate, options.probeTimeoutMs, undefined, undefined);
         const payload = this.buildPayload(plan, uploadedByAssetId);
-        payload.callback_url = options.webhook;
+        // Set only when present — an own `callback_url: undefined` would make a
+        // key-presence assertion pass vacuously. See builder.ts.
+        if (options.webhook !== undefined)
+            payload.callback_url = options.webhook;
         const created = await this.client.createWorkflow(payload);
-        // No client passed → the returned Handle's status()/wait()/result()
-        // throw `no_client`; the merge submit reconciles via webhook.
-        return new Handle(created.workflowId, created.webhookSecret != null ? created.webhookSecret : undefined);
+        // ⚠️ The client is passed so the returned Handle is usable (36AZ98FV). This
+        // comment previously read "No client passed → the returned Handle's
+        // status()/wait()/result() throw `no_client`; the merge submit reconciles via
+        // webhook" — an accurate description of a defect. `webhook` is optional now,
+        // so an unbound handle here would leave a submit with no outcome channel at all.
+        return new Handle(created.workflowId, created.webhookSecret != null ? created.webhookSecret : undefined, this.client, null);
     }
     // ---------------------------------------------------------------------------
     /**

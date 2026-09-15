@@ -11,6 +11,7 @@
  */
 import { GislConfigError, GislItemFailedError, GislNetworkError, GislNoSuchKeyError, GislSinkError, GislStreamHostNotDeclaredError, GislTimeoutError, SseEndedWithoutTerminal } from './errors.js';
 import { _detectCompressMedia, _detectAudioLossless, _consumeSseToTerminal, _pollToTerminal, _parseMaxWait, _checkAborted, _cappedProbeTimeoutMs, } from './builder.js';
+import { DEFAULT_POLL_TIMEOUT_MS } from './client.js';
 import { LazyHttpDownloader } from './lazy-downloader.js';
 import { resolveCompressOptions, } from './ergonomic/preset_resolver.js';
 import { validateVerbOptions, assertThumbnailDimensions } from './ergonomic/option_validation.js';
@@ -920,7 +921,7 @@ export class Recipe {
         if (this.client === undefined) {
             throw new GislConfigError('Recipe.run() requires a client; build the recipe via gisl().file(...) rather than constructing Recipe directly.', { reason: 'no_client' });
         }
-        const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 600_000);
+        const deadline = Date.now() + _parseMaxWait(options.maxWait ?? DEFAULT_POLL_TIMEOUT_MS);
         // 1+2. Upload (when required) + create the workflow. Shared with submit()
         // (which passes a webhook → callback_url). run() passes no webhook.
         const created = await this._uploadAndCreate(undefined, deadline, onProgress, signal, options.probeBeforeCreate, options.probeTimeoutMs);
@@ -1754,7 +1755,7 @@ export class FilesRecipe {
         if (this.client === undefined) {
             throw new GislConfigError('FilesRecipe.run() requires a client; build the fan-out via gisl().files(...) rather than constructing FilesRecipe directly.', { reason: 'no_client' });
         }
-        const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 600_000);
+        const deadline = Date.now() + _parseMaxWait(options.maxWait ?? DEFAULT_POLL_TIMEOUT_MS);
         // 1+2. Upload EVERY input + create ONE multi-job workflow. Shared with
         // submit() (which passes a webhook → callback_url and no deadline).
         const created = await this._uploadAllAndCreate(undefined, deadline, onProgress, signal, options.probeBeforeCreate, options.probeTimeoutMs);
@@ -1983,7 +1984,7 @@ export class MergedRecipe {
         if (this.client === undefined) {
             throw new GislConfigError('MergedRecipe.run() requires a client; build the merge via gisl().files(...).merge(...) rather than constructing MergedRecipe directly.', { reason: 'no_client' });
         }
-        const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 600_000);
+        const deadline = Date.now() + _parseMaxWait(options.maxWait ?? DEFAULT_POLL_TIMEOUT_MS);
         const created = await this._uploadAllAndCreate(undefined, deadline, onProgress, signal, options.probeBeforeCreate, options.probeTimeoutMs);
         const finalStatus = await _awaitTerminal(this.client, {
             workflowId: created.workflowId,
@@ -2196,7 +2197,7 @@ export class ArchivedRecipe {
         if (this.client === undefined) {
             throw new GislConfigError('ArchivedRecipe.run() requires a client; build the bundle via gisl().files(...).archive(...) rather than constructing ArchivedRecipe directly.', { reason: 'no_client' });
         }
-        const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 600_000);
+        const deadline = Date.now() + _parseMaxWait(options.maxWait ?? DEFAULT_POLL_TIMEOUT_MS);
         const created = await this._uploadAllAndCreate(undefined, deadline, onProgress, signal, options.probeBeforeCreate, options.probeTimeoutMs);
         const finalStatus = await _awaitTerminal(this.client, {
             workflowId: created.workflowId,
@@ -2409,7 +2410,7 @@ export class WatermarkedRecipe {
         if (this.client === undefined) {
             throw new GislConfigError('WatermarkedRecipe.run() requires a client; build the watermark via gisl().file(...).watermark(...) rather than constructing WatermarkedRecipe directly.', { reason: 'no_client' });
         }
-        const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 600_000);
+        const deadline = Date.now() + _parseMaxWait(options.maxWait ?? DEFAULT_POLL_TIMEOUT_MS);
         const created = await this._uploadAllAndCreate(undefined, deadline, onProgress, signal, options.probeBeforeCreate, options.probeTimeoutMs);
         const finalStatus = await _awaitTerminal(this.client, {
             workflowId: created.workflowId,
@@ -2597,7 +2598,7 @@ export class BatchRecipe {
         // FilesRecipe behavior and is intentionally NOT closed here — a TS
         // path-precheck would diverge batch from FilesRecipe.)
         this.validatePreUpload();
-        const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 600_000);
+        const deadline = Date.now() + _parseMaxWait(options.maxWait ?? DEFAULT_POLL_TIMEOUT_MS);
         // 1+2. Upload each entry's input + create ONE multi-job workflow. batch v1
         // sends NO webhook (run()-only), so `callback_url` is omitted from the
         // payload (the closure receives `callbackUrl` undefined).

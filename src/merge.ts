@@ -27,6 +27,7 @@
  */
 
 import type { GislClient } from './client.js';
+import { DEFAULT_POLL_TIMEOUT_MS } from './client.js';
 import type {
   JobDefinitionPayload,
   JobInputV2Payload,
@@ -229,8 +230,8 @@ export class MergeBuilder {
     return this;
   }
 
-  async run(options: RunOptions): Promise<Result> {
-    const deadline = Date.now() + _parseMaxWait(options.maxWait);
+  async run(options: RunOptions = {}): Promise<Result> {
+    const deadline = Date.now() + _parseMaxWait(options.maxWait ?? DEFAULT_POLL_TIMEOUT_MS);
     const signal = options.signal;
     const onProgress = options.onProgress;
     const useSSE = options.useSSE ?? true;
@@ -310,7 +311,7 @@ export class MergeBuilder {
     return _projectResult(finalStatus, mergeDownloads, this.opOptionsForResolved(plan.mediaKind));
   }
 
-  async submit(options: SubmitOptions): Promise<Handle> {
+  async submit(options: SubmitOptions = {}): Promise<Handle> {
     const plan = this.planSequence();
     const probeTargets: { fileId: string; isVideo: boolean; sizeBytes?: number }[] = [];
     const uploadedByAssetId = await this.uploadUniqueAssets(plan.uniqueAssets, { probeTargets });
@@ -320,14 +321,21 @@ export class MergeBuilder {
     await this.waitForVideoProbes(probeTargets, options.probeBeforeCreate, options.probeTimeoutMs, undefined, undefined);
 
     const payload = this.buildPayload(plan, uploadedByAssetId);
-    payload.callback_url = options.webhook;
+    // Set only when present — an own `callback_url: undefined` would make a
+    // key-presence assertion pass vacuously. See builder.ts.
+    if (options.webhook !== undefined) payload.callback_url = options.webhook;
     const created = await this.client.createWorkflow(payload);
 
-    // No client passed → the returned Handle's status()/wait()/result()
-    // throw `no_client`; the merge submit reconciles via webhook.
+    // ⚠️ The client is passed so the returned Handle is usable (36AZ98FV). This
+    // comment previously read "No client passed → the returned Handle's
+    // status()/wait()/result() throw `no_client`; the merge submit reconciles via
+    // webhook" — an accurate description of a defect. `webhook` is optional now,
+    // so an unbound handle here would leave a submit with no outcome channel at all.
     return new Handle(
       created.workflowId,
       created.webhookSecret != null ? created.webhookSecret : undefined,
+      this.client,
+      null,
     );
   }
 

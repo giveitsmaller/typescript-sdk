@@ -2,6 +2,19 @@ import type { AudioWatermarkDecodeRequest, AudioWatermarkDecodeResponse, Externa
 import type { CreditsUsageOptions, ListWorkflowsOptions, GetSchemaOptions, GetSchemaResult, GislClientConfig, GislSseEvent, GislSseParseFailure, PreflightClipsResult, ProbeWaitOptions, ProbeWaitResult, ReadCapabilityOptions, UploadOptions, WaitOptions, WorkflowCreatePayload, _Sdk3HandCodedKeepaliveResult, _Sdk3HandCodedMultipartStatusResult, _Sdk3HandCodedPresignPartsResult } from './types.js';
 export declare const MULTIPART_CONCURRENCY_DEFAULT: 4;
 export declare const DEFAULT_MULTIPART_FIRST_CHUNK_SIZE: number;
+/**
+ * THE ONE DEADLINE DEFAULT (36AZ98FV). One wall-clock deadline covers the whole
+ * operation — upload, create, wait, downloads. Every entry point that takes a
+ * `maxWait` defaults to THIS value; a caller who passes one overrides it, and a
+ * caller who does not gets the same deadline whichever spelling they used.
+ *
+ * ⚠️ EXPORTED FOR REUSE, NOT FOR CONSUMERS. It is deliberately absent from the
+ * package entry points, so it does not reach the public API surface and the
+ * committed export snapshots do not move. Before this ticket the number was
+ * already named here and in PHP's `WorkflowConstants`, and hard-coded at
+ * FOURTEEN defaulting sites anyway — which is the duplication this replaces.
+ */
+export declare const DEFAULT_POLL_TIMEOUT_MS = 600000;
 export interface ValidationDetail {
     message: string;
     field?: string;

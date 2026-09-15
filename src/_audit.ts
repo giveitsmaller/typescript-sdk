@@ -400,17 +400,17 @@ export function _runAudit(): void {
   const _watermarkedSubmit: Equal<WatermarkedRecipe['submit'], FileFirstSubmit> = true;
   const _batchRun: Equal<BatchRecipe['run'], FileFirstRun<RunResult>> = true;
 
-  const _opRun: Equal<OperationBuilder['run'], (options: RunOptions) => Promise<Result>> = true;
-  const _opSubmit: Equal<OperationBuilder['submit'], (options: SubmitOptions) => Promise<Handle>> =
+  const _opRun: Equal<OperationBuilder['run'], (options?: RunOptions) => Promise<Result>> = true;
+  const _opSubmit: Equal<OperationBuilder['submit'], (options?: SubmitOptions) => Promise<Handle>> =
     true;
-  const _mergeRun: Equal<MergeBuilder['run'], (options: RunOptions) => Promise<Result>> = true;
-  const _mergeSubmit: Equal<MergeBuilder['submit'], (options: SubmitOptions) => Promise<Handle>> =
+  const _mergeRun: Equal<MergeBuilder['run'], (options?: RunOptions) => Promise<Result>> = true;
+  const _mergeSubmit: Equal<MergeBuilder['submit'], (options?: SubmitOptions) => Promise<Handle>> =
     true;
   // ⚠️ `Promise<Result>`, NOT `Promise<Result[]>`. A fan-out returns ONE aggregate
   // result carrying `childWorkflowIds`, not an array. I wrote `Result[]` from
   // assumption and this pin failed on its first compile — the gate catching a wrong
   // belief before any mutation test, which is the whole point of writing it out.
-  const _mapEachRun: Equal<MapEachBuilder['run'], (options: RunOptions) => Promise<Result>> = true;
+  const _mapEachRun: Equal<MapEachBuilder['run'], (options?: RunOptions) => Promise<Result>> = true;
 
   void _recipeRun; void _recipeSubmit; void _filesRun; void _filesSubmit;
   void _mergedRun; void _mergedSubmit; void _archivedRun; void _archivedSubmit;

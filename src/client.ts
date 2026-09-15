@@ -222,7 +222,19 @@ const S3_MAX_MULTIPART_PARTS = 10_000;
 const RECOMMENDED_CHUNK_SIZE_MAX_BYTES = 104_857_600; // 100 MiB
 
 const DEFAULT_POLL_INTERVAL_MS = 2_000;
-const DEFAULT_POLL_TIMEOUT_MS = 600_000; // 10 min
+/**
+ * THE ONE DEADLINE DEFAULT (36AZ98FV). One wall-clock deadline covers the whole
+ * operation — upload, create, wait, downloads. Every entry point that takes a
+ * `maxWait` defaults to THIS value; a caller who passes one overrides it, and a
+ * caller who does not gets the same deadline whichever spelling they used.
+ *
+ * ⚠️ EXPORTED FOR REUSE, NOT FOR CONSUMERS. It is deliberately absent from the
+ * package entry points, so it does not reach the public API surface and the
+ * committed export snapshots do not move. Before this ticket the number was
+ * already named here and in PHP's `WorkflowConstants`, and hard-coded at
+ * FOURTEEN defaulting sites anyway — which is the duplication this replaces.
+ */
+export const DEFAULT_POLL_TIMEOUT_MS = 600_000; // 10 min
 
 /**
  * Re-tag a bare per-request transport {@link GislTimeoutError} with the workflow

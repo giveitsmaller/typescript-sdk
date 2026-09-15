@@ -22,6 +22,7 @@ import {
   type ProgressEvent,
 } from './builder.js';
 import type { GislClient } from './client.js';
+import { DEFAULT_POLL_TIMEOUT_MS } from './client.js';
 import type {
   OperationDownload,
   WorkflowCreateResponse,
@@ -1234,7 +1235,7 @@ export class Recipe {
         { reason: 'no_client' },
       );
     }
-    const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 600_000);
+    const deadline = Date.now() + _parseMaxWait(options.maxWait ?? DEFAULT_POLL_TIMEOUT_MS);
 
     // 1+2. Upload (when required) + create the workflow. Shared with submit()
     // (which passes a webhook → callback_url). run() passes no webhook.
@@ -2275,7 +2276,7 @@ export class FilesRecipe {
         { reason: 'no_client' },
       );
     }
-    const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 600_000);
+    const deadline = Date.now() + _parseMaxWait(options.maxWait ?? DEFAULT_POLL_TIMEOUT_MS);
 
     // 1+2. Upload EVERY input + create ONE multi-job workflow. Shared with
     // submit() (which passes a webhook → callback_url and no deadline).
@@ -2596,7 +2597,7 @@ export class MergedRecipe {
         { reason: 'no_client' },
       );
     }
-    const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 600_000);
+    const deadline = Date.now() + _parseMaxWait(options.maxWait ?? DEFAULT_POLL_TIMEOUT_MS);
 
     const created = await this._uploadAllAndCreate(
       undefined,
@@ -2907,7 +2908,7 @@ export class ArchivedRecipe {
         { reason: 'no_client' },
       );
     }
-    const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 600_000);
+    const deadline = Date.now() + _parseMaxWait(options.maxWait ?? DEFAULT_POLL_TIMEOUT_MS);
 
     const created = await this._uploadAllAndCreate(
       undefined,
@@ -3200,7 +3201,7 @@ export class WatermarkedRecipe {
         { reason: 'no_client' },
       );
     }
-    const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 600_000);
+    const deadline = Date.now() + _parseMaxWait(options.maxWait ?? DEFAULT_POLL_TIMEOUT_MS);
 
     const created = await this._uploadAllAndCreate(
       undefined,
@@ -3469,7 +3470,7 @@ export class BatchRecipe {
     // path-precheck would diverge batch from FilesRecipe.)
     this.validatePreUpload();
 
-    const deadline = Date.now() + _parseMaxWait(options.maxWait ?? 600_000);
+    const deadline = Date.now() + _parseMaxWait(options.maxWait ?? DEFAULT_POLL_TIMEOUT_MS);
 
     // 1+2. Upload each entry's input + create ONE multi-job workflow. batch v1
     // sends NO webhook (run()-only), so `callback_url` is omitted from the
