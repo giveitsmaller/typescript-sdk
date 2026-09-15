@@ -410,6 +410,23 @@ export declare class MapEachBuilder {
      */
     run(options?: RunOptions): Promise<Result>;
 }
+/**
+ * The clamp itself, exported for an EXACT test (codex d218bd6a0c62).
+ *
+ * ⚠️ **A behavioural test cannot pin this number, and that is why this seam
+ * exists.** Counting requests over a real deadline discriminates 1000 ms from
+ * 100 and from 500, but it cannot tell 1000 from 750 — the counts collide inside
+ * scheduler jitter. Widening the window to separate them makes the suite slower
+ * and the test flakier, in exchange for a weaker claim.
+ *
+ * ⇒ So the two tests do different jobs and neither is redundant: this one pins
+ * the VALUE exactly, and the `run()` test proves the clamp is on the path a
+ * caller actually travels. A value test alone would pass while nothing called
+ * it; a path test alone would pass at 750 ms.
+ *
+ * @internal — not re-exported from the package barrel.
+ */
+export declare function _clampPollIntervalMs(requested: number | undefined): number;
 /** @internal — exported for reuse by `merge.ts` (T3) and future builders. */
 export declare function _consumeSseToTerminal(client: GislClient, args: {
     workflowId: string;

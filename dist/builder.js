@@ -551,6 +551,82 @@ function aggregateWorkflowStatus(statuses) {
 // ---------------------------------------------------------------------------
 // Internals — SSE + poll
 // ---------------------------------------------------------------------------
+/**
+ * Poll-fallback interval bounds, in milliseconds.
+ *
+ * 🔴 **THE FLOOR IS SIZED AGAINST A PUBLISHED RATE LIMIT, NOT AGAINST A
+ * BUSY-LOOP.** Its predecessor was 100 ms and its comment said it guarded
+ * against values "that would hammer getWorkflowStatus" — which is what you
+ * write when you are stopping a `0`/`NaN` spin, not when you have asked what
+ * the server allows. Same words, different standard, and nothing recorded
+ * which one applied (`r7bpd7MY`).
+ *
+ * The limit, read from `compression_api` rather than relayed:
+ * `Identity/Application/RateLimiting/TieredRateLimiterService.php:37-39`
+ * declares the `status_poll` family — guarding `GET /api/workflows/{id}/status`
+ * and `/downloads` — as a **sliding window of 60 requests per minute**, scaled
+ * at consume time (`:177`, `:188`) by `UserTier::rateLimitMultiplier()`
+ * (`Identity/Domain/Enums/UserTier.php:186-194`): Free and Basic ×1, Pro ×5,
+ * Max ×15, Enterprise ×20.
+ *
+ * ⇒ 100 ms is **600 requests/minute**: ten times the Free ceiling, twice Pro's,
+ * and inside budget only on Max and Enterprise. 1000 ms is the minimum legal
+ * interval on the tightest tier, so it is correct on every tier and needs no
+ * tier knowledge in the SDK.
+ *
+ * ⚠️ **THE WINDOW IS SLIDING, SO IT PUNISHES BURSTS, NOT JUST AVERAGES** — ten
+ * polls in the first second genuinely consume ten of the sixty.
+ *
+ * 📌 **AND THE BUDGET IS SHARED**: keyed per user id when authenticated, per IP
+ * when not. N SDK instances under one account spend one allowance between them,
+ * which is the argument for the conservative floor even on a paid tier — this
+ * process cannot see the other two.
+ *
+ * A tier-aware floor would need the caller's tier, which neither SDK reads
+ * today, and api has carded the effective-limits field as `4cHoxAcm` (Backlog,
+ * unscheduled — deliberately, because this flat floor ships without it).
+ *
+ * ⛔ **WHAT THIS DOES NOT DO, STATED SO NOBODY READS IT AS A GUARANTEE (codex
+ * 6b56d75f126d).** This is a PER-CALL floor, not a per-credential budget:
+ *
+ *   - **Two concurrent `run()`s under one credential issue ~120 requests/minute**
+ *     and blow a 60/minute bucket. Bounding that needs coordination the SDK does
+ *     not have — a shared limiter across calls, processes and machines.
+ *   - **`getWorkflowDownloads` draws on the SAME `status_poll` family**, so a run
+ *     that spends the last token on a status poll can be 429'd on the terminal
+ *     downloads call it needs to finish.
+ *
+ * ⇒ This change makes a SINGLE run legal on every tier. It does not make the SDK
+ * rate-limit-safe under concurrency, and the honest next step is retry-on-429
+ * with `Retry-After`, not a larger number here. Tracked separately.
+ */
+const MIN_POLL_INTERVAL_MS = 1_000;
+const DEFAULT_POLL_INTERVAL_MS = 2_000;
+/**
+ * The clamp itself, exported for an EXACT test (codex d218bd6a0c62).
+ *
+ * ⚠️ **A behavioural test cannot pin this number, and that is why this seam
+ * exists.** Counting requests over a real deadline discriminates 1000 ms from
+ * 100 and from 500, but it cannot tell 1000 from 750 — the counts collide inside
+ * scheduler jitter. Widening the window to separate them makes the suite slower
+ * and the test flakier, in exchange for a weaker claim.
+ *
+ * ⇒ So the two tests do different jobs and neither is redundant: this one pins
+ * the VALUE exactly, and the `run()` test proves the clamp is on the path a
+ * caller actually travels. A value test alone would pass while nothing called
+ * it; a path test alone would pass at 750 ms.
+ *
+ * @internal — not re-exported from the package barrel.
+ */
+export function _clampPollIntervalMs(requested) {
+    if (requested === undefined) {
+        return DEFAULT_POLL_INTERVAL_MS;
+    }
+    if (!Number.isFinite(requested) || requested < MIN_POLL_INTERVAL_MS) {
+        return MIN_POLL_INTERVAL_MS;
+    }
+    return requested;
+}
 const TERMINAL_STATUS = new Set([
     'completed',
     'failed',
@@ -716,20 +792,11 @@ export async function _consumeSseToTerminal(client, args) {
 export async function _pollToTerminal(client, args) {
     // Codex r1 medium 89130e3ea75d — guard against 0/negative/NaN/Infinity
     // pollIntervalMs values that would hammer getWorkflowStatus until maxWait.
-    const requested = args.pollIntervalMs;
-    let intervalMs;
-    if (requested === undefined) {
-        intervalMs = 2_000;
-    }
-    else if (!Number.isFinite(requested) || requested < 100) {
-        // Clamp to a safe minimum (100ms) rather than throw — small/zero/NaN
-        // were almost certainly a caller mistake, but ergonomic-layer
-        // shouldn't crash an otherwise valid run on this.
-        intervalMs = 100;
-    }
-    else {
-        intervalMs = requested;
-    }
+    // Clamp rather than throw — a zero/NaN/tiny value is a caller mistake, and the
+    // ergonomic layer should not crash an otherwise valid run over it. ONE call
+    // site, so the exact test above and the behavioural test below are talking
+    // about the same code.
+    const intervalMs = _clampPollIntervalMs(args.pollIntervalMs);
     while (true) {
         _checkAborted(args.signal);
         if (Date.now() >= args.deadline) {

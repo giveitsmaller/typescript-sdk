@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PRESET_VERSION as GENERATED_PRESET_VERSION } from '../../src/generated/sdk_spec/version.js';
-import { OperationBuilder, type Result, type ProgressEvent } from '../../src/builder.js';
+import { _clampPollIntervalMs, OperationBuilder, type Result, type ProgressEvent } from '../../src/builder.js';
 import { GislTimeoutError, GislFanOutTimeoutError } from '../../src/errors.js';
 import { Handle } from '../../src/handle.js';
 import type { GislClient } from '../../src/client.js';
@@ -443,9 +443,11 @@ describe('codex R1 regression guards', () => {
     expect(result.jobs[0].operations[0].errorMessage).toBe('File is not a valid JPEG');
   });
 
-  it('clamps non-finite/negative/tiny pollIntervalMs to a safe minimum (89130e3ea75d)', async () => {
-    // 0, -1, NaN, Infinity all clamp to 100ms — the test just verifies the
-    // run completes without hammering (i.e. doesn't throw a busy-loop error).
+  it('clamps non-finite/negative/tiny pollIntervalMs rather than rejecting (89130e3ea75d)', async () => {
+    // 0, -1, NaN, Infinity are caller mistakes and must NOT crash an otherwise
+    // valid run. This one asserts the clamp EXISTS; the next asserts its VALUE,
+    // which this one cannot see — it would pass identically at a 100ms floor,
+    // which is precisely how the old floor survived being wrong for months.
     const mock = makeMockClient();
     for (const bad of [0, -100, Number.NaN, Number.POSITIVE_INFINITY]) {
       await new OperationBuilder(mock.client, 'compress', 'p.jpg', {}).run({
@@ -456,6 +458,68 @@ describe('codex R1 regression guards', () => {
     }
     expect(mock.getWorkflowStatus).toHaveBeenCalled();
   });
+
+  it('clamps to EXACTLY 1000ms — the value, not a band (r7bpd7MY)', () => {
+    // 🔴 THE COMPANION TO THE COUNT TEST BELOW, AND NEITHER IS REDUNDANT.
+    // A request count over a real deadline cannot tell 1000 from 750 — the
+    // counts collide inside scheduler jitter (codex d218bd6a0c62). This pins the
+    // VALUE; the one below proves the clamp is on the path `run()` travels. A
+    // value test alone would pass while nothing called it.
+    expect(_clampPollIntervalMs(1)).toBe(1_000);
+    expect(_clampPollIntervalMs(999)).toBe(1_000);
+    expect(_clampPollIntervalMs(0)).toBe(1_000);
+    expect(_clampPollIntervalMs(-5)).toBe(1_000);
+    expect(_clampPollIntervalMs(Number.NaN)).toBe(1_000);
+    expect(_clampPollIntervalMs(Number.POSITIVE_INFINITY)).toBe(1_000);
+
+    // Exactly at the floor, and above it, are passed through untouched — a
+    // clamp that also rewrote legal values would be a different bug.
+    expect(_clampPollIntervalMs(1_000)).toBe(1_000);
+    expect(_clampPollIntervalMs(5_000)).toBe(5_000);
+
+    // The default is unchanged by this card and is NOT the floor.
+    expect(_clampPollIntervalMs(undefined)).toBe(2_000);
+  });
+
+  it('holds the poll floor at 1000ms, measured by request COUNT (r7bpd7MY)', async () => {
+    // 🔴 THE NUMBER IS THE POINT, SO THE NUMBER IS WHAT IS ASSERTED.
+    //
+    // api's `status_poll` family is a SLIDING 60 requests/minute at the Free and
+    // Basic tiers (TieredRateLimiterService.php:37-39, multiplied per tier by
+    // UserTier::rateLimitMultiplier). The old 100ms floor is 600/minute — ten
+    // times that ceiling. A caller asking for 1ms must be clamped to 1000ms.
+    //
+    // Counting requests over a real 2.5s deadline: at 1000ms this makes ~3 calls,
+    // at 500ms ~5, at the old 100ms floor ~25.
+    //
+    // ⚠️ THE BOUND IS 4, NOT 6, AND THE REASON IS A REVIEW FINDING (codex
+    // f127c6af7335). At 6 this test PASSED WITH A 500 ms FLOOR — five polls fit
+    // — so it discriminated the old floor from the new one and nothing in
+    // between. A guard that only catches the regression you already fixed is
+    // decoration. 4 fails at 500ms and still leaves headroom for one extra
+    // scheduler-jitter poll at 1000ms.
+    //
+    // It stays a BOUND rather than an equality: an exact count here would be a
+    // flaky test pretending to be a precise one.
+    const mock = makeMockClient();
+    mock.getWorkflowStatus.mockImplementation(async (_id: string) => ({
+      workflowId: 'wf_1',
+      status: 'running',
+      createdAt: '2026-05-23T09:00:00Z',
+      updatedAt: '2026-05-23T09:00:00Z',
+      jobs: [{ jobId: 'job_1', ref: 'op', status: 'running' }],
+    }));
+
+    await expect(
+      new OperationBuilder(mock.client, 'compress', 'p.jpg', {}).run({
+        maxWait: '2.5s',
+        useSSE: false,
+        pollIntervalMs: 1,
+      }),
+    ).rejects.toBeInstanceOf(GislTimeoutError);
+
+    expect(mock.getWorkflowStatus.mock.calls.length).toBeLessThanOrEqual(4);
+  }, 15_000);
 
   it('SSE progress maps phase_input_index / phase_total_inputs (codex r2 ed873d706d96)', async () => {
     // Previously: looked for `inputIndex` only; the generated FromJSON

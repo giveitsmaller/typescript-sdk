@@ -115,11 +115,18 @@ describe('36AZ98FV — operation-first run() takes no required arguments', () =>
     // (codex db5163b4e10a).
     //
     // A COUNT is exact where a range is not: each poll advances the clock by a
-    // known tenth of the budget, so the run can only poll ELEVEN times before the
-    // deadline passes. A 900_000 default would permit sixteen.
+    // known FRACTION of the budget, so the run can poll an exact number of times
+    // before the deadline passes, and a larger default permits strictly more.
+    //
+    // ⚠️ THE FRACTION IS A THIRD, NOT A TENTH, AND THE REASON IS THE POLL FLOOR
+    // (r7bpd7MY). `Date.now` is mocked so the DEADLINE advances virtually, but
+    // the sleep between polls is real — and the floor is now 1000 ms, sized
+    // against api's 60 requests/minute `status_poll` limit. At a tenth this test
+    // paid eleven REAL seconds and blew the 5 s timeout. A third costs three.
+    // The assertion stays an exact count; only the number of samples changed.
     const mock = makeMockClient();
     const t0 = 1_757_000_000_000;
-    const step = DEFAULT_POLL_TIMEOUT_MS / 10;
+    const step = DEFAULT_POLL_TIMEOUT_MS / 3;
     let now = t0;
     vi.spyOn(Date, 'now').mockImplementation(() => now);
 
@@ -140,8 +147,8 @@ describe('36AZ98FV — operation-first run() takes no required arguments', () =>
       make(mock.client).run({ useSSE: false, pollIntervalMs: 1 }),
     ).rejects.toThrow(GislTimeoutError);
 
-    expect(polls, `${_name} polled ${polls} times; the shared default allows exactly 10`).toBe(10);
-  });
+    expect(polls, `${_name} polled ${polls} times; the shared default allows exactly 3`).toBe(3);
+  }, 15_000);
 });
 
 describe('36AZ98FV — submit() without a webhook returns a USABLE handle', () => {
