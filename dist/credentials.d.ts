@@ -21,10 +21,10 @@ export declare const GISL_STREAM_BASE_URL_ENV = "GISL_STREAM_BASE_URL";
  * Named environments → base URLs. Kept colocated with the resolver so the
  * mapping table doesn't leak into `gisl.ts`.
  */
-export declare const ENVIRONMENT_ENDPOINTS: {
+export declare const ENVIRONMENT_ENDPOINTS: Readonly<{
     readonly prod: "https://api.giveitsmaller.com";
     readonly staging: "https://api.staging.giveitsmaller.com";
-};
+}>;
 export type Environment = keyof typeof ENVIRONMENT_ENDPOINTS;
 export declare const DEFAULT_ENDPOINT: "https://api.giveitsmaller.com";
 /**
@@ -61,8 +61,15 @@ export declare const DEFAULT_ENDPOINT: "https://api.giveitsmaller.com";
  * `localhost` is intentionally absent too: it is declared in the contract as a
  * development server, but there is no `localhost` *environment* name to key it
  * off. Local callers pass `{streamBaseUrl}` or set `GISL_STREAM_BASE_URL`.
+ * ⚠️ **FROZEN, AND PART OF THE PUBLIC SURFACE.** Both tables are exported from the
+ * package barrel because the SDK requires callers on the low-level surface to
+ * supply `streamBaseUrl` and previously published no way to learn the declared
+ * hosts. They are the SAME objects this module's resolvers read, so a consumer
+ * mutating one would have repointed the SDK's own resolution — hence
+ * `Object.freeze`, which makes that a no-op in sloppy mode and a `TypeError`
+ * under `'use strict'` (every ES module) rather than a silent redirection.
  */
-export declare const ENVIRONMENT_STREAM_ENDPOINTS: Partial<Record<Environment, string>>;
+export declare const ENVIRONMENT_STREAM_ENDPOINTS: Readonly<Partial<Record<Environment, string>>>;
 export interface ResolveCredentialsOptions {
     /** Explicit API key — highest precedence. */
     readonly apiKey?: string;

@@ -106,6 +106,8 @@ DocumentOfficeCompressPresetOptionsInput	type
 DownloadBundle	type
 Downloader	type
 Environment	type
+ENVIRONMENT_ENDPOINTS	value
+ENVIRONMENT_STREAM_ENDPOINTS	value
 ErgonomicClient	type
 ErrorCategory	type
 ExternalDestination	type

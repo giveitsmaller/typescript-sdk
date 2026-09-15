@@ -6,11 +6,14 @@ import { tmpdir } from 'node:os';
 import {
   DEFAULT_ENDPOINT,
   ENVIRONMENT_ENDPOINTS,
+  ENVIRONMENT_STREAM_ENDPOINTS,
   GISL_API_KEY_ENV,
   GISL_BASE_URL_ENV,
   GISL_ENVIRONMENT_ENV,
+  GISL_STREAM_BASE_URL_ENV,
   resolveApiKey,
   resolveEndpoint,
+  resolveStreamEndpoint,
 } from '../../src/credentials.js';
 import { GislConfigError } from '../../src/errors.js';
 
@@ -20,6 +23,7 @@ const TRACKED_ENV = [
   GISL_API_KEY_ENV,
   GISL_BASE_URL_ENV,
   GISL_ENVIRONMENT_ENV,
+  GISL_STREAM_BASE_URL_ENV,
   'HOME',
   'USERPROFILE',
 ] as const;
@@ -295,5 +299,65 @@ describe('resolveEndpoint', () => {
     process.env[GISL_ENVIRONMENT_ENV] = 'staging';
     const resolved = resolveEndpoint();
     expect(resolved).toBe('https://env-base.example.com');
+  });
+});
+
+/**
+ * A WHITESPACE-ONLY ENV VAR IS UNSET (compression_e2e, 2026-09-15).
+ *
+ * `resolveStreamEndpoint` already trimmed the `streamBaseUrl` OPTION before its
+ * presence check; the env path did not. So the two sides answered "is this set?"
+ * differently, and a blank env var was returned verbatim as a host.
+ *
+ * ⚠️ The consumer-visible shape is worse than the internal one: a whitespace
+ * string is TRUTHY in JavaScript, so a caller's `if (url)` guard passes, they
+ * pass it to us, and the failure surfaces somewhere else entirely. e2e hit
+ * exactly that wiring `streamBaseUrl` from an env var.
+ */
+describe('blank env vars are unset, not values', () => {
+  it('does not return a whitespace-only GISL_STREAM_BASE_URL as the stream host', () => {
+    process.env[GISL_STREAM_BASE_URL_ENV] = '   ';
+    process.env[GISL_ENVIRONMENT_ENV] = 'staging';
+    // Falls through to the DECLARED host for the environment. Before the fix
+    // this returned '   ' — a URL made of spaces — which is not a thing that
+    // fails at the point it was configured.
+    expect(resolveStreamEndpoint()).toBe(ENVIRONMENT_STREAM_ENDPOINTS.staging);
+  });
+
+  it('still honours a real GISL_STREAM_BASE_URL (the value is not trimmed away)', () => {
+    // The other direction, and it is the one that would make this fix a
+    // regression: presence is decided on the trimmed value, the VALUE itself is
+    // returned untouched. Silently altering a host the caller named is how you
+    // connect somewhere they did not ask for.
+    process.env[GISL_STREAM_BASE_URL_ENV] = 'https://stream.self-hosted.example';
+    expect(resolveStreamEndpoint()).toBe('https://stream.self-hosted.example');
+  });
+
+  it('does not let a blank GISL_BASE_URL suppress the production stream fallback', () => {
+    // The same asymmetry one branch over: `apiHostWasConfigured` asked only
+    // whether the env var was non-empty, so a blank one meant "the caller named
+    // an API host we cannot reason about" and the prod stream host was withheld.
+    process.env[GISL_BASE_URL_ENV] = '  ';
+    expect(resolveStreamEndpoint()).toBe(ENVIRONMENT_STREAM_ENDPOINTS.prod);
+  });
+
+  it('treats a whitespace-only GISL_API_KEY as no key at all', async () => {
+    // Same rule, different resolver — stated because "blank means unset" is now
+    // a property of `readEnv` rather than of one call site, and a property with
+    // one test is a coincidence.
+    //
+    // ⚠️ THE FIRST VERSION OF THIS TEST COULD NOT HAVE PASSED FOR THE RIGHT
+    // REASON: it wrapped an ASYNC call in `expect(() => …).toThrow()`, which
+    // never sees a rejection. It went red, so it was caught — but a test shaped
+    // like that against a resolver that DOES throw synchronously would have gone
+    // green while asserting nothing.
+    //
+    // `resolveApiKey` returns `Promise<string | null>` and does not throw here:
+    // HOME and USERPROFILE are cleared by `beforeEach`, so the profile-file step
+    // finds nothing and the chain ends at `null`. `null` is the assertion —
+    // before the fix this resolved to '\t ', a key made of whitespace that the
+    // API would have rejected with a 401 nobody could explain.
+    process.env[GISL_API_KEY_ENV] = '\t ';
+    await expect(resolveApiKey()).resolves.toBeNull();
   });
 });

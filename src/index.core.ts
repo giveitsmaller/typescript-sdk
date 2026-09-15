@@ -197,6 +197,33 @@ export { Handle, StatusSnapshot } from './handle.js';
 // credential-chain types. `gisl.anonymous()` (public export) lands once
 // the anonymous-capable operation allowlist is non-empty (plan §12).
 export { gisl, create } from './gisl.js';
+
+// 🔑 THE TWO ENDPOINT TABLES, EXPORTED BECAUSE THE SDK DEMANDS A VALUE IT DID
+// NOT PUBLISH (e2e, 2026-09-15).
+//
+// `streamEvents()` fails CLOSED: `resolveStreamEndpoint` returns `null` rather
+// than deriving a stream host from `baseUrl`, because deriving one is what put
+// production on the gateway path. That design is right and is not changing.
+//
+// But its consequence is that a low-level `new GislClient({…})` caller MUST
+// supply `streamBaseUrl` — and until now the table of declared hosts was
+// reachable by no import a consumer could write: the `exports` map admits only
+// `.` and `./browser`, and neither barrel re-exported these. ⇒ Every such
+// consumer hard-codes the hosts. A library that fails closed on a value and
+// does not export the value converts good design into N private copies that
+// drift, and the copies are invisible until one is wrong.
+//
+// ⚠️ A SET OF HOSTS IS NOT ENOUGH, WHICH IS WHY THIS EXPORTS THE OBJECTS
+// RATHER THAN A LIST. e2e's interim guard read our shipped `dist` as text and
+// compared host sets in both directions — it could not have caught staging and
+// prod being SWAPPED, which is the exact mistake that sends a credentialed
+// stream request to the wrong environment. The PAIRING is the thing worth
+// exporting.
+//
+// Frozen at their definition: these are the same objects the resolver reads, so
+// a consumer mutating one would have repointed the SDK's own resolution.
+export { ENVIRONMENT_ENDPOINTS, ENVIRONMENT_STREAM_ENDPOINTS } from './credentials.js';
+
 export type {
   GislCreateOptions,
   Environment,

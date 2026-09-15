@@ -19,6 +19,7 @@ export type { WatermarkWireOp } from './file-first.js';
 export { BatchRecipe } from './file-first.js';
 export { Handle, StatusSnapshot } from './handle.js';
 export { gisl, create } from './gisl.js';
+export { ENVIRONMENT_ENDPOINTS, ENVIRONMENT_STREAM_ENDPOINTS } from './credentials.js';
 export type { GislCreateOptions, Environment, ErgonomicClient, SingleInputOperationType, MultiInputOperationType, } from './gisl.js';
 export { presetDefaults, PresetDefaults, type PresetMedia, type PresetOp, type AnyPresetOptions, ImageCompressPresetOptions, type ImageCompressPresetOptionsInput, AudioCompressPresetOptions, type AudioCompressPresetOptionsInput, VideoCompressPresetOptions, type VideoCompressPresetOptionsInput, DocumentOfficeCompressPresetOptions, type DocumentOfficeCompressPresetOptionsInput, DocumentOdfCompressPresetOptions, type DocumentOdfCompressPresetOptionsInput, DocumentEpubCompressPresetOptions, type DocumentEpubCompressPresetOptionsInput, OptimizeFor, ImageMetadataPolicy, ImageFormat, VideoCodec, VideoPreset, VideoFit, AudioBitrate, AudioCodec, AudioSampleRate, } from './ergonomic/presets/index.js';
 export { OperationBuilder, MapEachBuilder } from './builder.js';

@@ -29,10 +29,10 @@ export const GISL_STREAM_BASE_URL_ENV = 'GISL_STREAM_BASE_URL';
  * Named environments → base URLs. Kept colocated with the resolver so the
  * mapping table doesn't leak into `gisl.ts`.
  */
-export const ENVIRONMENT_ENDPOINTS = {
+export const ENVIRONMENT_ENDPOINTS = Object.freeze({
   prod: 'https://api.giveitsmaller.com',
   staging: 'https://api.staging.giveitsmaller.com',
-} as const;
+} as const);
 
 export type Environment = keyof typeof ENVIRONMENT_ENDPOINTS;
 
@@ -72,11 +72,19 @@ export const DEFAULT_ENDPOINT = ENVIRONMENT_ENDPOINTS.prod;
  * `localhost` is intentionally absent too: it is declared in the contract as a
  * development server, but there is no `localhost` *environment* name to key it
  * off. Local callers pass `{streamBaseUrl}` or set `GISL_STREAM_BASE_URL`.
+ * ⚠️ **FROZEN, AND PART OF THE PUBLIC SURFACE.** Both tables are exported from the
+ * package barrel because the SDK requires callers on the low-level surface to
+ * supply `streamBaseUrl` and previously published no way to learn the declared
+ * hosts. They are the SAME objects this module's resolvers read, so a consumer
+ * mutating one would have repointed the SDK's own resolution — hence
+ * `Object.freeze`, which makes that a no-op in sloppy mode and a `TypeError`
+ * under `'use strict'` (every ES module) rather than a silent redirection.
  */
-export const ENVIRONMENT_STREAM_ENDPOINTS: Partial<Record<Environment, string>> = {
-  prod: 'https://stream.giveitsmaller.com',
-  staging: 'https://stream.staging.giveitsmaller.com',
-};
+export const ENVIRONMENT_STREAM_ENDPOINTS: Readonly<Partial<Record<Environment, string>>> =
+  Object.freeze({
+    prod: 'https://stream.giveitsmaller.com',
+    staging: 'https://stream.staging.giveitsmaller.com',
+  });
 
 // ---------------------------------------------------------------------------
 // Options
@@ -312,7 +320,29 @@ function readEnv(name: string): string | null {
     return null;
   }
   const value = process.env[name];
-  return typeof value === 'string' && value.length > 0 ? value : null;
+  // 🔴 A WHITESPACE-ONLY ENV VAR IS UNSET, and the presence check is what says
+  // so — the value itself is returned UNTOUCHED.
+  //
+  // `resolveStreamEndpoint` already trims the `streamBaseUrl` OPTION before its
+  // presence check (codex a7f5ec9f0d32) and this path did not, so the two
+  // disagreed about the same question: `GISL_STREAM_BASE_URL='   '` was returned
+  // verbatim as the stream host — a URL made of spaces — while the equivalent
+  // option resolved to the environment's declared host. The same asymmetry let a
+  // blank `GISL_BASE_URL` count as "the API host was configured" and suppress
+  // the production stream fallback.
+  //
+  // ⚠️ Presence only. A non-blank value is NOT trimmed here: silently altering a
+  // value the caller supplied is how you end up connecting somewhere they did
+  // not name. Blank means unset; anything else means what it says.
+  //
+  // Reported by compression_e2e, 2026-09-15: a whitespace-only value is TRUTHY
+  // in JavaScript, so a consumer's `if (url)` guard passes and the SDK then
+  // fails downstream — the mismatch only exists because the two sides answer
+  // "is this set?" differently.
+  if (typeof value !== 'string' || value.trim() === '') {
+    return null;
+  }
+  return value;
 }
 
 function defaultProfilePath(): string | null {
