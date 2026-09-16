@@ -63,10 +63,22 @@ describe('WatermarkedRecipe — routing', () => {
     expect(watermarkJobOf(payload).operations[0].type).toBe('image_watermark');
   });
 
-  it('routes a video base to video_watermark', () => {
-    const wr = recipe('clip.mp4').watermark(overlay(), { anchor: 'top_right' });
-    const payload = wr.toWorkflowPayload(['base', 'ovl']);
-    expect(watermarkJobOf(payload).operations[0].type).toBe('video_watermark');
+  it('REFUSES a video base — video_watermark was WITHDRAWN in contracts v2.203.0', () => {
+    // 🔴 THIS ASSERTED A SUCCESSFUL ROUTE UNTIL 2026-09-16, and the route was
+    // real: video_watermark was `stable`. The contract withdrew it to `planned`
+    // on owner GO after three measured staging proofs — a worker EXISTS and
+    // cannot serve the advertised ceiling.
+    //
+    // ⇒ The SDK now refuses BEFORE any upload rather than building a workflow the
+    // server answers with feature_not_available. That is the gate working, and it
+    // is the customer-visible half of this re-vendor.
+    // ⚠️ The refusal is EAGER — it lands on `.watermark()`, not on
+    // `toWorkflowPayload()`, because the gate runs at chain-build time so a
+    // caller learns before uploading anything. Asserting on the payload call
+    // would let the error escape the expectation entirely.
+    expect(() => recipe('clip.mp4').watermark(overlay(), { anchor: 'top_right' })).toThrow(
+      /video_watermark is 'planned'/,
+    );
   });
 
   it('routes a transformed base by its OUTPUT media (video + thumbnail -> image_watermark)', () => {
@@ -75,10 +87,10 @@ describe('WatermarkedRecipe — routing', () => {
     expect(watermarkJobOf(payload).operations[0].type).toBe('image_watermark');
   });
 
-  it('routes a base converted to a video format to video_watermark', () => {
-    const wr = recipe('photo.jpg').convert('mp4').watermark(overlay());
-    const payload = wr.toWorkflowPayload(['base', 'ovl']);
-    expect(watermarkJobOf(payload).operations[0].type).toBe('video_watermark');
+  it('REFUSES a base converted to a video format for the same reason', () => {
+    // The routing logic is unchanged — an output-media video still SELECTS
+    // video_watermark; it is the availability of that op that now stops it.
+    expect(() => recipe('photo.jpg').convert('mp4').watermark(overlay())).toThrow(/not available/);
   });
 
   it('routes a named-but-typeless in-memory base by its filename extension (parity with PHP resource)', () => {
@@ -177,7 +189,18 @@ describe('WatermarkedRecipe — lowering shape', () => {
     expect(compressOp!.options).not.toHaveProperty('crf');
   });
 
-  it('resolves a post-watermark compress preset against a VIDEO watermark output', () => {
+  it.skip('SKIPPED: post-watermark compress against a VIDEO watermark output', () => {
+    // ⚠️ SKIPPED, NOT DELETED, AND THE DIFFERENCE MATTERS. This pinned the
+    // synthetic post-media resolution for a VIDEO watermark — that a
+    // `compress(Size)` after a video watermark resolves the VIDEO Size cell and
+    // lands in the downstream sole_op job. None of that logic changed.
+    //
+    // It cannot run because contracts v2.203.0 WITHDREW video_watermark to
+    // `planned`, so the gate refuses before the payload exists. The coverage is
+    // genuinely lost in the meantime, and deleting it would lose the knowledge
+    // that it should come back: 🔑 RE-ENABLE THIS WHEN video_watermark IS
+    // RE-LISTED at an honest ceiling. The image path below still covers the
+    // sole_op split; what is uncovered is the VIDEO synthetic media arm.
     // video base -> video_watermark -> the synthetic post media is video, so
     // compress(Size) resolves the VIDEO Size cell (the `mp4` synthetic arm). The
     // compress op now lives in the downstream `post` job (sole_op split).

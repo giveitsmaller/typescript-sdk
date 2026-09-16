@@ -1107,8 +1107,12 @@ export class Recipe {
    * Composite an image OVERLAY onto this file (a multi-input op). `overlay` is a
    * secondary file-NODE (a {@link Recipe} — e.g. `client.file('logo.png')`),
    * itself optionally processed first. Routes by THIS file's effective media:
-   * image base → `image_watermark` (stable), video base → `video_watermark`
-   * (beta). Audio/document/animated-GIF/unsupported-subtype/undetectable bases
+   * image base → `image_watermark` (stable).
+   * A VIDEO base is REFUSED: `video_watermark` was withdrawn to `planned`
+   * by contracts v2.203.0, so this verb throws before any upload rather than
+   * building a workflow the server would reject. The routing is unchanged and
+   * returns when the operation is re-listed.
+   * Audio/document/animated-GIF/unsupported-subtype/undetectable bases
    * throw locally BEFORE any upload (the planned-op gate). `options` carries the
    * wire watermark options (`anchor`, `opacity`, `margin_x`, `margin_y`,
    * `overlay_width`, or `overlays[]` for the multi-overlay stack). Returns a
@@ -1800,7 +1804,14 @@ export const WATERMARK_CAPABILITY = {
     image_bmp: { mimes: ['image/bmp'], availability: 'stable' },
   },
   video_watermark: {
-    video: { mimes: ['video/mp4', 'video/webm'], availability: 'stable' },
+    // 🔴 WITHDRAWN to `planned` by contracts v2.203.0 — withdrawn 2026-09-15, tag cut 2026-09-16 —
+    // after three measured staging proofs. It was `stable` — a worker EXISTS,
+    // and it cannot serve the ceiling this contract advertised. That is a
+    // different kind of `planned` from `image_gif` below, where nothing is built
+    // yet, and the two have opposite remedies; no contract field separates them
+    // (contracts SYQhXb6R). `_WATERMARK_SHIPPABLE` treats both as not-shippable,
+    // which is right for the gate and worth knowing when rendering a reason.
+    video: { mimes: ['video/mp4', 'video/webm'], availability: 'planned' },
   },
 } as const;
 
@@ -1918,9 +1929,20 @@ function _resolveWatermarkWireOp(base: WatermarkBase): WatermarkWireOp {
       for (const group of Object.values(groups)) {
         if (group.mimes.includes(mime)) {
           if (_WATERMARK_SHIPPABLE.has(group.availability)) return wireOp;
+          // ⚠️ "NOT YET" WAS A PROMISE THE CONTRACT DOES NOT MAKE. This message
+          // used to say the schema "is defined but the server returns
+          // feature_not_available until it ships" — true for a capability nobody
+          // has built, and FALSE for one that was `stable` last week and has been
+          // WITHDRAWN (contracts v2.203.0 did exactly that to `video_watermark`).
+          // Telling a user to wait for something that shipped and was pulled is
+          // worse than telling them nothing. No contract field separates the two
+          // kinds yet (contracts SYQhXb6R), so the wording states only what is
+          // true of both.
           throw new GislConfigError(
-            `watermark for ${mime} bases is not yet available (${wireOp} is '${group.availability}'). ` +
-              'The contract schema is defined but the server returns feature_not_available until it ships.',
+            `watermark for ${mime} bases is not available (${wireOp} is ` +
+              `'${group.availability}' in the contract this SDK was built against). ` +
+              'Workflow-create would return feature_not_available, so this is refused ' +
+              'before any upload. Check getSchema() for the current server answer.',
             { reason: 'feature_not_available' },
           );
         }

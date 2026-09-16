@@ -49,6 +49,11 @@ if (UPDATE_MODE && process.env.CI === 'true') {
 // happy-path multipart wire shape is covered by tests/unit/client.test.ts
 // and upload-streaming.test.ts with contract-valid chunk sizes.
 const KNOWN_DIVERGENCES: Record<string, string> = {
+  // ⚠️ THE MAP'S NAME IS WRONG FOR THIS ENTRY AND THE REASON SAYS SO. Every
+  // other entry is a place the two SDKs disagree; this one is a place they
+  // AGREE to refuse, and it is here only because the harness has no other skip.
+  ff_lowering_video_watermark_overlay:
+    'NOT A DIVERGENCE — both SDKs refuse identically. video_watermark was WITHDRAWN to `planned` by contracts v2.203.0, so the SDK now throws at .watermark() before any payload exists. 🔑 RESTORE THIS FIXTURE when the op is re-listed; until then the video lowering shape is uncovered. Converting it to mode=local_validation_error would keep the parity coverage and is carded.',
   upload_multipart:
     'SDK rejects recommendedChunkSize below the contract minimum; fixture pins ~2 MB for a compact payload. Covered by client.test.ts/upload-streaming.test.ts with valid chunk sizes.',
   upload_metadata_hint:
