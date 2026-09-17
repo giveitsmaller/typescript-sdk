@@ -117,12 +117,56 @@ export async function resolveApiKey(opts = {}) {
     return null;
 }
 /**
+ * A `baseUrl` that is PRESENT but blank is a configuration ERROR, not an absent
+ * value — and both resolvers must agree about that or they disagree about what
+ * "unconfigured" means.
+ *
+ * 🔴 WHAT IT USED TO DO, MEASURED ON 0.26.0 BY `compression_e2e`:
+ *
+ *     resolveStreamEndpoint({ baseUrl: '' })  -> 'https://stream.giveitsmaller.com'
+ *     resolveEndpoint({ baseUrl: '' })        -> 'https://api.giveitsmaller.com'
+ *
+ * An empty string was read as "the caller configured nothing" and therefore as
+ * consent to the PRODUCTION default — while the caller is passing an `apiKey` at
+ * the same time. So a blank value sent credentialed traffic to production,
+ * through a path with no `GISL_*` variable in it, which means a consumer's guard
+ * around the ambient variables cannot see it.
+ *
+ * ⚠️ `baseUrl: ''` is not an absent value. It is a present, wrong one, and it
+ * almost always arrives from `process.env.X`, an unset CI variable, or a `.env`
+ * line with nothing after the `=`.
+ *
+ * ⭐ `undefined` IS UNCHANGED. That is the case the production fallback was
+ * written for, and narrowing this to the blank-string case keeps the change
+ * obviously safe. `card OxqseYwd`.
+ */
+function assertBaseUrlNotBlank(baseUrl) {
+    if (typeof baseUrl === 'string' && baseUrl.trim() === '') {
+        throw new GislConfigError('baseUrl was supplied but is blank. That is a configuration error, not an ' +
+            'absent value: it usually means GISL_BASE_URL (or whatever your wrapper ' +
+            'reads it from) is set to an empty string.', {
+            // 🔑 Its own code. `type_mismatch` said "you passed the wrong type",
+            // which a consumer discriminating on `reason` cannot tell from a genuine
+            // one — and the remediation is different: this value is the right type
+            // and empty.
+            reason: 'blank_value',
+            conflictingFields: ['baseUrl'],
+            suggestion: "Pass a real host such as 'https://api.staging.giveitsmaller.com', or an " +
+                "`environment` ('staging' / 'prod'). ⚠️ Omitting it entirely falls back to " +
+                'PRODUCTION when no GISL_* variable is set, which is rarely what an empty ' +
+                'value was meant to express.',
+        });
+    }
+}
+/**
  * Resolve the base URL. Explicit `baseUrl` wins; otherwise an explicit
  * `environment` name; otherwise the `GISL_BASE_URL` / `GISL_ENVIRONMENT`
- * env vars; otherwise the prod default. Never throws — the chain always
+ * env vars; otherwise the prod default. ⚠️ THROWS on a blank-but-present
+ * `baseUrl` and on an unknown explicit environment; otherwise the chain always
  * resolves to a usable URL.
  */
 export function resolveEndpoint(opts = {}) {
+    assertBaseUrlNotBlank(opts.baseUrl);
     if (typeof opts.baseUrl === 'string' && opts.baseUrl.length > 0) {
         return opts.baseUrl;
     }
@@ -139,7 +183,7 @@ export function resolveEndpoint(opts = {}) {
         // not a code-level arg).
         throw new GislConfigError(`Unknown environment '${opts.environment}'. Valid values: ${Object.keys(ENVIRONMENT_ENDPOINTS).join(', ')}.`);
     }
-    const envBaseUrl = readEnv(GISL_BASE_URL_ENV);
+    const envBaseUrl = readUrlEnv(GISL_BASE_URL_ENV);
     if (envBaseUrl !== null && envBaseUrl.length > 0) {
         return envBaseUrl;
     }
@@ -177,6 +221,9 @@ export function resolveEndpoint(opts = {}) {
  * (a typo must not silently re-route a stream).
  */
 export function resolveStreamEndpoint(opts = {}) {
+    // The same rule as `resolveEndpoint`, deliberately: the two disagreeing about
+    // what "unconfigured" means is how the defect was born.
+    assertBaseUrlNotBlank(opts.baseUrl);
     // TRIM BEFORE THE PRESENCE CHECK. A whitespace-only value is unset (the
     // client normaliser treats it that way too), and if it were allowed to
     // count as "supplied" here it would SUPPRESS the environment's declared
@@ -195,7 +242,7 @@ export function resolveStreamEndpoint(opts = {}) {
         // simply missing upstream. Both current environments declare one.
         return ENVIRONMENT_STREAM_ENDPOINTS[opts.environment] ?? null;
     }
-    const envStreamBaseUrl = readEnv(GISL_STREAM_BASE_URL_ENV);
+    const envStreamBaseUrl = readUrlEnv(GISL_STREAM_BASE_URL_ENV);
     if (envStreamBaseUrl !== null && envStreamBaseUrl.length > 0) {
         return envStreamBaseUrl;
     }
@@ -221,7 +268,7 @@ export function resolveStreamEndpoint(opts = {}) {
     // production's stream host. Assuming there would be deriving one host from
     // another, which is precisely what this mechanism exists to refuse.
     const apiHostWasConfigured = (typeof opts.baseUrl === 'string' && opts.baseUrl.trim() !== '') ||
-        readEnv(GISL_BASE_URL_ENV) !== null;
+        readUrlEnv(GISL_BASE_URL_ENV) !== null;
     if (!apiHostWasConfigured) {
         return ENVIRONMENT_STREAM_ENDPOINTS.prod ?? null;
     }
@@ -242,6 +289,34 @@ function isNodeRuntime() {
     return (typeof process !== 'undefined' &&
         process.versions !== undefined &&
         typeof process.versions.node === 'string');
+}
+/**
+ * A URL environment variable that is SET BUT BLANK is an operator error.
+ *
+ * 🔴 THE HOLE MY OWN ERROR MESSAGE NAMED. The option guard above told operators
+ * that a blank `baseUrl` "usually means GISL_BASE_URL is set to an empty
+ * string" — and that path was not covered: `readEnv` returned null for a blank
+ * variable, so `create({ apiKey })` under `GISL_BASE_URL=''` still resolved to
+ * the PRODUCTION host with credentials attached (second-identity, PR #404).
+ *
+ * ⚠️ THIS SUPERSEDES PART OF #397 for the two URL variables. That change made a
+ * whitespace-only env var mean "unset", which was right for the asymmetry it
+ * fixed and wrong as a general rule for a HOST: `GISL_BASE_URL=` in a `.env`
+ * file is a mistake somebody should hear about, not a default they opted into.
+ * Other variables keep the unset treatment.
+ */
+function readUrlEnv(name) {
+    const raw = isNodeRuntime() ? process.env[name] : undefined;
+    if (typeof raw === 'string' && raw.trim() === '') {
+        throw new GislConfigError(`${name} is set but blank. That is a configuration error, not an absent value — ` +
+            'a set-but-empty host would otherwise fall through to the PRODUCTION default ' +
+            'while your credentials are attached.', {
+            reason: 'blank_value',
+            conflictingFields: [name],
+            suggestion: `Unset ${name} entirely to use the environment default, or give it a real host.`,
+        });
+    }
+    return readEnv(name);
 }
 function readEnv(name) {
     if (!isNodeRuntime()) {

@@ -288,10 +288,38 @@ describe('resolveEndpoint', () => {
     expect(resolved).toBe(DEFAULT_ENDPOINT);
   });
 
-  it('ignores empty-string baseUrl (falls through chain)', () => {
+  it('REJECTS an empty-string baseUrl instead of falling through (OxqseYwd)', () => {
+    // 🔴 THIS TEST ASSERTED THE OPPOSITE UNTIL 2026-09-16, DELIBERATELY, AND THE
+    // BEHAVIOUR IT PINNED WAS STILL WRONG. Its old name — "ignores empty-string
+    // baseUrl (falls through chain)" — describes a MECHANISM, not a guarantee
+    // anyone asked for, and neither compression_e2e nor I could construct the
+    // caller who benefits: a caller with genuinely no base URL passes
+    // `undefined`, which is unchanged.
+    //
+    // An empty string arrives from `process.env.X`, an unset CI variable, or a
+    // `.env` line with nothing after the `=`. Falling through sent CREDENTIALED
+    // traffic to the production host from a value the operator believed they had
+    // set. A test proving a behaviour was INTENDED is not evidence it was RIGHT.
     process.env[GISL_BASE_URL_ENV] = 'https://env-base.example.com';
-    const resolved = resolveEndpoint({ baseUrl: '' });
-    expect(resolved).toBe('https://env-base.example.com');
+    expect(() => resolveEndpoint({ baseUrl: '' })).toThrow(GislConfigError);
+    expect(() => resolveEndpoint({ baseUrl: '   ' })).toThrow(GislConfigError);
+  });
+
+  it('still falls through the chain when baseUrl is ABSENT', () => {
+    // The case the fallback was written for, pinned separately so the change
+    // above cannot quietly widen into it.
+    process.env[GISL_BASE_URL_ENV] = 'https://env-base.example.com';
+    expect(resolveEndpoint({})).toBe('https://env-base.example.com');
+    expect(resolveEndpoint({ baseUrl: undefined })).toBe('https://env-base.example.com');
+  });
+
+  it('REJECTS a blank baseUrl in the STREAM resolver too (OxqseYwd)', () => {
+    // The two resolvers disagreeing about what "unconfigured" means is how the
+    // defect was born, so they move together.
+    expect(() => resolveStreamEndpoint({ baseUrl: '' })).toThrow(GislConfigError);
+    expect(resolveStreamEndpoint({ baseUrl: undefined, environment: 'staging' })).toBe(
+      ENVIRONMENT_STREAM_ENDPOINTS.staging,
+    );
   });
 
   it('GISL_BASE_URL takes precedence over GISL_ENVIRONMENT in env-only resolution', () => {
@@ -315,13 +343,19 @@ describe('resolveEndpoint', () => {
  * exactly that wiring `streamBaseUrl` from an env var.
  */
 describe('blank env vars are unset, not values', () => {
-  it('does not return a whitespace-only GISL_STREAM_BASE_URL as the stream host', () => {
+  it('THROWS on a whitespace-only GISL_STREAM_BASE_URL (superseded by OxqseYwd)', () => {
+    // 🔴 THIS ASSERTED A FALL-THROUGH UNTIL 2026-09-16. #397 made a blank env var
+    // mean "unset", which fixed a real asymmetry — a URL made of spaces was being
+    // returned verbatim as a host — but "blank means unset" is the wrong general
+    // rule for a HOST: it sends the caller to a DEFAULT they did not choose,
+    // which for `GISL_BASE_URL` is production, with credentials attached.
+    //
+    // ⇒ Set-but-blank is now an error for the two URL variables. The value of the
+    // #397 change survives (a space is never treated as a host); what changed is
+    // where the caller ends up.
     process.env[GISL_STREAM_BASE_URL_ENV] = '   ';
     process.env[GISL_ENVIRONMENT_ENV] = 'staging';
-    // Falls through to the DECLARED host for the environment. Before the fix
-    // this returned '   ' — a URL made of spaces — which is not a thing that
-    // fails at the point it was configured.
-    expect(resolveStreamEndpoint()).toBe(ENVIRONMENT_STREAM_ENDPOINTS.staging);
+    expect(() => resolveStreamEndpoint()).toThrow(GislConfigError);
   });
 
   it('still honours a real GISL_STREAM_BASE_URL (the value is not trimmed away)', () => {
@@ -333,12 +367,13 @@ describe('blank env vars are unset, not values', () => {
     expect(resolveStreamEndpoint()).toBe('https://stream.self-hosted.example');
   });
 
-  it('does not let a blank GISL_BASE_URL suppress the production stream fallback', () => {
-    // The same asymmetry one branch over: `apiHostWasConfigured` asked only
-    // whether the env var was non-empty, so a blank one meant "the caller named
-    // an API host we cannot reason about" and the prod stream host was withheld.
+  it('THROWS on a blank GISL_BASE_URL rather than deciding what it meant', () => {
+    // Superseded by OxqseYwd for the same reason as the case above: the old
+    // behaviour picked an outcome (the prod stream host) from a value the
+    // operator believed they had set. Refusing is the only reading that cannot
+    // be wrong.
     process.env[GISL_BASE_URL_ENV] = '  ';
-    expect(resolveStreamEndpoint()).toBe(ENVIRONMENT_STREAM_ENDPOINTS.prod);
+    expect(() => resolveStreamEndpoint()).toThrow(GislConfigError);
   });
 
   it('treats a whitespace-only GISL_API_KEY as no key at all', async () => {
@@ -359,5 +394,42 @@ describe('blank env vars are unset, not values', () => {
     // API would have rejected with a 401 nobody could explain.
     process.env[GISL_API_KEY_ENV] = '\t ';
     await expect(resolveApiKey()).resolves.toBeNull();
+  });
+});
+
+/**
+ * OxqseYwd, round 2 — the env path the option guard's own message names.
+ *
+ * 🔴 The first version of this fix covered `{ baseUrl: '' }` and told operators
+ * it "usually means GISL_BASE_URL is set to an empty string" — the path it did
+ * NOT cover. `readEnv` returned null for a blank variable, so `create({apiKey})`
+ * under `GISL_BASE_URL=''` still resolved to production with credentials
+ * attached (second-identity, PR #404).
+ */
+describe('a URL environment variable that is set but blank', () => {
+  it('is an error, not an absent value', () => {
+    process.env[GISL_BASE_URL_ENV] = '';
+    expect(() => resolveEndpoint({})).toThrow(GislConfigError);
+    process.env[GISL_BASE_URL_ENV] = '   ';
+    expect(() => resolveEndpoint({})).toThrow(GislConfigError);
+  });
+
+  it('applies to the stream host variable too', () => {
+    process.env[GISL_STREAM_BASE_URL_ENV] = '  ';
+    expect(() => resolveStreamEndpoint({})).toThrow(GislConfigError);
+  });
+
+  it('leaves a genuinely unset variable alone', () => {
+    // The direction that keeps this a fix rather than a regression: absence is
+    // still absence, and still reaches the documented default.
+    delete process.env[GISL_BASE_URL_ENV];
+    expect(resolveEndpoint({})).toBe(DEFAULT_ENDPOINT);
+  });
+
+  it('names the VARIABLE in the message, not the parameter', () => {
+    // compression_e2e, as a consumer: the parameter is what the SDK sees, the
+    // variable is what an operator can act on.
+    process.env[GISL_BASE_URL_ENV] = '';
+    expect(() => resolveEndpoint({})).toThrow(/GISL_BASE_URL/);
   });
 });

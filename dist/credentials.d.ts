@@ -105,7 +105,8 @@ export declare function resolveApiKey(opts?: ResolveCredentialsOptions): Promise
 /**
  * Resolve the base URL. Explicit `baseUrl` wins; otherwise an explicit
  * `environment` name; otherwise the `GISL_BASE_URL` / `GISL_ENVIRONMENT`
- * env vars; otherwise the prod default. Never throws — the chain always
+ * env vars; otherwise the prod default. ⚠️ THROWS on a blank-but-present
+ * `baseUrl` and on an unknown explicit environment; otherwise the chain always
  * resolves to a usable URL.
  */
 export declare function resolveEndpoint(opts?: ResolveEndpointOptions): string;
