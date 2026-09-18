@@ -732,6 +732,45 @@ export class SseEndedWithoutTerminal extends GislError {
         this.name = 'SseEndedWithoutTerminal';
     }
 }
+/**
+ * Internal control-flow marker (3OVNoRxh): the SSE CONNECT was REFUSED with a
+ * retryable API status — a `429` on the `events_stream` bucket, or a `503`.
+ *
+ * ⚠️ IT WRAPS, IT DOES NOT REPLACE. `refusal` is the original {@link GislApiError},
+ * so nothing about it is lost; this class exists only so the
+ * await-terminal callers can tell "SSE is unavailable right now" from "the API
+ * refused the thing you asked for".
+ *
+ * 🔴 SCOPED TO THE CONNECT, DELIBERATELY. `_consumeSseToTerminal` also calls
+ * `getWorkflowStatus` AFTER a terminal frame, and that call can return the same
+ * statuses. Admitting "any retryable GislApiError from the SSE path" would put
+ * that one in the poll-fallback too — which is harmless by luck rather than by
+ * design, and would grow to cover whatever future call joins that function.
+ * The wrap happens at exactly one site: the `streamEvents` connect.
+ *
+ * ⇒ A DIRECT `streamEvents` CALLER NEVER SEES THIS. The wrap lives inside
+ * `_consumeSseToTerminal`; someone who asked for the stream specifically still
+ * gets the raw `GislApiError` with its `retryAfterSeconds`.
+ *
+ * Mirrors the PHP `SseConnectRefused` marker. Not part of the public error
+ * contract — never surfaced to a caller.
+ */
+export class SseConnectRefused extends GislError {
+    refusal;
+    constructor(message, 
+    /**
+     * The refusal itself — status, `retryAfterSeconds`, payload, all intact.
+     *
+     * ⚠️ Named `refusal`, NOT `cause`. `Error.cause` is an ES2022 own-property
+     * the runtime may also set, and overriding it here would make the same name
+     * mean two different things depending on how the object was constructed.
+     */
+    refusal) {
+        super(message);
+        this.refusal = refusal;
+        this.name = 'SseConnectRefused';
+    }
+}
 export class GislAbortError extends GislError {
     constructor(message) {
         super(message);

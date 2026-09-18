@@ -10,7 +10,7 @@
  * Mirrors `packages/php/src/FileFirst/*`.
  */
 
-import { GislConfigError, GislItemFailedError, GislNetworkError, GislNoSuchKeyError, GislSinkError, GislStreamHostNotDeclaredError, GislTimeoutError, SseEndedWithoutTerminal } from './errors.js';
+import { GislConfigError, GislItemFailedError, GislNetworkError, GislNoSuchKeyError, GislSinkError, GislStreamHostNotDeclaredError, GislTimeoutError, SseConnectRefused, SseEndedWithoutTerminal } from './errors.js';
 import {
   _detectCompressMedia,
   _detectAudioLossless,
@@ -907,6 +907,14 @@ async function _awaitTerminal(
       if (
         !(
           err instanceof SseEndedWithoutTerminal ||
+          // 3OVNoRxh: the SSE CONNECT was refused with a retryable status
+          // (a 429 on the `events_stream` bucket, or a 503). The contract
+          // declares that retryable and it clears when another caller closes
+          // a stream — so it is SSE being momentarily unavailable, not a
+          // failure of the thing this caller asked for. The wrap happens at
+          // the connect site ONLY, and only for `GislApiError.retryable`, so
+          // a 401/402/404 still propagates.
+          err instanceof SseConnectRefused ||
           err instanceof GislNetworkError ||
           // VUozk5Bc: no stream host is DECLARED for this configuration (a
           // configuration nothing declares; both named environments resolve as of

@@ -29,7 +29,7 @@
 import { DEFAULT_POLL_TIMEOUT_MS } from './client.js';
 import { SseEventType, SseOperationProgressDataFromJSON, } from '@giveitsmaller/contracts/openapi';
 import { uploadSource } from './types.js';
-import { GislTimeoutError, GislFanOutTimeoutError, GislNetworkError, GislStreamHostNotDeclaredError, GislTransportError, SseEndedWithoutTerminal } from './errors.js';
+import { GislApiError, GislTimeoutError, GislFanOutTimeoutError, GislNetworkError, GislStreamHostNotDeclaredError, GislTransportError, SseConnectRefused, SseEndedWithoutTerminal } from './errors.js';
 // Deferred-usage-only import: `Handle` is constructed inside submit() at call
 // time, not at module load, so the builder.ts <-> handle.ts cycle is safe
 // under ESM (handle.ts imports the await-primitives from this module).
@@ -415,6 +415,14 @@ export class OperationBuilder {
                 // throw, anything unexpected — MUST propagate; re-issuing the same doomed
                 // request via poll would mask the real failure.
                 if (!(err instanceof SseEndedWithoutTerminal ||
+                    // 3OVNoRxh: the SSE CONNECT was refused with a retryable status
+                    // (a 429 on the `events_stream` bucket, or a 503). The contract
+                    // declares that retryable and it clears when another caller closes
+                    // a stream — so it is SSE being momentarily unavailable, not a
+                    // failure of the thing this caller asked for. The wrap happens at
+                    // the connect site ONLY, and only for `GislApiError.retryable`, so
+                    // a 401/402/404 still propagates.
+                    err instanceof SseConnectRefused ||
                     err instanceof GislNetworkError ||
                     // VUozk5Bc: no stream host is DECLARED for this configuration (a
                     // configuration nothing declares; both named environments resolve as of
@@ -690,6 +698,25 @@ export async function _consumeSseToTerminal(client, args) {
             // (and ONLY on it / a clean stream-end), never on an onProgress throw.
             if (err instanceof TypeError) {
                 throw new GislTransportError(`SSE connect to workflow ${args.workflowId} events failed: ${err.message}`);
+            }
+            // 3OVNoRxh: the connect was REFUSED with a retryable status — a 429 on
+            // the `events_stream` bucket, or a 503. The contract declares that
+            // retryable, and it usually clears the moment another caller closes a
+            // stream. Wrap it so the await-terminal callers can poll instead of
+            // handing a `run()` caller a hard failure for a transport they never
+            // asked about.
+            //
+            // ⚠️ `err.retryable`, NOT a literal 429/503 list. The property already
+            // encodes 408/429/5xx PLUS the generated taxonomy's own `retryable` flag,
+            // and a second copy of that rule here would be the one that goes stale.
+            //
+            // 🔴 THE NARROWING IS THE FEATURE. A 401, 402 or 404 on the connect is
+            // NOT retryable, so it still propagates untouched — re-issuing the same
+            // doomed request as a poll would mask the real failure, which is the
+            // property the whole predicate below exists to preserve (TDqmkWpX).
+            if (err instanceof GislApiError && err.retryable) {
+                throw new SseConnectRefused(`SSE connect to workflow ${args.workflowId} events was refused with ` +
+                    `${err.statusCode}; falling back to polling`, err);
             }
             throw err;
         }

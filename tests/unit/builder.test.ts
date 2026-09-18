@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PRESET_VERSION as GENERATED_PRESET_VERSION } from '../../src/generated/sdk_spec/version.js';
-import { _clampPollIntervalMs, OperationBuilder, type Result, type ProgressEvent } from '../../src/builder.js';
-import { GislTimeoutError, GislFanOutTimeoutError } from '../../src/errors.js';
+import { _clampPollIntervalMs, _consumeSseToTerminal, OperationBuilder, type Result, type ProgressEvent } from '../../src/builder.js';
+import { GislApiError, GislTimeoutError, GislFanOutTimeoutError, SseConnectRefused } from '../../src/errors.js';
 import { Handle } from '../../src/handle.js';
 import type { GislClient } from '../../src/client.js';
 
@@ -309,6 +309,102 @@ describe('OperationBuilder.run', () => {
     });
     expect(result.status).toBe('completed');
     expect(mock.getWorkflowStatus).toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // 3OVNoRxh — a REFUSED SSE connect is not a failed run.
+  //
+  // The contract declares the `events_stream` 429 retryable, and it clears when
+  // another caller closes a stream. Before this, a refusal propagated: a
+  // `run()` caller got a hard failure for a transport they never asked about,
+  // while polling — a working transport, and the thing they actually asked for
+  // — sat unused.
+  //
+  // ⚠️ THE NARROWING IS THE PROPERTY, NOT THE FALLBACK. Each test below has a
+  // non-retryable twin; without them this suite would pass on a change that
+  // polled after ANY API error, which is the mistake TDqmkWpX exists to prevent.
+  // -------------------------------------------------------------------------
+
+  it('SSE connect refused with 429 falls back to polling', async () => {
+    const mock = makeMockClient();
+    mock.streamEvents.mockRejectedValueOnce(
+      new GislApiError(429, 'Too many concurrent streams', '/events', undefined, {
+        responseHeaders: { 'retry-after': '30' },
+      }),
+    );
+
+    const result = await new OperationBuilder(mock.client, 'compress', 'p.jpg', {}).run({
+      maxWait: '30s',
+    });
+
+    expect(result.status).toBe('completed');
+    expect(mock.getWorkflowStatus).toHaveBeenCalled();
+  });
+
+  it('SSE connect refused with 503 falls back to polling', async () => {
+    const mock = makeMockClient();
+    mock.streamEvents.mockRejectedValueOnce(
+      new GislApiError(503, 'Stream service unavailable', '/events'),
+    );
+
+    const result = await new OperationBuilder(mock.client, 'compress', 'p.jpg', {}).run({
+      maxWait: '30s',
+    });
+
+    expect(result.status).toBe('completed');
+  });
+
+  it('does NOT poll after a NON-retryable connect error — 401 propagates', async () => {
+    // 🔴 THE TWIN. If this ever starts polling, the fallback has widened from
+    // "SSE is momentarily unavailable" to "swallow anything the API says",
+    // and a run() would report success on a workflow the caller cannot read.
+    const mock = makeMockClient();
+    const refusal = new GislApiError(401, 'Unauthorized', '/events');
+    mock.streamEvents.mockRejectedValueOnce(refusal);
+
+    await expect(
+      new OperationBuilder(mock.client, 'compress', 'p.jpg', {}).run({ maxWait: '30s' }),
+    ).rejects.toBe(refusal);
+    expect(mock.getWorkflowStatus).not.toHaveBeenCalled();
+  });
+
+  it('does NOT poll after a 402 — balance exhausted is not a transport hiccup', async () => {
+    const mock = makeMockClient();
+    const refusal = new GislApiError(402, 'Payment required', '/events');
+    mock.streamEvents.mockRejectedValueOnce(refusal);
+
+    await expect(
+      new OperationBuilder(mock.client, 'compress', 'p.jpg', {}).run({ maxWait: '30s' }),
+    ).rejects.toBe(refusal);
+  });
+
+  it('the marker CARRIES the original refusal — nothing is lost by the wrap', async () => {
+    // ⚠️ ASSERTED AT `_consumeSseToTerminal`, NOT THROUGH A MOCKED CLIENT
+    // METHOD. "A direct streamEvents caller still gets the raw error" is a
+    // structural fact — the wrap lives inside this helper — and a test that
+    // mocked `streamEvents` to reject and then asserted it rejects would be
+    // asserting its own stub.
+    const mock = makeMockClient();
+    const refusal = new GislApiError(429, 'Too many concurrent streams', '/events', undefined, {
+      responseHeaders: { 'retry-after': '30' },
+    });
+    mock.streamEvents.mockRejectedValueOnce(refusal);
+
+    const thrown = await _consumeSseToTerminal(mock.client, {
+      workflowId: 'wf_1',
+      deadline: Date.now() + 30_000,
+      signal: undefined,
+      onProgress: undefined,
+    }).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+
+    expect(thrown).toBeInstanceOf(SseConnectRefused);
+    expect((thrown as SseConnectRefused).refusal).toBe(refusal);
+    // The status and Retry-After a caller would want are still reachable.
+    expect((thrown as SseConnectRefused).refusal.statusCode).toBe(429);
+    expect((thrown as SseConnectRefused).refusal.retryAfterSeconds).toBe(30);
   });
 
   it('caller-aborted run during SSE propagates AbortError (no swallow into poll path)', async () => {

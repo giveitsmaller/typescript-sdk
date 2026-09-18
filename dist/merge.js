@@ -27,7 +27,7 @@
  */
 import { DEFAULT_POLL_TIMEOUT_MS } from './client.js';
 import { uploadSource, jobOutputSource } from './types.js';
-import { GislConfigError, GislNetworkError, GislPerInputOptionsNotSupportedError, GislTimeoutError, GislUndeclaredAssetError, GislUnusedAssetError, GislStreamHostNotDeclaredError, SseEndedWithoutTerminal, } from './errors.js';
+import { GislConfigError, GislNetworkError, GislPerInputOptionsNotSupportedError, GislTimeoutError, GislUndeclaredAssetError, GislUnusedAssetError, GislStreamHostNotDeclaredError, SseConnectRefused, SseEndedWithoutTerminal, } from './errors.js';
 import { _cappedProbeTimeoutMs, _checkAborted, _consumeSseToTerminal, _detectCompressMedia, _parseMaxWait, _pollToTerminal, _projectResult, } from './builder.js';
 import { Handle } from './handle.js';
 /**
@@ -453,6 +453,14 @@ export class MergeBuilder {
                 // transport error; rethrow everything else (timeout, abort, API, an
                 // onProgress callback throw, anything unexpected) so it isn't masked.
                 if (!(err instanceof SseEndedWithoutTerminal ||
+                    // 3OVNoRxh: the SSE CONNECT was refused with a retryable status
+                    // (a 429 on the `events_stream` bucket, or a 503). The contract
+                    // declares that retryable and it clears when another caller closes
+                    // a stream — so it is SSE being momentarily unavailable, not a
+                    // failure of the thing this caller asked for. The wrap happens at
+                    // the connect site ONLY, and only for `GislApiError.retryable`, so
+                    // a 401/402/404 still propagates.
+                    err instanceof SseConnectRefused ||
                     err instanceof GislNetworkError ||
                     // VUozk5Bc: no stream host is DECLARED for this configuration (a
                     // configuration nothing declares; both named environments resolve as of
