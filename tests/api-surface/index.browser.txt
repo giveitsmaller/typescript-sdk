@@ -132,6 +132,7 @@ GislAbortError	value+type
 GislApiError	value+type
 GislApiErrorOptions	type
 GislAuthError	value+type
+GislAuthRejectionError	value+type
 GislBalanceExhaustedError	value+type
 GislBundleAlreadyArchivedError	value+type
 GislChainCardinalityMismatchError	value+type

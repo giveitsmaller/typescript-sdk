@@ -21,6 +21,17 @@ import {
   GislWorkflowExpiredError,
 } from '../../src/errors.js';
 
+// ⚠️ THIS FILE IMPORTS THE INTERNAL MODULE, AND SO DOES EVERY OTHER ERROR TEST
+// HERE. That is fine for behaviour — but it means NONE of them can fail when a
+// class is missing from the public barrel, which is exactly how
+// `GislAuthRejectionError` stayed thrown-but-unexported (wOzXYDhg). A suite that
+// never goes through the barrel cannot detect anything about the barrel.
+//
+// ⇒ ADDING A NEW ERROR CLASS? Its export is covered by the committed API-surface
+// snapshot (`tests/api-surface/`) and by
+// `tests/unit/auth-rejection-error-is-public.test.ts`, which imports through
+// `src/index.core.js` on purpose. Assert behaviour here; assert reachability there.
+
 // All payload fixtures match the camelCase shape the FromJSON helper produces
 // at runtime (see node_modules/@giveitsmaller/contracts/openapi/models/*).
 // Constructing payloads in this shape mirrors what handleResponse() builds

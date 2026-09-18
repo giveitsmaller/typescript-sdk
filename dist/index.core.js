@@ -9,7 +9,15 @@ export { GislClient, DEFAULT_MULTIPART_FIRST_CHUNK_SIZE } from './client.js';
 export { parseSseStream } from './sse.js';
 export { uploadSource, jobOutputSource, externalImportSource, connectionSource, } from './types.js';
 // Errors
-export { GislError, GislApiError, GislValidationError, GislBalanceExhaustedError, GislLongFormConcurrencyError, GislTierRestrictedError, GislFeatureTierRestrictedError, GislFeatureNotAvailableError, GislWorkflowExpiredError, GislProbePendingError, GislAuthError, GislUploadCapExceededError, GislMultipartPartError, GislMultipartPartCountError, 
+export { GislError, GislApiError, GislValidationError, 
+// wOzXYDhg — the OTHER branch of the same 422 `oneOf` as GislValidationError.
+// It was thrown by both SDKs and exported by neither, so a caller who wanted
+// to tell "this email is already registered" from "your payload is malformed"
+// had to catch GislApiError, test `statusCode === 422` and read the
+// `error_type` discriminator by hand — which is precisely the unwrapping this
+// class exists to spare them. Its sibling being public is what made the
+// omission read as an oversight rather than a decision.
+GislAuthRejectionError, GislBalanceExhaustedError, GislLongFormConcurrencyError, GislTierRestrictedError, GislFeatureTierRestrictedError, GislFeatureNotAvailableError, GislWorkflowExpiredError, GislProbePendingError, GislAuthError, GislUploadCapExceededError, GislMultipartPartError, GislMultipartPartCountError, 
 // SDK-3 (Wb6ebOMM) — typed errors for the 3 resume-support endpoints.
 GislMultipartSessionNotFoundError, GislMultipartSessionOwnershipError, GislMultipartSessionAuthRequiredError, GislTimeoutError, 
 // 4G4FaA9X — mapEach fan-out timed out mid-batch; carries the completed
