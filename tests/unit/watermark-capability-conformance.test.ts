@@ -30,12 +30,58 @@ const availabilityRoot = JSON.parse(
 // Operations are nested under the top-level `operations` key.
 const availability = availabilityRoot.operations ?? {};
 
-/** Resolved availability: group-level, else op-level, else the 'stable' default. */
+/**
+ * The contract's availability ladder, MOST-CAUTIOUS FIRST
+ * (compression_contracts schemas/availability-ladder.yaml, v2.206.0+). Pinned to
+ * that file by scripts/tests/test_availability_ladder_parity.py.
+ */
+export const AVAILABILITY_LADDER = [
+  'planned',
+  'experimental',
+  'beta',
+  'deprecated',
+  'stable_pending_audit',
+  'stable',
+] as const;
+
+/**
+ * PMvwhNI1: resolve a chain MOST-CAUTIOUSLY - the strictest present link wins, and
+ * an absent key means `stable` at that link. This was "group key, else op key"
+ * (precedence), which agreed with the contract on every real cell only by
+ * coincidence: a group saying `stable` under a `planned` root resolved to
+ * `stable`, and this tripwire would then have demanded the SDK un-withdraw it.
+ */
+export function mostCautious(...links: (string | undefined)[]): string {
+  let strictest = AVAILABILITY_LADDER.length - 1;
+  for (const link of links) {
+    const value = link ?? 'stable';
+    const rank = (AVAILABILITY_LADDER as readonly string[]).indexOf(value);
+    if (rank === -1) throw new Error(`unknown availability value '${value}' - not on the contract ladder`);
+    strictest = Math.min(strictest, rank);
+  }
+  return AVAILABILITY_LADDER[strictest]!;
+}
+
 function resolvedAvailability(op: string, group: string): string {
   const opMeta = availability[op];
-  const groupMeta = opMeta?.mime_groups?.[group];
-  return groupMeta?.availability ?? opMeta?.availability ?? 'stable';
+  return mostCautious(opMeta?.availability, opMeta?.mime_groups?.[group]?.availability);
 }
+
+describe('most-cautious resolution (PMvwhNI1)', () => {
+  it('a stable group under a planned root resolves to PLANNED (precedence said stable)', () => {
+    expect(mostCautious('planned', 'stable')).toBe('planned');
+  });
+  it('a stricter group wins over a looser root', () => {
+    expect(mostCautious(undefined, 'planned')).toBe('planned');
+    expect(mostCautious('beta', 'experimental')).toBe('experimental');
+  });
+  it('absence is stable at every link', () => {
+    expect(mostCautious(undefined, undefined)).toBe('stable');
+  });
+  it('an unknown value fails loudly rather than ranking somewhere', () => {
+    expect(() => mostCautious('stable', 'gamma')).toThrow(/not on the contract ladder/);
+  });
+});
 
 describe('WATERMARK_CAPABILITY conformance with availability.json', () => {
   for (const [op, groups] of Object.entries(WATERMARK_CAPABILITY)) {
