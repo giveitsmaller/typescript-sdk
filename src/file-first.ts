@@ -10,6 +10,7 @@
  * Mirrors `packages/php/src/FileFirst/*`.
  */
 
+import { _refusePlannedInOperations } from './ergonomic/planned_values.js';
 import { GislConfigError, GislItemFailedError, GislNetworkError, GislNoSuchKeyError, GislSinkError, GislStreamHostNotDeclaredError, GislTimeoutError, SseConnectRefused, SseEndedWithoutTerminal } from './errors.js';
 import {
   _detectCompressMedia,
@@ -1185,6 +1186,8 @@ export class Recipe {
     // Also run the sole_op split so a multi-sole_op recipe fails pre-upload
     // (IQc01rj0). The placeholder id is discarded — only the throw matters.
     _splitSingleInputJobs(ops, 'preflight');
+    // pE6JVJuc: a value planned everywhere it can apply is refused before upload.
+    _refusePlannedInOperations(ops);
   }
 
   /** The result-addressing key passed to `file()`, or undefined. */
@@ -2052,7 +2055,11 @@ async function _uploadInputsAndCreate(
   // single-input Recipe.assertOperationsLowerable preflight (0azjb6Rg); mirrors
   // PHP. The placeholder ids never reach the wire — the payload is discarded
   // (T3ltXsou). toWorkflowPayload is pure, so re-lowering at create is cheap.
-  toPayload(inputs.map((_, i) => `preflight_${i}`));
+  const preflight = toPayload(inputs.map((_, i) => `preflight_${i}`));
+  // pE6JVJuc: the planned-everywhere value gate over EVERY lowered operation of
+  // every job - archive folder_structure 'by_job', audio_overlay mode 'duck', a
+  // planned value in any member's chain - before a single upload byte.
+  _refusePlannedInOperations(preflight.jobs.flatMap((job) => job.operations));
   const fileIds: string[] = [];
   // Track each freshly-uploaded input's probe-gate inputs (a pre-uploaded id
   // carries no local mime/size, so it is excluded — never probed).

@@ -265,3 +265,31 @@ describe('ArchivedRecipe.run — timeout label', () => {
     expect(mock.createWorkflow).not.toHaveBeenCalled();
   });
 });
+
+// pE6JVJuc — the planned-everywhere value gate runs in the SHARED multi-input
+// preflight, before any upload. archive `folder_structure: 'by_job'` is planned.
+describe('ArchivedRecipe — planned value refused before upload (pE6JVJuc)', () => {
+  it("folderStructure:'by_job' throws feature_not_available with ZERO uploads", async () => {
+    const mock = makeMockClient();
+    await expect(
+      new ArchivedRecipe(
+        [fileInput.path('report.pdf'), fileInput.path('hero.jpg')],
+        { format: 'zip', folderStructure: 'by_job' },
+        mock.client,
+      ).run({ maxWait: '30s' }),
+    ).rejects.toMatchObject({ reason: 'feature_not_available', conflictingFields: ['folder_structure'] });
+    expect(mock.uploadFile).not.toHaveBeenCalled();
+  });
+
+  it('submit() is refused the same way', async () => {
+    const mock = makeMockClient();
+    await expect(
+      new ArchivedRecipe(
+        [fileInput.path('report.pdf'), fileInput.path('hero.jpg')],
+        { folderStructure: 'by_job' },
+        mock.client,
+      ).submit(),
+    ).rejects.toMatchObject({ reason: 'feature_not_available' });
+    expect(mock.uploadFile).not.toHaveBeenCalled();
+  });
+});

@@ -15,13 +15,14 @@
  * API decides at create. The failure this avoids is a false REFUSAL of a request the
  * server would have accepted, which is worse than a late one.
  *
- * ⚠️ SCOPE: wired into `OperationBuilder` (operation(), typed verbs, mapEach
- * children) ONLY. The file-first multi-input recipes (merge, files().archive(),
- * overlays) do not call it yet, so e.g. archive `folder_structure: 'by_job'`
- * still uploads first - carded separately.
+ * SCOPE: `OperationBuilder` (operation(), typed verbs, mapEach children), the
+ * file-first single-input `Recipe` preflight, and the shared multi-input
+ * preflight in `_uploadInputsAndCreate` (merge, files().archive(), overlays,
+ * fan-out) - every lowered operation of every job (pE6JVJuc).
  */
 import * as operations from '@giveitsmaller/contracts/operations';
 import type { OperationMetadata, OptionMetadata } from '@giveitsmaller/contracts/operations';
+import { GislConfigError } from '../errors.js';
 
 function metadataFor(opType: string): OperationMetadata | undefined {
   const exportName = `${opType.replace(/_([a-z])/g, (_m, c: string) => c.toUpperCase())}Metadata`;
@@ -57,4 +58,22 @@ export function _firstPlannedValue(
     if (_isPlannedEverywhere(opType, key, value)) return { key, value };
   }
   return undefined;
+}
+
+/**
+ * @internal — throw the pre-upload refusal for the first planned-everywhere value in
+ * any of `operations`. Shared by the file-first preflights (pE6JVJuc).
+ */
+export function _refusePlannedInOperations(
+  operations: readonly { type: string; options?: Record<string, unknown> }[],
+): void {
+  for (const op of operations) {
+    const planned = _firstPlannedValue(op.type, op.options ?? {});
+    if (planned !== undefined) {
+      throw new GislConfigError(
+        `${op.type}: '${planned.key}: ${String(planned.value)}' is advertised but not available yet (planned).`,
+        { reason: 'feature_not_available', conflictingFields: [planned.key] },
+      );
+    }
+  }
 }
