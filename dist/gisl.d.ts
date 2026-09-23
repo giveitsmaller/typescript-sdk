@@ -207,8 +207,11 @@ export type ErgonomicClient = GislClient & {
      * Generic operation escape hatch (qUhxfDA5). Build + run a SINGLE-input,
      * SINGLE-operation job for an op type with no first-class verb (e.g.
      * `text_watermark`, `split`, or a not-yet-in-contract op). `options` reach the
-     * wire unchanged — there is NO pre-upload validation (the server validates) and
-     * NO preset resolution unless `opType` is `compress`. Prefer the typed verbs
+     * wire unchanged, with ONE pre-upload check: a value the contract marks
+     * `planned` in every group that declares the option (e.g. split
+     * `precision: 'exact'`) throws `GislConfigError` (`feature_not_available`)
+     * before anything uploads. Everything else is validated by the server. NO
+     * preset resolution unless `opType` is `compress`. Prefer the typed verbs
      * (`compress` / `convert` / `thumbnail`) when they exist — they add local
      * validation.
      *

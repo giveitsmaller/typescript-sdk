@@ -358,6 +358,13 @@ export declare class OperationBuilder {
      * fetches downloads, and projects to a flat `Result`. Throws
      * `GislTimeoutError` if `maxWait` elapses before terminal status.
      */
+    /**
+     * 99Da2uyx: refuse, BEFORE the upload, an option value the contract marks
+     * `planned` everywhere it can apply (see ergonomic/planned_values.ts). The API
+     * would refuse it at create with `feature_not_available`, after the bytes had
+     * gone up; this is the same refusal, earlier, with the same reason.
+     */
+    private _refusePlannedValues;
     run(options?: RunOptions): Promise<Result>;
     /**
      * Fire-and-forget: upload the input + create the workflow with a

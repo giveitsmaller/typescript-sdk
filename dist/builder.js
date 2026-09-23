@@ -30,7 +30,8 @@ import { DEFAULT_POLL_TIMEOUT_MS } from './client.js';
 import { SseEventType, SseOperationProgressDataFromJSON, } from '@giveitsmaller/contracts/openapi';
 import { uploadSource } from './types.js';
 import { parseRetryAfterMs } from './retry-metadata.js';
-import { GislApiError, GislTimeoutError, GislFanOutTimeoutError, GislNetworkError, GislStreamHostNotDeclaredError, GislTransportError, SseConnectRefused, SseEndedWithoutTerminal } from './errors.js';
+import { _firstPlannedValue } from './ergonomic/planned_values.js';
+import { GislApiError, GislConfigError, GislTimeoutError, GislFanOutTimeoutError, GislNetworkError, GislStreamHostNotDeclaredError, GislTransportError, SseConnectRefused, SseEndedWithoutTerminal } from './errors.js';
 // Deferred-usage-only import: `Handle` is constructed inside submit() at call
 // time, not at module load, so the builder.ts <-> handle.ts cycle is safe
 // under ESM (handle.ts imports the await-primitives from this module).
@@ -257,6 +258,18 @@ export class OperationBuilder {
      * fetches downloads, and projects to a flat `Result`. Throws
      * `GislTimeoutError` if `maxWait` elapses before terminal status.
      */
+    /**
+     * 99Da2uyx: refuse, BEFORE the upload, an option value the contract marks
+     * `planned` everywhere it can apply (see ergonomic/planned_values.ts). The API
+     * would refuse it at create with `feature_not_available`, after the bytes had
+     * gone up; this is the same refusal, earlier, with the same reason.
+     */
+    _refusePlannedValues(wireOptions) {
+        const planned = _firstPlannedValue(this.opType, wireOptions);
+        if (planned !== undefined) {
+            throw new GislConfigError(`${this.opType}: '${planned.key}: ${String(planned.value)}' is advertised but not available yet (planned).`, { reason: 'feature_not_available', conflictingFields: [planned.key] });
+        }
+    }
     async run(options = {}) {
         const deadline = Date.now() + _parseMaxWait(options.maxWait ?? DEFAULT_POLL_TIMEOUT_MS);
         const signal = options.signal;
@@ -265,6 +278,7 @@ export class OperationBuilder {
         // 0. Resolve presets FIRST so a GislConfigError fails the call
         // before any I/O — the SDK promised fail-early for invalid combos.
         const resolved = this._resolve();
+        this._refusePlannedValues(resolved.wireOptions);
         // 1. Upload — emits {phase:'upload'} progress events from byte-counter.
         const uploadOpts = { signal };
         if (onProgress !== undefined) {
@@ -341,6 +355,7 @@ export class OperationBuilder {
         // Resolve presets before any I/O so a GislConfigError fails the
         // call before the upload — same fail-early contract as run().
         const resolved = this._resolve();
+        this._refusePlannedValues(resolved.wireOptions);
         const uploadResp = await this.client.uploadFile(this.input);
         // Best-effort probe-before-create for a multipart video upload (never-bounce).
         await this.client.maybeWaitForVideoProbe(uploadResp.fileId, {

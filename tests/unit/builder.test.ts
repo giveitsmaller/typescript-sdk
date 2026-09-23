@@ -4,6 +4,7 @@ import { PRESET_VERSION as GENERATED_PRESET_VERSION } from '../../src/generated/
 import { _clampPollIntervalMs, _consumeSseToTerminal, OperationBuilder, type Result, type ProgressEvent } from '../../src/builder.js';
 import { GislApiError, GislTimeoutError, GislFanOutTimeoutError, SseConnectRefused } from '../../src/errors.js';
 import { Handle } from '../../src/handle.js';
+import { _isPlannedEverywhere } from '../../src/ergonomic/planned_values.js';
 import type { GislClient } from '../../src/client.js';
 
 // ---------------------------------------------------------------------------
@@ -1405,5 +1406,57 @@ describe('OperationBuilder.run — TDqmkWpX await-terminal discipline', () => {
       new OperationBuilder(mock.client, 'compress', 'p.jpg', {}).run({ maxWait: '30s' }),
     ).rejects.toBeInstanceOf(GislTimeoutError);
     expect(mock.getWorkflowDownloads).toHaveBeenCalledOnce();
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// 99Da2uyx — a value the contract marks `planned` EVERYWHERE it can apply is
+// refused BEFORE the upload. contracts v2.209.0: split precision 'exact' is
+// planned on audio and video (the only groups declaring `precision`).
+// ---------------------------------------------------------------------------
+describe('per-value planned gate before upload (99Da2uyx)', () => {
+  it('refuses split precision:exact before any upload (run)', async () => {
+    const mock = makeMockClient();
+    await expect(
+      new OperationBuilder(mock.client, 'split', 'talk.mp3', { precision: 'exact' }).run({ maxWait: '30s' }),
+    ).rejects.toMatchObject({ reason: 'feature_not_available', conflictingFields: ['precision'] });
+    expect(mock.uploadFile).not.toHaveBeenCalled();
+  });
+
+  it('refuses it before any upload on submit() too', async () => {
+    const mock = makeMockClient();
+    await expect(
+      new OperationBuilder(mock.client, 'split', 'clip.mp4', { precision: 'exact' }).submit(),
+    ).rejects.toMatchObject({ reason: 'feature_not_available' });
+    expect(mock.uploadFile).not.toHaveBeenCalled();
+  });
+
+  it('lets precision:fast through (the gate is per VALUE)', async () => {
+    const mock = makeMockClient();
+    await new OperationBuilder(mock.client, 'split', 'talk.mp3', { precision: 'fast' }).run({ maxWait: '30s' });
+    expect(mock.uploadFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('is "planned EVERYWHERE", not "planned anywhere": a value planned in one group only passes', () => {
+    // compress `color_profile: srgb` is planned on the generic image group only; other
+    // groups declaring color_profile do not mark it. Refusing it here would be a false
+    // refusal for an input the server may resolve to another group.
+    expect(_isPlannedEverywhere('compress', 'color_profile', 'srgb')).toBe(false);
+    expect(_isPlannedEverywhere('split', 'precision', 'exact')).toBe(true);
+  });
+
+  it('maps a MULTI-WORD op to its metadata: audio_watermark method:neural is refused (reviewer CODE-3)', async () => {
+    expect(_isPlannedEverywhere('audio_watermark', 'method', 'neural')).toBe(true);
+    const mock = makeMockClient();
+    await expect(
+      new OperationBuilder(mock.client, 'audio_watermark', 'talk.mp3', { method: 'neural' }).run({ maxWait: '30s' }),
+    ).rejects.toMatchObject({ reason: 'feature_not_available', conflictingFields: ['method'] });
+    expect(mock.uploadFile).not.toHaveBeenCalled();
+  });
+
+  it('an unknown operation or option is not gated', () => {
+    expect(_isPlannedEverywhere('no_such_op', 'precision', 'exact')).toBe(false);
+    expect(_isPlannedEverywhere('split', 'no_such_option', 'x')).toBe(false);
   });
 });

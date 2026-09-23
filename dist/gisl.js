@@ -239,8 +239,9 @@ function wrapErgonomic(client, presetDefaults, scopedPresetDefaults) {
                 // (compress/convert/thumbnail). Builds a SINGLE-input, SINGLE-operation
                 // job for an op type with no typed verb (e.g. `text_watermark`, `split`,
                 // or a not-yet-in-contract op). Options ride through to the wire
-                // unchanged (no preset resolution unless opType is 'compress'); NO
-                // pre-upload validation — the server validates.
+                // unchanged (no preset resolution unless opType is 'compress'); the only
+                // pre-upload check is the planned-everywhere value gate (99Da2uyx) — the
+                // server validates everything else.
                 //
                 // Multi-input operations (merge, archive, image/video/audio overlay
                 // watermarks) canNOT be expressed here — they need multiple sources and
