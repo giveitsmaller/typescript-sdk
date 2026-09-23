@@ -79,6 +79,15 @@ describe('parity fixtures conform to fixture.schema.json', () => {
     expect(validate({ ...lowering, lowering: { ...block, operations: [{ op: 'sharpen' }] } })).toBe(false);
   });
 
+  it.each(['cf_lowering_payload_mismatch', 'cf_run_result_mismatch'])(
+    'conformance fixture %s is well-formed (only its expected VALUE is wrong)',
+    (stem) => {
+      const file = resolve(dir, '../../parity-conformance/fixtures', `${stem}.yaml`);
+      const ok = validate(parseYaml(readFileSync(file, 'utf-8')));
+      expect(ok, ajv.errorsText(validate.errors, { separator: '\n' })).toBe(true);
+    },
+  );
+
   it('rejects a fixture with an unknown top-level key (the gate can fail)', () => {
     const first: unknown = parseYaml(readFileSync(resolve(dir, files[0]), 'utf-8'));
     expect(validate({ ...(first as Record<string, unknown>), notAFixtureField: true })).toBe(false);
