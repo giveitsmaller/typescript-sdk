@@ -45,7 +45,7 @@
     "build": "tsc",
     "prepack": "npm run build",
     "check": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run --exclude tests/browser-bundle.test.ts; main=$?; vitest run tests/browser-bundle.test.ts && exit $main",
     "test:parity": "vitest run tests/parity",
     "parity:update": "UPDATE_PARITY_FIXTURES=1 vitest run tests/parity",
     "api:update": "UPDATE_API_SNAPSHOT=1 vitest run tests/api-surface.test.ts"
