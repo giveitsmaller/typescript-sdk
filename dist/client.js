@@ -473,6 +473,12 @@ export class GislClient {
             throw new GislAbortError(`Request to ${method} ${path} aborted`);
         }
         const url = `${opts.baseUrl ?? this.baseUrl}${path}`;
+        // zDwyRcaD — NO `User-Agent` is set here, deliberately. Browsers forbid
+        // setting it (the fetch spec lists it as a forbidden header, so it would be
+        // silently dropped in the browser entry), and in Node the runtime supplies
+        // its own. The PHP SDK sends `giveitsmaller-sdk-php/<manifest version>`. If
+        // the server ever needs the TS version, add a non-forbidden `X-` header and
+        // derive it from package.json at build time - never a literal.
         const headers = { ...this.headers, ...opts.headers };
         let body;
         if (opts.json !== false && opts.body && !(opts.body instanceof FormData)) {

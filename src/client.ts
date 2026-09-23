@@ -728,6 +728,12 @@ export class GislClient {
     }
 
     const url = `${opts.baseUrl ?? this.baseUrl}${path}`;
+    // zDwyRcaD — NO `User-Agent` is set here, deliberately. Browsers forbid
+    // setting it (the fetch spec lists it as a forbidden header, so it would be
+    // silently dropped in the browser entry), and in Node the runtime supplies
+    // its own. The PHP SDK sends `giveitsmaller-sdk-php/<manifest version>`. If
+    // the server ever needs the TS version, add a non-forbidden `X-` header and
+    // derive it from package.json at build time - never a literal.
     const headers: Record<string, string> = { ...this.headers, ...opts.headers };
     let body: BodyInit | undefined;
 
