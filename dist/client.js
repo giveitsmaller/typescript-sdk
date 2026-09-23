@@ -4,7 +4,7 @@
 // blobByteSource, which never touches these). Kept as a STATIC import (not a
 // dynamic one) so `vi.mock('node:fs/promises')` still intercepts it in tests.
 import { open, stat, basename } from './node-fs.js';
-import { AudioWatermarkDecodeRequestToJSON, AudioWatermarkDecodeResponseFromJSON, ExternalImportCreatedResponseFromJSON, ExternalImportRequestToJSON, LoginUser200ResponseDataFromJSON, AccountLimitsFromJSON, CreditsBalanceResponseFromJSON, CreditsUsageResponseFromJSON, UploadResponseFromJSON, UploadProbeResponseFromJSON, MultipartInitiateResponseFromJSON, MultipartInitiateRequestMetadataHintToJSON, MultipartCompleteResponseFromJSON, MultipartCompleteRequestToJSON, WorkflowCancelResponseFromJSON, WorkflowArchiveResponseFromJSON, WorkflowRestoreResponseFromJSON, WorkflowCreateResponseFromJSON, WorkflowResumeResponseFromJSON, WorkflowStatusResponseFromJSON, WorkflowListResponseFromJSON, WorkflowDownloadResponseFromJSON, MetadataResponseFromJSON, OperationsSchemaResponseFromJSON, RetryResponseFromJSON, WorkflowStatus, AuthErrorResponseFromJSON, AuthErrorType, AuthRejectionEnvelopeFromJSON, AuthRejectionEnvelopeErrorTypeEnum, BalanceExhaustedResponseFromJSON, BalanceExhaustedResponseRequiredActionEnum, FeatureNotAvailableResponseFromJSON, FeatureTierRestrictedResponseFromJSON, LongFormConcurrencyLimitResponseFromJSON, TierRestrictionKind, TierRestrictionResponseFromJSON, UserTier, WorkflowExpiredResponseFromJSON, ProbePendingResponseFromJSON, UploadSizeExceedsTierResponseFromJSON, UploadDurationExceedsTierResponseFromJSON, UploadConstraintsAppliedProcessingClassPreAssignmentEnum, UploadThresholdsSingleShotMaxBytesEnum, UploadThresholdsMultipartChunkSizeEnum, UploadThresholdsMultipartConcurrencyDefaultEnum, } from '@giveitsmaller/contracts/openapi';
+import { AudioWatermarkDecodeRequestToJSON, AudioWatermarkDecodeResponseFromJSON, ExternalImportCreatedResponseFromJSON, ExternalImportRequestToJSON, LoginUser200ResponseDataFromJSON, AccountLimitsFromJSON, CreditsBalanceResponseFromJSON, BillingCheckoutRequestToJSON, BillingCheckoutSessionFromJSON, CreditsUsageResponseFromJSON, UploadResponseFromJSON, UploadProbeResponseFromJSON, MultipartInitiateResponseFromJSON, MultipartInitiateRequestMetadataHintToJSON, MultipartCompleteResponseFromJSON, MultipartCompleteRequestToJSON, WorkflowCancelResponseFromJSON, WorkflowArchiveResponseFromJSON, WorkflowRestoreResponseFromJSON, WorkflowCreateResponseFromJSON, WorkflowResumeResponseFromJSON, WorkflowStatusResponseFromJSON, WorkflowListResponseFromJSON, WorkflowDownloadResponseFromJSON, MetadataResponseFromJSON, OperationsSchemaResponseFromJSON, RetryResponseFromJSON, WorkflowStatus, AuthErrorResponseFromJSON, AuthErrorType, AuthRejectionEnvelopeFromJSON, AuthRejectionEnvelopeErrorTypeEnum, BalanceExhaustedResponseFromJSON, BalanceExhaustedResponseRequiredActionEnum, FeatureNotAvailableResponseFromJSON, FeatureTierRestrictedResponseFromJSON, LongFormConcurrencyLimitResponseFromJSON, TierRestrictionKind, TierRestrictionResponseFromJSON, UserTier, WorkflowExpiredResponseFromJSON, ProbePendingResponseFromJSON, UploadSizeExceedsTierResponseFromJSON, UploadDurationExceedsTierResponseFromJSON, UploadConstraintsAppliedProcessingClassPreAssignmentEnum, UploadThresholdsSingleShotMaxBytesEnum, UploadThresholdsMultipartChunkSizeEnum, UploadThresholdsMultipartConcurrencyDefaultEnum, } from '@giveitsmaller/contracts/openapi';
 import { GislAbortError, GislApiError, GislAuthError, GislAuthRejectionError, GislBalanceExhaustedError, GislConfigError, GislError, GislFeatureNotAvailableError, GislFeatureTierRestrictedError, GislLongFormConcurrencyError, GislMultipartPartCountError, GislMultipartPartError, GislMultipartSessionNotFoundError, GislMultipartSessionOwnershipError, GislMultipartSessionAuthRequiredError, GislTierRestrictedError, GislTimeoutError, GislProbePendingError, GislStreamHostNotDeclaredError, GislUploadCapExceededError, GislValidationError, GislWorkflowExpiredError, } from './errors.js';
 // Stream-host vocabulary for the fail-closed `streamEvents` guard. The
 // resolver itself runs in `gisl.create()`; the client only reports what a
@@ -2097,6 +2097,35 @@ export class GislClient {
     // -----------------------------------------------------------------------
     // Credits / billing
     // -----------------------------------------------------------------------
+    /**
+     * Start a Stripe hosted-Checkout session for a subscription upgrade or a
+     * credit pack (2AkFcgxY). `POST /api/billing/checkout`; redirect the browser to
+     * the returned `checkoutUrl`. The redirect targets are server-set.
+     *
+     * A credit PACK's grant is ASYNCHRONOUS: the balance may still show the
+     * pre-purchase value when the user returns. Correlate by polling
+     * {@link getCreditsUsage} for a transaction whose `referenceType` is
+     * `stripe_checkout_session` and whose `referenceId` equals `sessionId` - do
+     * not filter on `type` (a pack grant is an `adjustment`). No timing is
+     * contracted; an absent grant is pending, not failed. The contract defines
+     * this ledger row for packs only - not for a subscription checkout.
+     *
+     * The two deployment failures stay distinguishable - they mean opposite
+     * things:
+     * @throws {GislFeatureNotAvailableError} 422 `feature_not_available`:
+     *   checkout is flagged OFF on this server.
+     * @throws {GislApiError} `statusCode` 503, `errorCode` `SERVICE_UNAVAILABLE`:
+     *   the flag is ON but Stripe is not configured.
+     * @throws {GislApiError} 422 `VALIDATION_FAILED` / `UNPROCESSABLE_ENTITY`
+     *   for a missing or unresolvable `type` + `key` pair (pairing is checked
+     *   server-side).
+     */
+    async createCheckoutSession(payload) {
+        return this.request('POST', '/api/billing/checkout', {
+            body: BillingCheckoutRequestToJSON(payload),
+            deserialize: BillingCheckoutSessionFromJSON,
+        });
+    }
     /**
      * Get a snapshot of the caller's current credit position. The canonical
      * billing-state surface — `BalanceExhaustedResponse` (402) on workflow

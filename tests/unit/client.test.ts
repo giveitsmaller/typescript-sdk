@@ -1575,6 +1575,83 @@ describe('GislClient', () => {
     });
   });
 
+  describe('createCheckoutSession (2AkFcgxY)', () => {
+    it('POSTs type + key to /api/billing/checkout and decodes the session', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            checkout_url: 'https://checkout.stripe.com/c/pay/cs_test_a1b2c3',
+            session_id: 'cs_test_a1b2c3',
+          },
+        }),
+      );
+
+      const session = await client.createCheckoutSession({ type: 'pack', key: 'pack_25' });
+      expect(session.checkoutUrl).toBe('https://checkout.stripe.com/c/pay/cs_test_a1b2c3');
+      expect(session.sessionId).toBe('cs_test_a1b2c3');
+
+      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('https://api.example.com/api/billing/checkout');
+      expect(init.method).toBe('POST');
+      expect(JSON.parse(init.body as string)).toEqual({ type: 'pack', key: 'pack_25' });
+    });
+
+    it('a flag-off 422 is a GislFeatureNotAvailableError', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error_type: 'feature_not_available',
+            error: 'UNPROCESSABLE_ENTITY',
+            message: 'Checkout is not yet available.',
+            violations: [
+              {
+                feature: 'endpoint.billing.checkout',
+                availability: 'planned',
+                message_key: 'feature.not_available',
+              },
+            ],
+          },
+          422,
+        ),
+      );
+
+      const err = await client.createCheckoutSession({ type: 'subscription', key: 'pro' }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(GislFeatureNotAvailableError);
+      expect((err as GislApiError).statusCode).toBe(422);
+    });
+
+    it('a Stripe-unconfigured 503 stays distinct from the flag-off 422', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          { success: false, error: 'SERVICE_UNAVAILABLE', message: 'Checkout is temporarily unavailable.' },
+          503,
+        ),
+      );
+
+      const err = await client.createCheckoutSession({ type: 'subscription', key: 'pro' }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(GislApiError);
+      expect(err).not.toBeInstanceOf(GislFeatureNotAvailableError);
+      expect((err as GislApiError).statusCode).toBe(503);
+      expect((err as GislApiError).errorCode).toBe('SERVICE_UNAVAILABLE');
+    });
+
+    it('an unresolvable type + key pair is a plain 422, not the feature gate', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          { success: false, error: 'UNPROCESSABLE_ENTITY', message: 'The requested plan or pack is not available.' },
+          422,
+        ),
+      );
+
+      const err = await client.createCheckoutSession({ type: 'subscription', key: 'pack_10' }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(GislApiError);
+      expect(err).not.toBeInstanceOf(GislFeatureNotAvailableError);
+      expect((err as GislApiError).errorCode).toBe('UNPROCESSABLE_ENTITY');
+    });
+  });
+
   describe('getCreditsUsage', () => {
     it('GETs /api/v2/credits/usage with no query when options omitted', async () => {
       fetchSpy.mockResolvedValueOnce(

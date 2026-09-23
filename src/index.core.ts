@@ -316,6 +316,8 @@ export type {
   AccountLimitEntry,
   AudioWatermarkDecodeRequest,
   AudioWatermarkDecodeResponse,
+  BillingCheckoutRequest,
+  BillingCheckoutSession,
   ContactRequest,
   CreditsBalanceResponse,
   CreditsUsageResponse,

@@ -1,4 +1,4 @@
-import type { AudioWatermarkDecodeRequest, AudioWatermarkDecodeResponse, ExternalImportCreatedResponse, ExternalImportRequest, LoginUserRequest, LoginUser200ResponseData, ContactRequest, AccountLimits, CreditsBalanceResponse, CreditsUsageResponse, UploadResponse, UploadProbeResponse, WorkflowCancelResponse, WorkflowArchiveResponse, WorkflowRestoreResponse, WorkflowCreateResponse, WorkflowResumeResponse, WorkflowStatusResponse, WorkflowListResponse, WorkflowSummary, WorkflowDownloadResponse, MetadataResponse, RetryResponse } from '@giveitsmaller/contracts/openapi';
+import type { AudioWatermarkDecodeRequest, AudioWatermarkDecodeResponse, ExternalImportCreatedResponse, ExternalImportRequest, LoginUserRequest, LoginUser200ResponseData, ContactRequest, BillingCheckoutRequest, BillingCheckoutSession, AccountLimits, CreditsBalanceResponse, CreditsUsageResponse, UploadResponse, UploadProbeResponse, WorkflowCancelResponse, WorkflowArchiveResponse, WorkflowRestoreResponse, WorkflowCreateResponse, WorkflowResumeResponse, WorkflowStatusResponse, WorkflowListResponse, WorkflowSummary, WorkflowDownloadResponse, MetadataResponse, RetryResponse } from '@giveitsmaller/contracts/openapi';
 import type { CreditsUsageOptions, ListWorkflowsOptions, GetSchemaOptions, GetSchemaResult, GislClientConfig, GislSseEvent, GislSseParseFailure, PreflightClipsResult, ProbeWaitOptions, ProbeWaitResult, ReadCapabilityOptions, UploadOptions, WaitOptions, WorkflowCreatePayload, _Sdk3HandCodedKeepaliveResult, _Sdk3HandCodedMultipartStatusResult, _Sdk3HandCodedPresignPartsResult } from './types.js';
 export declare const MULTIPART_CONCURRENCY_DEFAULT: 4;
 export declare const DEFAULT_MULTIPART_FIRST_CHUNK_SIZE: number;
@@ -281,6 +281,30 @@ export declare class GislClient {
      * surface as `GislValidationError` from the standard error envelope.
      */
     submitContact(payload: ContactRequest): Promise<void>;
+    /**
+     * Start a Stripe hosted-Checkout session for a subscription upgrade or a
+     * credit pack (2AkFcgxY). `POST /api/billing/checkout`; redirect the browser to
+     * the returned `checkoutUrl`. The redirect targets are server-set.
+     *
+     * A credit PACK's grant is ASYNCHRONOUS: the balance may still show the
+     * pre-purchase value when the user returns. Correlate by polling
+     * {@link getCreditsUsage} for a transaction whose `referenceType` is
+     * `stripe_checkout_session` and whose `referenceId` equals `sessionId` - do
+     * not filter on `type` (a pack grant is an `adjustment`). No timing is
+     * contracted; an absent grant is pending, not failed. The contract defines
+     * this ledger row for packs only - not for a subscription checkout.
+     *
+     * The two deployment failures stay distinguishable - they mean opposite
+     * things:
+     * @throws {GislFeatureNotAvailableError} 422 `feature_not_available`:
+     *   checkout is flagged OFF on this server.
+     * @throws {GislApiError} `statusCode` 503, `errorCode` `SERVICE_UNAVAILABLE`:
+     *   the flag is ON but Stripe is not configured.
+     * @throws {GislApiError} 422 `VALIDATION_FAILED` / `UNPROCESSABLE_ENTITY`
+     *   for a missing or unresolvable `type` + `key` pair (pairing is checked
+     *   server-side).
+     */
+    createCheckoutSession(payload: BillingCheckoutRequest): Promise<BillingCheckoutSession>;
     /**
      * Get a snapshot of the caller's current credit position. The canonical
      * billing-state surface — `BalanceExhaustedResponse` (402) on workflow

@@ -52,6 +52,8 @@ BalanceExhaustedResponse	type
 BalanceExhaustedResponseAllOfLinks	type
 BalanceExhaustedResponseRequiredActionEnum	value
 BatchRecipe	value+type
+BillingCheckoutRequest	type
+BillingCheckoutSession	type
 CallbackEventType	value
 CapabilitiesSnapshot	type
 clip	value
