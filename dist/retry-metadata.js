@@ -40,6 +40,10 @@ export function parseRetryAfterMs(headerValue) {
     // A non-positive Retry-After (e.g. "0" or a past HTTP-date) must NOT short-
     // circuit the backoff to zero — treat it as absent so the caller falls back
     // to jitter and the loop can't busy-poll until timeout.
+    // hnkwDULJ: an absurd delta (`Number('9'.repeat(400))` is Infinity) is not an
+    // instruction anyone can honour; treat it as absent rather than as "forever".
+    if (!Number.isSafeInteger(Math.round(ms)))
+        return undefined;
     return ms > 0 ? ms : undefined;
 }
 /**

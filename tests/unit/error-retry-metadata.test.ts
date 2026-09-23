@@ -38,6 +38,13 @@ describe('retry-metadata helpers', () => {
       expect(parseRetryAfterMs('  30  ')).toBe(30000);
     });
 
+    it('treats an absurd delta as absent, not as forever (hnkwDULJ)', () => {
+      expect(parseRetryAfterMs('9'.repeat(400))).toBeUndefined();
+      expect(parseRetryAfterMs('9007199254741')).toBeUndefined();
+      expect(parseRetryAfterMs('9007199254740')).toBe(9_007_199_254_740_000);
+      expect(parseRetryAfterMs('0000000000000000005')).toBe(5000);
+    });
+
     it('returns undefined for absent / empty / malformed', () => {
       expect(parseRetryAfterMs(undefined)).toBeUndefined();
       expect(parseRetryAfterMs('')).toBeUndefined();
