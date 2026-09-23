@@ -4,7 +4,7 @@
 // blobByteSource, which never touches these). Kept as a STATIC import (not a
 // dynamic one) so `vi.mock('node:fs/promises')` still intercepts it in tests.
 import { open, stat, basename } from './node-fs.js';
-import { AudioWatermarkDecodeRequestToJSON, AudioWatermarkDecodeResponseFromJSON, ExternalImportCreatedResponseFromJSON, ExternalImportRequestToJSON, LoginUser200ResponseDataFromJSON, AccountLimitsFromJSON, CreditsBalanceResponseFromJSON, CreditsUsageResponseFromJSON, UploadResponseFromJSON, UploadProbeResponseFromJSON, MultipartInitiateResponseFromJSON, MultipartInitiateRequestMetadataHintToJSON, MultipartCompleteResponseFromJSON, MultipartCompleteRequestToJSON, WorkflowCancelResponseFromJSON, WorkflowCreateResponseFromJSON, WorkflowResumeResponseFromJSON, WorkflowStatusResponseFromJSON, WorkflowListResponseFromJSON, WorkflowDownloadResponseFromJSON, MetadataResponseFromJSON, OperationsSchemaResponseFromJSON, RetryResponseFromJSON, WorkflowStatus, AuthErrorResponseFromJSON, AuthErrorType, AuthRejectionEnvelopeFromJSON, AuthRejectionEnvelopeErrorTypeEnum, BalanceExhaustedResponseFromJSON, BalanceExhaustedResponseRequiredActionEnum, FeatureNotAvailableResponseFromJSON, FeatureTierRestrictedResponseFromJSON, LongFormConcurrencyLimitResponseFromJSON, TierRestrictionKind, TierRestrictionResponseFromJSON, UserTier, WorkflowExpiredResponseFromJSON, ProbePendingResponseFromJSON, UploadSizeExceedsTierResponseFromJSON, UploadDurationExceedsTierResponseFromJSON, UploadConstraintsAppliedProcessingClassPreAssignmentEnum, UploadThresholdsSingleShotMaxBytesEnum, UploadThresholdsMultipartChunkSizeEnum, UploadThresholdsMultipartConcurrencyDefaultEnum, } from '@giveitsmaller/contracts/openapi';
+import { AudioWatermarkDecodeRequestToJSON, AudioWatermarkDecodeResponseFromJSON, ExternalImportCreatedResponseFromJSON, ExternalImportRequestToJSON, LoginUser200ResponseDataFromJSON, AccountLimitsFromJSON, CreditsBalanceResponseFromJSON, CreditsUsageResponseFromJSON, UploadResponseFromJSON, UploadProbeResponseFromJSON, MultipartInitiateResponseFromJSON, MultipartInitiateRequestMetadataHintToJSON, MultipartCompleteResponseFromJSON, MultipartCompleteRequestToJSON, WorkflowCancelResponseFromJSON, WorkflowArchiveResponseFromJSON, WorkflowRestoreResponseFromJSON, WorkflowCreateResponseFromJSON, WorkflowResumeResponseFromJSON, WorkflowStatusResponseFromJSON, WorkflowListResponseFromJSON, WorkflowDownloadResponseFromJSON, MetadataResponseFromJSON, OperationsSchemaResponseFromJSON, RetryResponseFromJSON, WorkflowStatus, AuthErrorResponseFromJSON, AuthErrorType, AuthRejectionEnvelopeFromJSON, AuthRejectionEnvelopeErrorTypeEnum, BalanceExhaustedResponseFromJSON, BalanceExhaustedResponseRequiredActionEnum, FeatureNotAvailableResponseFromJSON, FeatureTierRestrictedResponseFromJSON, LongFormConcurrencyLimitResponseFromJSON, TierRestrictionKind, TierRestrictionResponseFromJSON, UserTier, WorkflowExpiredResponseFromJSON, ProbePendingResponseFromJSON, UploadSizeExceedsTierResponseFromJSON, UploadDurationExceedsTierResponseFromJSON, UploadConstraintsAppliedProcessingClassPreAssignmentEnum, UploadThresholdsSingleShotMaxBytesEnum, UploadThresholdsMultipartChunkSizeEnum, UploadThresholdsMultipartConcurrencyDefaultEnum, } from '@giveitsmaller/contracts/openapi';
 import { GislAbortError, GislApiError, GislAuthError, GislAuthRejectionError, GislBalanceExhaustedError, GislConfigError, GislError, GislFeatureNotAvailableError, GislFeatureTierRestrictedError, GislLongFormConcurrencyError, GislMultipartPartCountError, GislMultipartPartError, GislMultipartSessionNotFoundError, GislMultipartSessionOwnershipError, GislMultipartSessionAuthRequiredError, GislTierRestrictedError, GislTimeoutError, GislProbePendingError, GislStreamHostNotDeclaredError, GislUploadCapExceededError, GislValidationError, GislWorkflowExpiredError, } from './errors.js';
 // Stream-host vocabulary for the fail-closed `streamEvents` guard. The
 // resolver itself runs in `gisl.create()`; the client only reports what a
@@ -1781,6 +1781,31 @@ export class GislClient {
         });
     }
     /**
+     * Archive a TERMINAL workflow (mWQsiUun): a recoverable declutter, not a delete.
+     * It drops out of {@link listWorkflows} by default; every record stays readable
+     * via {@link getWorkflowStatus} and its downloads, and {@link restoreWorkflow}
+     * brings it back. Idempotent: archiving an already-archived workflow is a 200.
+     *
+     * @throws {GislApiError} 409 while the workflow is still `pending` /
+     *   `in_progress` / `paused_insufficient_credits` - only terminal workflows are
+     *   archivable (cancel it first); 404 when it does not exist or is not the
+     *   caller's (the same shape, so ownership does not leak).
+     */
+    async archiveWorkflow(workflowId) {
+        return this.request('POST', `/api/workflows/${encodeURIComponent(workflowId)}/archive`, {
+            deserialize: WorkflowArchiveResponseFromJSON,
+        });
+    }
+    /**
+     * Restore an archived workflow to the default {@link listWorkflows} view
+     * (mWQsiUun). The inverse of {@link archiveWorkflow}; idempotent.
+     */
+    async restoreWorkflow(workflowId) {
+        return this.request('POST', `/api/workflows/${encodeURIComponent(workflowId)}/restore`, {
+            deserialize: WorkflowRestoreResponseFromJSON,
+        });
+    }
+    /**
      * Resume a workflow that is in `paused_insufficient_credits`.
      *
      * Resume succeeds only when `availableCredits` covers the next
@@ -2419,6 +2444,10 @@ export class GislClient {
         }
         if (options.limit !== undefined)
             params.set('limit', String(options.limit));
+        // mWQsiUun: omitted -> the server default (false: archived rows EXCLUDED);
+        // `true` -> ONLY archived rows. Sent explicitly whenever the caller set it.
+        if (options.archived !== undefined)
+            params.set('archived', options.archived ? 'true' : 'false');
         const query = params.toString();
         // String concatenation (not template) so the contract-drift path scanner
         // picks up the literal path. See getCreditsUsage for the same pattern.
@@ -2443,7 +2472,7 @@ export class GislClient {
     async *workflows(options = {}) {
         let cursor;
         for (;;) {
-            const page = await this.listWorkflows({ cursor, limit: options.limit });
+            const page = await this.listWorkflows({ cursor, limit: options.limit, archived: options.archived });
             for (const summary of page.workflows) {
                 yield summary;
             }

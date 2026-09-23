@@ -312,6 +312,12 @@ export interface ListWorkflowsOptions {
      * with a 400 validation envelope.
      */
     limit?: number;
+    /**
+     * Archived-row filter (mWQsiUun). Omitted / `false`: archived workflows are
+     * EXCLUDED (the server default). `true`: ONLY archived workflows - the archive
+     * view, for review or {@link GislClient.restoreWorkflow}.
+     */
+    archived?: boolean;
 }
 /**
  * Aggregated result of a `preflightClips()` batch probe — N parallel calls

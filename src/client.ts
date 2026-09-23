@@ -21,6 +21,8 @@ import {
   MultipartCompleteResponseFromJSON,
   MultipartCompleteRequestToJSON,
   WorkflowCancelResponseFromJSON,
+  WorkflowArchiveResponseFromJSON,
+  WorkflowRestoreResponseFromJSON,
   WorkflowCreateResponseFromJSON,
   WorkflowResumeResponseFromJSON,
   WorkflowStatusResponseFromJSON,
@@ -71,6 +73,8 @@ import type {
   UploadSizeExceedsTierResponse,
   UploadDurationExceedsTierResponse,
   WorkflowCancelResponse,
+  WorkflowArchiveResponse,
+  WorkflowRestoreResponse,
   WorkflowCreateResponse,
   WorkflowResumeResponse,
   WorkflowStatusResponse,
@@ -2498,6 +2502,33 @@ export class GislClient {
   }
 
   /**
+   * Archive a TERMINAL workflow (mWQsiUun): a recoverable declutter, not a delete.
+   * It drops out of {@link listWorkflows} by default; every record stays readable
+   * via {@link getWorkflowStatus} and its downloads, and {@link restoreWorkflow}
+   * brings it back. Idempotent: archiving an already-archived workflow is a 200.
+   *
+   * @throws {GislApiError} 409 while the workflow is still `pending` /
+   *   `in_progress` / `paused_insufficient_credits` - only terminal workflows are
+   *   archivable (cancel it first); 404 when it does not exist or is not the
+   *   caller's (the same shape, so ownership does not leak).
+   */
+  async archiveWorkflow(workflowId: string): Promise<WorkflowArchiveResponse> {
+    return this.request('POST', `/api/workflows/${encodeURIComponent(workflowId)}/archive`, {
+      deserialize: WorkflowArchiveResponseFromJSON,
+    });
+  }
+
+  /**
+   * Restore an archived workflow to the default {@link listWorkflows} view
+   * (mWQsiUun). The inverse of {@link archiveWorkflow}; idempotent.
+   */
+  async restoreWorkflow(workflowId: string): Promise<WorkflowRestoreResponse> {
+    return this.request('POST', `/api/workflows/${encodeURIComponent(workflowId)}/restore`, {
+      deserialize: WorkflowRestoreResponseFromJSON,
+    });
+  }
+
+  /**
    * Resume a workflow that is in `paused_insufficient_credits`.
    *
    * Resume succeeds only when `availableCredits` covers the next
@@ -3192,6 +3223,9 @@ export class GislClient {
       params.set('cursor', options.cursor);
     }
     if (options.limit !== undefined) params.set('limit', String(options.limit));
+    // mWQsiUun: omitted -> the server default (false: archived rows EXCLUDED);
+    // `true` -> ONLY archived rows. Sent explicitly whenever the caller set it.
+    if (options.archived !== undefined) params.set('archived', options.archived ? 'true' : 'false');
     const query = params.toString();
     // String concatenation (not template) so the contract-drift path scanner
     // picks up the literal path. See getCreditsUsage for the same pattern.
@@ -3214,10 +3248,10 @@ export class GislClient {
    * }
    * ```
    */
-  async *workflows(options: { limit?: number } = {}): AsyncGenerator<WorkflowSummary, void, undefined> {
+  async *workflows(options: { limit?: number; archived?: boolean } = {}): AsyncGenerator<WorkflowSummary, void, undefined> {
     let cursor: string | undefined;
     for (;;) {
-      const page = await this.listWorkflows({ cursor, limit: options.limit });
+      const page = await this.listWorkflows({ cursor, limit: options.limit, archived: options.archived });
       for (const summary of page.workflows) {
         yield summary;
       }

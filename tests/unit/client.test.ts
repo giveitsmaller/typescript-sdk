@@ -624,6 +624,54 @@ describe('GislClient', () => {
     });
   });
 
+  describe('archiveWorkflow / restoreWorkflow (mWQsiUun)', () => {
+    it('POSTs /api/workflows/{id}/archive and decodes the response', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: { workflow_id: 'wf-1', status: 'completed', archived: true, archived_at: '2026-09-23T20:00:00Z' },
+        }),
+      );
+      const result = await client.archiveWorkflow('wf-1');
+      expect(result.workflowId).toBe('wf-1');
+      expect(result.archived).toBe(true);
+      expect(result.archivedAt).toBeInstanceOf(Date);
+      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('https://api.example.com/api/workflows/wf-1/archive');
+      expect(init.method).toBe('POST');
+    });
+
+    it('POSTs /api/workflows/{id}/restore and decodes the response', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { workflow_id: 'wf-1', status: 'completed', archived: false } }),
+      );
+      const result = await client.restoreWorkflow('wf-1');
+      expect(result.archived).toBe(false);
+      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('https://api.example.com/api/workflows/wf-1/restore');
+      expect(init.method).toBe('POST');
+    });
+
+    it('url-encodes the workflow id', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: { workflow_id: 'a/b', status: 'completed', archived: true, archived_at: '2026-09-23T20:00:00Z' },
+        }),
+      );
+      await client.archiveWorkflow('a/b');
+      const [url] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('https://api.example.com/api/workflows/a%2Fb/archive');
+    });
+
+    it('a 409 (non-terminal workflow) surfaces as a GislApiError', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({ success: false, error: 'CONFLICT', message: 'not terminal' }, 409),
+      );
+      await expect(client.archiveWorkflow('wf-1')).rejects.toMatchObject({ statusCode: 409 });
+    });
+  });
+
   describe('listWorkflows / workflows', () => {
     function summary(workflowId: string) {
       return {
@@ -654,6 +702,26 @@ describe('GislClient', () => {
       expect(url).toContain('/api/workflows?');
       expect(url).toContain('cursor=cursor_abc');
       expect(url).toContain('limit=50');
+    });
+
+    it.each([
+      [true, 'archived=true'],
+      [false, 'archived=false'],
+    ])('sends archived=%s as %s (mWQsiUun)', async (archived, expected) => {
+      fetchSpy.mockResolvedValueOnce(page([], null, false));
+      await client.listWorkflows({ archived });
+      const [url] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe(`https://api.example.com/api/workflows?${expected}`);
+    });
+
+    it('workflows({ archived: true }) passes the filter on every page', async () => {
+      fetchSpy
+        .mockResolvedValueOnce(page([summary('wf-a1')], 'cursor_2', true))
+        .mockResolvedValueOnce(page([summary('wf-a2')], null, false));
+      const seen: string[] = [];
+      for await (const wf of client.workflows({ archived: true })) seen.push(wf.workflowId);
+      expect(seen).toEqual(['wf-a1', 'wf-a2']);
+      for (const call of fetchSpy.mock.calls) expect(String(call[0])).toContain('archived=true');
     });
 
     it('omits the query on the first page when no options are given', async () => {

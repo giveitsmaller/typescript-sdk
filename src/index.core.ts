@@ -326,6 +326,8 @@ export type {
   LoginUser200ResponseData,
   LoginUser200ResponseDataUser,
   WorkflowCancelResponse,
+  WorkflowArchiveResponse,
+  WorkflowRestoreResponse,
   WorkflowResumeResponse,
   WorkflowPausedDetail,
   WorkflowPausedDetailLinks,

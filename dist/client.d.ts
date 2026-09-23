@@ -1,4 +1,4 @@
-import type { AudioWatermarkDecodeRequest, AudioWatermarkDecodeResponse, ExternalImportCreatedResponse, ExternalImportRequest, LoginUserRequest, LoginUser200ResponseData, ContactRequest, AccountLimits, CreditsBalanceResponse, CreditsUsageResponse, UploadResponse, UploadProbeResponse, WorkflowCancelResponse, WorkflowCreateResponse, WorkflowResumeResponse, WorkflowStatusResponse, WorkflowListResponse, WorkflowSummary, WorkflowDownloadResponse, MetadataResponse, RetryResponse } from '@giveitsmaller/contracts/openapi';
+import type { AudioWatermarkDecodeRequest, AudioWatermarkDecodeResponse, ExternalImportCreatedResponse, ExternalImportRequest, LoginUserRequest, LoginUser200ResponseData, ContactRequest, AccountLimits, CreditsBalanceResponse, CreditsUsageResponse, UploadResponse, UploadProbeResponse, WorkflowCancelResponse, WorkflowArchiveResponse, WorkflowRestoreResponse, WorkflowCreateResponse, WorkflowResumeResponse, WorkflowStatusResponse, WorkflowListResponse, WorkflowSummary, WorkflowDownloadResponse, MetadataResponse, RetryResponse } from '@giveitsmaller/contracts/openapi';
 import type { CreditsUsageOptions, ListWorkflowsOptions, GetSchemaOptions, GetSchemaResult, GislClientConfig, GislSseEvent, GislSseParseFailure, PreflightClipsResult, ProbeWaitOptions, ProbeWaitResult, ReadCapabilityOptions, UploadOptions, WaitOptions, WorkflowCreatePayload, _Sdk3HandCodedKeepaliveResult, _Sdk3HandCodedMultipartStatusResult, _Sdk3HandCodedPresignPartsResult } from './types.js';
 export declare const MULTIPART_CONCURRENCY_DEFAULT: 4;
 export declare const DEFAULT_MULTIPART_FIRST_CHUNK_SIZE: number;
@@ -185,6 +185,23 @@ export declare class GislClient {
      * signal.
      */
     cancelWorkflow(workflowId: string): Promise<WorkflowCancelResponse>;
+    /**
+     * Archive a TERMINAL workflow (mWQsiUun): a recoverable declutter, not a delete.
+     * It drops out of {@link listWorkflows} by default; every record stays readable
+     * via {@link getWorkflowStatus} and its downloads, and {@link restoreWorkflow}
+     * brings it back. Idempotent: archiving an already-archived workflow is a 200.
+     *
+     * @throws {GislApiError} 409 while the workflow is still `pending` /
+     *   `in_progress` / `paused_insufficient_credits` - only terminal workflows are
+     *   archivable (cancel it first); 404 when it does not exist or is not the
+     *   caller's (the same shape, so ownership does not leak).
+     */
+    archiveWorkflow(workflowId: string): Promise<WorkflowArchiveResponse>;
+    /**
+     * Restore an archived workflow to the default {@link listWorkflows} view
+     * (mWQsiUun). The inverse of {@link archiveWorkflow}; idempotent.
+     */
+    restoreWorkflow(workflowId: string): Promise<WorkflowRestoreResponse>;
     /**
      * Resume a workflow that is in `paused_insufficient_credits`.
      *
@@ -464,5 +481,6 @@ export declare class GislClient {
      */
     workflows(options?: {
         limit?: number;
+        archived?: boolean;
     }): AsyncGenerator<WorkflowSummary, void, undefined>;
 }

@@ -359,6 +359,7 @@ WatermarkOverlay	type
 WatermarkWireOp	type
 WebhookOperationContext	type
 WebhookPayload	type
+WorkflowArchiveResponse	type
 WorkflowCancelBillingEffect	value
 WorkflowCancelResponse	type
 WorkflowCreatePayload	type
@@ -372,6 +373,7 @@ WorkflowPausedDetailLinks	type
 WorkflowPauseRequiredAction	value
 WorkflowProcessing	type
 WorkflowProcessingPayload	type
+WorkflowRestoreResponse	type
 WorkflowResumeResponse	type
 WorkflowSource	type
 WorkflowSourcePayload	type
