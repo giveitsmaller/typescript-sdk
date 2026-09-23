@@ -1,6 +1,6 @@
 {
   "name": "@giveitsmaller/sdk",
-  "version": "0.28.0",
+  "version": "0.29.0",
   "gislContractsSpec": "v2.203.0",
   "description": "Node.js SDK for the GISL (Give It Smaller) file compression and processing API",
   "license": "Apache-2.0",
