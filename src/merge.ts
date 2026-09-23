@@ -58,6 +58,7 @@ import {
   type Result,
   type RunOptions,
   type SubmitOptions,
+  _retryOn429,
 } from './builder.js';
 import { Handle } from './handle.js';
 
@@ -292,7 +293,9 @@ export class MergeBuilder {
         created.workflowId,
       );
     }
-    const downloads = await this.client.getWorkflowDownloads(created.workflowId);
+    const downloads = await _retryOn429(() => this.client.getWorkflowDownloads(created.workflowId), {
+      deadline, signal, workflowId: created.workflowId, patient: true,
+    });
     // TDqmkWpX: the maxWait deadline also covers the downloads fetch itself —
     // re-check AFTER the call so a slow getWorkflowDownloads cannot return a
     // success past the advertised whole-run deadline.

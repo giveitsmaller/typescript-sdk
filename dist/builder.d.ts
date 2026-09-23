@@ -475,6 +475,37 @@ export declare function _checkAborted(signal: AbortSignal | undefined): void;
  */
 export declare function _cappedProbeTimeoutMs(probeTimeoutMs: number | undefined, deadline: number | undefined): number | undefined;
 /**
+ * bTNCSX1x — honour a `429` from the `status_poll` bucket (status + downloads) inside
+ * a WAIT path, instead of letting it kill the run.
+ *
+ * The 1000 ms poll floor makes ONE run legal on every tier, but the bucket is keyed
+ * per USER (per IP when anonymous): two concurrent runs, or another process on the
+ * same credential, spend the same 60/minute. The SDK cannot see those callers, so a
+ * client-side limiter would be a guarantee only against itself. ⇒ React to the
+ * server's answer: wait `Retry-After` (or a jittered backoff when absent), bounded
+ * TWO ways, whichever comes first:
+ *   - the run's own `deadline`: a wait that would end past it throws
+ *     `GislTimeoutError` at once rather than sleeping through the caller's budget;
+ *   - an attempt budget: after it, the last `429` propagates (the server is still
+ *     refusing; say so rather than loop).
+ *
+ * ⚠️ `patient` is for the TERMINAL downloads fetch: the work is done and paid for,
+ * so it gets twice the attempts of a status poll. Losing a finished result to a
+ * rate limit is the worst place for this failure to land.
+ *
+ * Only `429`. Other errors propagate unchanged; `streamEvents` has its own budget
+ * and its own handling (3OVNoRxh / Vf9R7gcV) and never comes through here.
+ * @internal
+ */
+export declare function _retryOn429<T>(call: () => Promise<T>, args: {
+    deadline: number;
+    signal?: AbortSignal;
+    workflowId: string;
+    patient?: boolean;
+    /** Backoff base when there is no Retry-After (tests shrink it). Default 1000 ms. */
+    backoffBaseMs?: number;
+}): Promise<T>;
+/**
  * Parse a `maxWait` argument: number = milliseconds; string with suffix
  * `ms` / `s` / `m` / `h`. Throws if the string is malformed.
  */

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PRESET_VERSION as GENERATED_PRESET_VERSION } from '../../src/generated/sdk_spec/version.js';
-import { _clampPollIntervalMs, _consumeSseToTerminal, OperationBuilder, type Result, type ProgressEvent } from '../../src/builder.js';
+import { _clampPollIntervalMs, _consumeSseToTerminal, _retryOn429, OperationBuilder, type Result, type ProgressEvent } from '../../src/builder.js';
 import { GislApiError, GislTimeoutError, GislFanOutTimeoutError, SseConnectRefused } from '../../src/errors.js';
 import { Handle } from '../../src/handle.js';
 import { _isPlannedEverywhere } from '../../src/ergonomic/planned_values.js';
@@ -1458,5 +1458,148 @@ describe('per-value planned gate before upload (99Da2uyx)', () => {
   it('an unknown operation or option is not gated', () => {
     expect(_isPlannedEverywhere('no_such_op', 'precision', 'exact')).toBe(false);
     expect(_isPlannedEverywhere('split', 'no_such_option', 'x')).toBe(false);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// bTNCSX1x — a 429 from the status_poll bucket (status + downloads) inside a
+// wait is honoured, not fatal. Bounded by the run's deadline AND a retry budget.
+// ---------------------------------------------------------------------------
+describe('429 on status / downloads inside a wait (bTNCSX1x)', () => {
+  const rateLimited = (retryAfter?: string): GislApiError =>
+    new GislApiError(429, 'RATE_LIMITED', '/status', undefined, {
+      responseHeaders: retryAfter === undefined ? {} : { 'retry-after': retryAfter },
+    });
+
+  it('waits Retry-After on a status poll, then completes (count AND spacing)', async () => {
+    const mock = makeMockClient();
+    const calledAt: number[] = [];
+    const completed = { workflowId: 'wf_1', status: 'completed' };
+    mock.getWorkflowStatus.mockImplementation(async () => {
+      calledAt.push(Date.now());
+      if (calledAt.length === 1) throw rateLimited('2');
+      return completed;
+    });
+
+    const result = await new OperationBuilder(mock.client, 'compress', 'p.jpg', {}).run({
+      maxWait: '30s',
+      useSSE: false,
+    });
+
+    expect(result.status).toBe('completed');
+    expect(calledAt).toHaveLength(2);
+    // >= 1950 ms: above the LARGEST no-header fallback (250 + 1000 ms), so this can
+    // only pass if Retry-After was honoured (second-identity review).
+    expect(calledAt[1]! - calledAt[0]!).toBeGreaterThanOrEqual(1950);
+  });
+
+  it('retries a 429 on the TERMINAL downloads fetch (the work is done and paid for)', async () => {
+    const mock = makeMockClient();
+    mock.getWorkflowDownloads.mockRejectedValueOnce(rateLimited('1'));
+
+    const result = await new OperationBuilder(mock.client, 'compress', 'p.jpg', {}).run({
+      maxWait: '30s',
+      useSSE: false,
+    });
+
+    expect(result.status).toBe('completed');
+    expect(mock.getWorkflowDownloads).toHaveBeenCalledTimes(2);
+  });
+
+  it('a Retry-After past the deadline throws GislTimeoutError at once, without sleeping', async () => {
+    const mock = makeMockClient();
+    mock.getWorkflowStatus.mockRejectedValue(rateLimited('3600'));
+    const started = Date.now();
+
+    await expect(
+      new OperationBuilder(mock.client, 'compress', 'p.jpg', {}).run({ maxWait: '30s', useSSE: false }),
+    ).rejects.toBeInstanceOf(GislTimeoutError);
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(mock.getWorkflowStatus).toHaveBeenCalledTimes(1);
+  });
+
+  // Per ENTRY POINT (second-identity review of #432): removing the wrapper from any
+  // one of these call sites must turn a test red.
+  it('SSE path: a 429 on the status fetch after the terminal frame is retried', async () => {
+    const mock = makeMockClient();
+    mock.streamEvents.mockImplementation(async function* () {
+      yield { event: 'workflow.completed', data: {} };
+    });
+    mock.getWorkflowStatus
+      .mockRejectedValueOnce(rateLimited('1'))
+      .mockResolvedValue({ workflowId: 'wf_1', status: 'completed' });
+
+    const result = await new OperationBuilder(mock.client, 'compress', 'p.jpg', {}).run({ maxWait: '30s' });
+
+    expect(result.status).toBe('completed');
+    expect(mock.streamEvents).toHaveBeenCalledTimes(1);
+    expect(mock.getWorkflowStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it('Handle.wait(): a 429 on its downloads fetch is retried', async () => {
+    const mock = makeMockClient();
+    mock.getWorkflowDownloads.mockRejectedValueOnce(rateLimited('1'));
+    const handle = await new OperationBuilder(mock.client, 'compress', 'p.jpg', {}).submit();
+
+    await handle.wait('30s');
+
+    expect(mock.getWorkflowDownloads).toHaveBeenCalledTimes(2);
+  });
+
+  it('the downloads fetch is PATIENT: success on the 6th attempt still completes (a status budget of 4 could not)', async () => {
+    const mock = makeMockClient();
+    for (let i = 0; i < 5; i++) mock.getWorkflowDownloads.mockRejectedValueOnce(rateLimited('0.001'));
+    // '0.001' is not a delta-seconds token -> absent -> jittered backoff; keep it short:
+    // the run's deadline, not this test, bounds the total.
+    const result = await new OperationBuilder(mock.client, 'compress', 'p.jpg', {}).run({
+      maxWait: '120s',
+      useSSE: false,
+    });
+
+    expect(result.status).toBe('completed');
+    expect(mock.getWorkflowDownloads).toHaveBeenCalledTimes(6);
+  }, 60_000);
+
+  it('a permanent 429 exhausts the budget and then propagates - no infinite loop', async () => {
+    let calls = 0;
+    await expect(
+      _retryOn429(
+        async () => {
+          calls++;
+          throw rateLimited();
+        },
+        { deadline: Date.now() + 60_000, workflowId: 'wf_x', backoffBaseMs: 1 },
+      ),
+    ).rejects.toMatchObject({ statusCode: 429 });
+    expect(calls).toBe(5); // 1 + a budget of 4 retries
+  });
+
+  it('the terminal downloads fetch is more patient: a budget of 8', async () => {
+    let calls = 0;
+    await expect(
+      _retryOn429(
+        async () => {
+          calls++;
+          throw rateLimited();
+        },
+        { deadline: Date.now() + 60_000, workflowId: 'wf_x', backoffBaseMs: 1, patient: true },
+      ),
+    ).rejects.toMatchObject({ statusCode: 429 });
+    expect(calls).toBe(9);
+  });
+
+  it('a non-429 error is NOT retried', async () => {
+    let calls = 0;
+    await expect(
+      _retryOn429(
+        async () => {
+          calls++;
+          throw new GislApiError(500, 'boom', '/status');
+        },
+        { deadline: Date.now() + 60_000, workflowId: 'wf_x', backoffBaseMs: 1 },
+      ),
+    ).rejects.toMatchObject({ statusCode: 500 });
+    expect(calls).toBe(1);
   });
 });

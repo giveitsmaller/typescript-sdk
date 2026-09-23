@@ -34,7 +34,7 @@
  */
 import { DEFAULT_POLL_TIMEOUT_MS } from './client.js';
 import { GislConfigError, GislNetworkError, GislResultNotReadyError, GislTimeoutError, GislStreamHostNotDeclaredError, SseConnectRefused, SseEndedWithoutTerminal, } from './errors.js';
-import { _consumeSseToTerminal, _pollToTerminal, _parseMaxWait, } from './builder.js';
+import { _consumeSseToTerminal, _pollToTerminal, _retryOn429, _parseMaxWait, } from './builder.js';
 import { projectDownloadsToRunResult, projectMultiJobToRunResult, isFanoutStatus, isMergeStatus, isArchiveStatus, isWatermarkStatus, isSoleOpChainStatus, soleOpChainDeliverableRef, _POST_STEP_JOB_REF, } from './file-first.js';
 import { LazyHttpDownloader } from './lazy-downloader.js';
 /**
@@ -203,7 +203,9 @@ export class Handle {
         if (Date.now() >= deadline) {
             throw new GislTimeoutError(`Workflow ${this.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`, this.workflowId);
         }
-        const downloads = await client.getWorkflowDownloads(this.workflowId);
+        const downloads = await _retryOn429(() => client.getWorkflowDownloads(this.workflowId), {
+            deadline, workflowId: this.workflowId, patient: true,
+        });
         // TDqmkWpX: re-check AFTER the downloads fetch so a slow getWorkflowDownloads
         // cannot return a success past the advertised maxWait.
         if (Date.now() >= deadline) {

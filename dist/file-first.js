@@ -11,7 +11,7 @@
  */
 import { _refusePlannedInOperations } from './ergonomic/planned_values.js';
 import { GislConfigError, GislItemFailedError, GislNetworkError, GislNoSuchKeyError, GislSinkError, GislStreamHostNotDeclaredError, GislTimeoutError, SseConnectRefused, SseEndedWithoutTerminal } from './errors.js';
-import { _detectCompressMedia, _detectAudioLossless, _consumeSseToTerminal, _pollToTerminal, _parseMaxWait, _checkAborted, _cappedProbeTimeoutMs, } from './builder.js';
+import { _detectCompressMedia, _retryOn429, _detectAudioLossless, _consumeSseToTerminal, _pollToTerminal, _parseMaxWait, _checkAborted, _cappedProbeTimeoutMs, } from './builder.js';
 import { DEFAULT_POLL_TIMEOUT_MS } from './client.js';
 import { LazyHttpDownloader } from './lazy-downloader.js';
 import { resolveCompressOptions, } from './ergonomic/preset_resolver.js';
@@ -956,7 +956,9 @@ export class Recipe {
         if (Date.now() >= deadline) {
             throw new GislTimeoutError(`Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`, created.workflowId);
         }
-        const downloads = await this.client.getWorkflowDownloads(created.workflowId);
+        const downloads = await _retryOn429(() => this.client.getWorkflowDownloads(created.workflowId), {
+            deadline, signal, workflowId: created.workflowId, patient: true,
+        });
         // TDqmkWpX: re-check AFTER the downloads fetch so a slow getWorkflowDownloads
         // cannot return a success past the advertised maxWait deadline.
         if (Date.now() >= deadline) {
@@ -1811,7 +1813,9 @@ export class FilesRecipe {
         if (Date.now() >= deadline) {
             throw new GislTimeoutError(`Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`, created.workflowId);
         }
-        const downloads = await this.client.getWorkflowDownloads(created.workflowId);
+        const downloads = await _retryOn429(() => this.client.getWorkflowDownloads(created.workflowId), {
+            deadline, signal, workflowId: created.workflowId, patient: true,
+        });
         // TDqmkWpX: re-check AFTER the downloads fetch so a slow getWorkflowDownloads
         // cannot return a success past the advertised maxWait deadline.
         if (Date.now() >= deadline) {
@@ -2034,7 +2038,9 @@ export class MergedRecipe {
         if (Date.now() >= deadline) {
             throw new GislTimeoutError(`Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`, created.workflowId);
         }
-        const downloads = await this.client.getWorkflowDownloads(created.workflowId);
+        const downloads = await _retryOn429(() => this.client.getWorkflowDownloads(created.workflowId), {
+            deadline, signal, workflowId: created.workflowId, patient: true,
+        });
         // TDqmkWpX: re-check AFTER the downloads fetch so a slow getWorkflowDownloads
         // cannot return a success past the advertised maxWait deadline.
         if (Date.now() >= deadline) {
@@ -2247,7 +2253,9 @@ export class ArchivedRecipe {
         if (Date.now() >= deadline) {
             throw new GislTimeoutError(`Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`, created.workflowId);
         }
-        const downloads = await this.client.getWorkflowDownloads(created.workflowId);
+        const downloads = await _retryOn429(() => this.client.getWorkflowDownloads(created.workflowId), {
+            deadline, signal, workflowId: created.workflowId, patient: true,
+        });
         // TDqmkWpX: re-check AFTER the downloads fetch so a slow getWorkflowDownloads
         // cannot return a success past the advertised maxWait deadline.
         if (Date.now() >= deadline) {
@@ -2460,7 +2468,9 @@ export class WatermarkedRecipe {
         if (Date.now() >= deadline) {
             throw new GislTimeoutError(`Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`, created.workflowId);
         }
-        const downloads = await this.client.getWorkflowDownloads(created.workflowId);
+        const downloads = await _retryOn429(() => this.client.getWorkflowDownloads(created.workflowId), {
+            deadline, signal, workflowId: created.workflowId, patient: true,
+        });
         if (Date.now() >= deadline) {
             throw new GislTimeoutError(`Workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`, created.workflowId);
         }
@@ -2669,7 +2679,9 @@ export class BatchRecipe {
         if (Date.now() >= deadline) {
             throw new GislTimeoutError(`Workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`, created.workflowId);
         }
-        const downloads = await this.client.getWorkflowDownloads(created.workflowId);
+        const downloads = await _retryOn429(() => this.client.getWorkflowDownloads(created.workflowId), {
+            deadline, signal, workflowId: created.workflowId, patient: true,
+        });
         // TDqmkWpX: re-check AFTER the downloads fetch so a slow getWorkflowDownloads
         // cannot return a success past the advertised maxWait deadline.
         if (Date.now() >= deadline) {

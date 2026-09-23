@@ -9,6 +9,7 @@ import {
   GislUnusedAssetError,
 } from '../../src/errors.js';
 import type { GislClient } from '../../src/client.js';
+import { GislApiError } from '../../src/errors.js';
 
 let fetchSpy: ReturnType<typeof vi.fn>;
 
@@ -763,5 +764,18 @@ describe('MergeBuilder.run — projects only the merge job output (excludes pass
     expect(result.artifacts[0].ref).toBe('merge');
     expect(result.artifacts[0].url).toBe('https://signed.example.com/merged.mp4');
     expect(result.artifacts.map((a) => a.operation)).not.toContain('passthrough');
+  });
+});
+
+
+// bTNCSX1x — merge's terminal downloads fetch retries a 429 (second-identity review of #432).
+describe('MergeBuilder — 429 on the downloads fetch (bTNCSX1x)', () => {
+  it('is retried and the merge completes', async () => {
+    const mock = makeMockClient();
+    mock.getWorkflowDownloads.mockRejectedValueOnce(
+      new GislApiError(429, 'RATE_LIMITED', '/downloads', undefined, { responseHeaders: { 'retry-after': '1' } }),
+    );
+    await new MergeBuilder(mock.client, [asset('a.mp4'), asset('b.mp4')], {}).run({ maxWait: '30s' });
+    expect(mock.getWorkflowDownloads).toHaveBeenCalledTimes(2);
   });
 });

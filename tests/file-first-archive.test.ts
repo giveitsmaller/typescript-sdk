@@ -5,7 +5,7 @@ import type { ArchiveRecipeOptions } from '../src/file-first.js';
 import type { GislClient } from '../src/client.js';
 import type { WorkflowStatusResponse } from '@giveitsmaller/contracts/openapi';
 import { OptimizeFor } from '../src/generated/sdk_spec/enums.js';
-import { GislConfigError, GislTimeoutError } from '../src/errors.js';
+import { GislApiError, GislConfigError, GislTimeoutError } from '../src/errors.js';
 
 /**
  * FF3b — the fluent `files([...]).archive(...)` N→1 bundle (terminal; no
@@ -291,5 +291,25 @@ describe('ArchivedRecipe — planned value refused before upload (pE6JVJuc)', ()
       ).submit(),
     ).rejects.toMatchObject({ reason: 'feature_not_available' });
     expect(mock.uploadFile).not.toHaveBeenCalled();
+  });
+});
+
+
+// bTNCSX1x — a file-first recipe's terminal downloads fetch retries a 429.
+describe('ArchivedRecipe — 429 on the downloads fetch (bTNCSX1x)', () => {
+  it('is retried and the archive completes', async () => {
+    const mock = makeMockClient();
+    mock.uploadFile
+      .mockResolvedValueOnce({ fileId: 'up0', contentType: 'application/pdf', sizeBytes: 1 })
+      .mockResolvedValueOnce({ fileId: 'up1', contentType: 'image/jpeg', sizeBytes: 1 });
+    mock.getWorkflowDownloads.mockRejectedValueOnce(
+      new GislApiError(429, 'RATE_LIMITED', '/downloads', undefined, { responseHeaders: { 'retry-after': '1' } }),
+    );
+    await new ArchivedRecipe(
+      [fileInput.path('report.pdf'), fileInput.path('hero.jpg')],
+      { format: 'zip' },
+      mock.client,
+    ).run({ maxWait: '30s' });
+    expect(mock.getWorkflowDownloads).toHaveBeenCalledTimes(2);
   });
 });

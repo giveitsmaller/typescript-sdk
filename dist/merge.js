@@ -28,7 +28,7 @@
 import { DEFAULT_POLL_TIMEOUT_MS } from './client.js';
 import { uploadSource, jobOutputSource } from './types.js';
 import { GislConfigError, GislNetworkError, GislPerInputOptionsNotSupportedError, GislTimeoutError, GislUndeclaredAssetError, GislUnusedAssetError, GislStreamHostNotDeclaredError, SseConnectRefused, SseEndedWithoutTerminal, } from './errors.js';
-import { _cappedProbeTimeoutMs, _checkAborted, _consumeSseToTerminal, _detectCompressMedia, _parseMaxWait, _pollToTerminal, _projectResult, } from './builder.js';
+import { _cappedProbeTimeoutMs, _checkAborted, _consumeSseToTerminal, _detectCompressMedia, _parseMaxWait, _pollToTerminal, _projectResult, _retryOn429, } from './builder.js';
 import { Handle } from './handle.js';
 /**
  * Construct a path-asset. Bare-string arguments to `merge(...)` are
@@ -131,7 +131,9 @@ export class MergeBuilder {
         if (Date.now() >= deadline) {
             throw new GislTimeoutError(`Merge workflow ${created.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`, created.workflowId);
         }
-        const downloads = await this.client.getWorkflowDownloads(created.workflowId);
+        const downloads = await _retryOn429(() => this.client.getWorkflowDownloads(created.workflowId), {
+            deadline, signal, workflowId: created.workflowId, patient: true,
+        });
         // TDqmkWpX: the maxWait deadline also covers the downloads fetch itself —
         // re-check AFTER the call so a slow getWorkflowDownloads cannot return a
         // success past the advertised whole-run deadline.

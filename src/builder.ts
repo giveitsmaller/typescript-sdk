@@ -626,7 +626,9 @@ export class OperationBuilder {
         created.workflowId,
       );
     }
-    const downloads = await this.client.getWorkflowDownloads(created.workflowId);
+    const downloads = await _retryOn429(() => this.client.getWorkflowDownloads(created.workflowId), {
+      deadline, signal, workflowId: created.workflowId, patient: true,
+    });
     // TDqmkWpX: the maxWait deadline also covers the downloads fetch itself — a
     // slow getWorkflowDownloads must not return a success after the advertised
     // whole-run deadline. Re-check AFTER the call (the check above is BEFORE).
@@ -1222,7 +1224,9 @@ export async function _consumeSseToTerminal(
         // After terminal SSE, we still call getWorkflowStatus once for the
         // final shape — the SSE event carries partial data, but the status
         // endpoint is the canonical structured response.
-        return await client.getWorkflowStatus(args.workflowId);
+        return await _retryOn429(() => client.getWorkflowStatus(args.workflowId), {
+          deadline: args.deadline, signal: args.signal, workflowId: args.workflowId,
+        });
       }
       if (Date.now() >= args.deadline) {
         sseAbort.abort();
@@ -1309,7 +1313,9 @@ export async function _pollToTerminal(
         args.workflowId,
       );
     }
-    const status = await client.getWorkflowStatus(args.workflowId);
+    const status = await _retryOn429(() => client.getWorkflowStatus(args.workflowId), {
+      deadline: args.deadline, signal: args.signal, workflowId: args.workflowId,
+    });
     if (TERMINAL_STATUS.has(status.status)) {
       return status;
     }
@@ -1462,6 +1468,66 @@ export function _cappedProbeTimeoutMs(
   }
   const remaining = Math.max(0, deadline - Date.now());
   return probeTimeoutMs !== undefined ? Math.min(probeTimeoutMs, remaining) : remaining;
+}
+
+/**
+ * bTNCSX1x — honour a `429` from the `status_poll` bucket (status + downloads) inside
+ * a WAIT path, instead of letting it kill the run.
+ *
+ * The 1000 ms poll floor makes ONE run legal on every tier, but the bucket is keyed
+ * per USER (per IP when anonymous): two concurrent runs, or another process on the
+ * same credential, spend the same 60/minute. The SDK cannot see those callers, so a
+ * client-side limiter would be a guarantee only against itself. ⇒ React to the
+ * server's answer: wait `Retry-After` (or a jittered backoff when absent), bounded
+ * TWO ways, whichever comes first:
+ *   - the run's own `deadline`: a wait that would end past it throws
+ *     `GislTimeoutError` at once rather than sleeping through the caller's budget;
+ *   - an attempt budget: after it, the last `429` propagates (the server is still
+ *     refusing; say so rather than loop).
+ *
+ * ⚠️ `patient` is for the TERMINAL downloads fetch: the work is done and paid for,
+ * so it gets twice the attempts of a status poll. Losing a finished result to a
+ * rate limit is the worst place for this failure to land.
+ *
+ * Only `429`. Other errors propagate unchanged; `streamEvents` has its own budget
+ * and its own handling (3OVNoRxh / Vf9R7gcV) and never comes through here.
+ * @internal
+ */
+export async function _retryOn429<T>(
+  call: () => Promise<T>,
+  args: {
+    deadline: number;
+    signal?: AbortSignal;
+    workflowId: string;
+    patient?: boolean;
+    /** Backoff base when there is no Retry-After (tests shrink it). Default 1000 ms. */
+    backoffBaseMs?: number;
+  },
+): Promise<T> {
+  const maxRetries = args.patient === true ? 8 : 4;
+  const base = args.backoffBaseMs ?? 1000;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await call();
+    } catch (err) {
+      if (!(err instanceof GislApiError) || err.statusCode !== 429 || attempt >= maxRetries) {
+        throw err;
+      }
+      const retryAfterMs = parseRetryAfterMs(err.responseHeaders?.['retry-after']);
+      // No Retry-After: full-jitter exponential, capped, with a floor so a 429
+      // storm never becomes a busy loop.
+      const waitMs =
+        retryAfterMs ?? Math.min(10_000, Math.floor(Math.random() * base * Math.pow(2, attempt)) + Math.min(250, base));
+      if (Date.now() + waitMs >= args.deadline) {
+        throw new GislTimeoutError(
+          `Workflow ${args.workflowId}: rate limited (429) and the server's wait of ${waitMs} ms ` +
+            'ends past maxWait',
+          args.workflowId,
+        );
+      }
+      await sleep(waitMs, args.signal);
+    }
+  }
 }
 
 async function sleep(ms: number, signal: AbortSignal | undefined): Promise<void> {

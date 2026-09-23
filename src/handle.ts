@@ -47,6 +47,7 @@ import {
 import {
   _consumeSseToTerminal,
   _pollToTerminal,
+  _retryOn429,
   _parseMaxWait,
   type ProgressEvent,
 } from './builder.js';
@@ -250,7 +251,9 @@ export class Handle {
         this.workflowId,
       );
     }
-    const downloads = await client.getWorkflowDownloads(this.workflowId);
+    const downloads = await _retryOn429(() => client.getWorkflowDownloads(this.workflowId), {
+      deadline, workflowId: this.workflowId, patient: true,
+    });
     // TDqmkWpX: re-check AFTER the downloads fetch so a slow getWorkflowDownloads
     // cannot return a success past the advertised maxWait.
     if (Date.now() >= deadline) {
