@@ -296,6 +296,11 @@ export function resolveStreamEndpoint(opts: ResolveEndpointOptions = {}): string
   if (explicit !== '') {
     return explicit;
   }
+  // vzVIw4ZZ: a PRESENT-but-blank option is remembered. It must not suppress a
+  // host something else declares (the trim above keeps that working), but if
+  // NOTHING else declares one it is a configuration error - not consent to the
+  // production default, which is what it silently became.
+  const streamOptionWasBlank = typeof opts.streamBaseUrl === 'string';
 
   if (typeof opts.environment === 'string') {
     if (!(opts.environment in ENVIRONMENT_ENDPOINTS)) {
@@ -339,11 +344,29 @@ export function resolveStreamEndpoint(opts: ResolveEndpointOptions = {}): string
   const apiHostWasConfigured =
     (typeof opts.baseUrl === 'string' && opts.baseUrl.trim() !== '') ||
     readUrlEnv(GISL_BASE_URL_ENV) !== null;
+  if (streamOptionWasBlank) {
+    throwBlankStreamBaseUrl();
+  }
   if (!apiHostWasConfigured) {
     return ENVIRONMENT_STREAM_ENDPOINTS.prod ?? null;
   }
 
   return null;
+}
+
+function throwBlankStreamBaseUrl(): never {
+  throw new GislConfigError(
+    'streamBaseUrl was supplied but is blank, and nothing else declares a stream host. ' +
+      'That is a configuration error, not an absent value: it would otherwise have ' +
+      'resolved to the PRODUCTION stream host.',
+    {
+      reason: 'blank_value',
+      conflictingFields: ['streamBaseUrl'],
+      suggestion:
+        "Pass a real host such as 'https://stream.staging.giveitsmaller.com', or an " +
+        "`environment` ('staging' / 'prod'), or omit streamBaseUrl entirely.",
+    },
+  );
 }
 
 /**

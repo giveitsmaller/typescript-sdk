@@ -433,3 +433,46 @@ describe('a URL environment variable that is set but blank', () => {
     expect(() => resolveEndpoint({})).toThrow(/GISL_BASE_URL/);
   });
 });
+
+
+/**
+ * vzVIw4ZZ — a PRESENT-but-blank `streamBaseUrl` option. It must not suppress a host
+ * something else declares, and when nothing does it must THROW rather than become
+ * consent to the production stream host (the #404 defect, for the one input #404 left).
+ */
+describe('blank streamBaseUrl option (vzVIw4ZZ)', () => {
+  it.each([[''], ['   '], ['\u00A0'], ['\u3000\u00A0']])('THROWS blank_value for %j when nothing else declares a host', (blank) => {
+    let caught: unknown;
+    try {
+      resolveStreamEndpoint({ streamBaseUrl: blank });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(GislConfigError);
+    expect(caught).toMatchObject({ reason: 'blank_value', conflictingFields: ['streamBaseUrl'] });
+  });
+
+  it('THROWS when an explicit baseUrl is set but the stream option is blank (was a silent null)', () => {
+    expect(() =>
+      resolveStreamEndpoint({ baseUrl: 'https://api.self-hosted.example', streamBaseUrl: '' }),
+    ).toThrow(GislConfigError);
+  });
+
+  it('does NOT suppress a declared environment: staging option still wins', () => {
+    expect(resolveStreamEndpoint({ environment: 'staging', streamBaseUrl: '' })).toBe(
+      ENVIRONMENT_STREAM_ENDPOINTS.staging,
+    );
+  });
+
+  it('does NOT suppress GISL_STREAM_BASE_URL or GISL_ENVIRONMENT', () => {
+    process.env[GISL_STREAM_BASE_URL_ENV] = 'https://stream.self-hosted.example';
+    expect(resolveStreamEndpoint({ streamBaseUrl: '' })).toBe('https://stream.self-hosted.example');
+    delete process.env[GISL_STREAM_BASE_URL_ENV];
+    process.env[GISL_ENVIRONMENT_ENV] = 'staging';
+    expect(resolveStreamEndpoint({ streamBaseUrl: '  ' })).toBe(ENVIRONMENT_STREAM_ENDPOINTS.staging);
+  });
+
+  it('the genuinely unconfigured case is UNCHANGED: {} is still the production stream host', () => {
+    expect(resolveStreamEndpoint({})).toBe(ENVIRONMENT_STREAM_ENDPOINTS.prod);
+  });
+});
