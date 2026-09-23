@@ -29,6 +29,7 @@
 import { DEFAULT_POLL_TIMEOUT_MS } from './client.js';
 import { SseEventType, SseOperationProgressDataFromJSON, } from '@giveitsmaller/contracts/openapi';
 import { uploadSource } from './types.js';
+import { parseRetryAfterMs } from './retry-metadata.js';
 import { GislApiError, GislTimeoutError, GislFanOutTimeoutError, GislNetworkError, GislStreamHostNotDeclaredError, GislTransportError, SseConnectRefused, SseEndedWithoutTerminal } from './errors.js';
 // Deferred-usage-only import: `Handle` is constructed inside submit() at call
 // time, not at module load, so the builder.ts <-> handle.ts cycle is safe
@@ -664,11 +665,44 @@ class _OnProgressThrew {
         this.cause = cause;
     }
 }
+/**
+ * Per-CLIENT SSE cooldown after a refused connect (Vf9R7gcV).
+ *
+ * contracts v2.208.0 REQUIRES `Retry-After` on the events 429
+ * (`sse_connection_limit_exceeded`, 5 open streams per caller) and 503
+ * (`sse_capacity_exhausted`), and the taxonomy says a client MUST NOT request
+ * another stream before it elapses. Within one run that already held: a refused
+ * connect falls back to polling and never reopens. ACROSS runs it did not -
+ * nothing remembered the refusal, so the next `run()` or `Handle` wait on the
+ * same client connected again at once. A caller with five waits already in flight
+ * (concurrent runs; `.mapEach()` itself is serial, one stream at a time) had
+ * every further wait refused and reconnecting.
+ *
+ * ⇒ The refusal is remembered here, keyed by the CLIENT: two clients are two
+ * callers (different credentials), so this is per instance, never process-wide.
+ * A WeakMap so a discarded client takes its entry with it and nothing is added to
+ * `GislClient`'s public surface. While the window is open `_consumeSseToTerminal`
+ * does not connect at all; it rethrows the remembered refusal, which every
+ * await-terminal caller already treats as "poll instead".
+ *
+ * ⚠️ No `Retry-After` (an API older than v2.208.0) records NOTHING: there is no
+ * window to honour, and inventing one would delay SSE for a caller the server
+ * did not ask to wait. A DIRECT `streamEvents()` caller is untouched either way.
+ */
+const sseCooldowns = new WeakMap();
 /** @internal — exported for reuse by `merge.ts` (T3) and future builders. */
 export async function _consumeSseToTerminal(client, args) {
     const remainingMs = args.deadline - Date.now();
     if (remainingMs <= 0) {
         throw new GislTimeoutError(`Workflow ${args.workflowId} did not complete before maxWait deadline`, args.workflowId);
+    }
+    const cooldown = sseCooldowns.get(client);
+    if (cooldown !== undefined) {
+        if (Date.now() < cooldown.untilMs) {
+            throw new SseConnectRefused(`SSE for workflow ${args.workflowId} not attempted: a stream on this client was ` +
+                `refused with ${cooldown.refusal.statusCode} and its Retry-After has not elapsed; polling`, cooldown.refusal);
+        }
+        sseCooldowns.delete(client);
     }
     const sseAbort = new AbortController();
     // Compose caller's signal + a SDK-internal one so we can tear down on terminal.
@@ -722,6 +756,19 @@ export async function _consumeSseToTerminal(client, args) {
             // doomed request as a poll would mask the real failure, which is the
             // property the whole predicate below exists to preserve (TDqmkWpX).
             if (err instanceof GislApiError && err.retryable) {
+                // MILLISECONDS, not `err.retryAfterSeconds`: that floors an HTTP-date,
+                // so a window could end up to 999ms early, or vanish under a second
+                // (codex c37f52484178). And never SHORTEN an open window: concurrent
+                // refusals can land out of order, and the longest instruction still
+                // binds (codex fd356dee2436).
+                const retryAfterMs = parseRetryAfterMs(err.responseHeaders?.['retry-after']);
+                if (retryAfterMs !== undefined) {
+                    const untilMs = Date.now() + retryAfterMs;
+                    const open = sseCooldowns.get(client);
+                    if (open === undefined || untilMs > open.untilMs) {
+                        sseCooldowns.set(client, { untilMs, refusal: err });
+                    }
+                }
                 throw new SseConnectRefused(`SSE connect to workflow ${args.workflowId} events was refused with ` +
                     `${err.statusCode}; falling back to polling`, err);
             }

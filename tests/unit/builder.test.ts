@@ -341,6 +341,109 @@ describe('OperationBuilder.run', () => {
     expect(mock.getWorkflowStatus).toHaveBeenCalled();
   });
 
+  // Vf9R7gcV — contracts v2.208.0: a client MUST NOT request another stream
+  // before the refusal's Retry-After elapses. Within one run that held already;
+  // ACROSS runs on the same client it did not. The clock is Date.now, stubbed —
+  // never a sleep.
+  describe('SSE cooldown after a refused connect (Vf9R7gcV)', () => {
+    let nowMs = 1_000_000;
+    beforeEach(() => {
+      nowMs = 1_000_000;
+      vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+    });
+
+    const refusal429 = (retryAfter?: string): GislApiError =>
+      new GislApiError(429, 'SSE_CONNECTION_LIMIT_EXCEEDED', '/events', undefined, {
+        responseHeaders: retryAfter === undefined ? {} : { 'retry-after': retryAfter },
+      });
+
+    it('a second run on the SAME client inside Retry-After makes ZERO connect attempts', async () => {
+      const mock = makeMockClient();
+      mock.streamEvents.mockRejectedValueOnce(refusal429('30'));
+
+      await new OperationBuilder(mock.client, 'compress', 'a.jpg', {}).run({ maxWait: '30s' });
+      expect(mock.streamEvents).toHaveBeenCalledTimes(1);
+
+      nowMs += 29_000;
+      const second = await new OperationBuilder(mock.client, 'compress', 'b.jpg', {}).run({ maxWait: '30s' });
+      expect(second.status).toBe('completed');
+      expect(mock.streamEvents, 'the cooldown must stop the connect itself').toHaveBeenCalledTimes(1);
+    });
+
+    it('once Retry-After has elapsed the next run attempts SSE again', async () => {
+      const mock = makeMockClient();
+      mock.streamEvents.mockRejectedValueOnce(refusal429('30'));
+
+      await new OperationBuilder(mock.client, 'compress', 'a.jpg', {}).run({ maxWait: '30s' });
+      nowMs += 30_000;
+      await new OperationBuilder(mock.client, 'compress', 'b.jpg', {}).run({ maxWait: '30s' });
+
+      expect(mock.streamEvents).toHaveBeenCalledTimes(2);
+    });
+
+    it('the cooldown is per CLIENT: a second client is a second caller', async () => {
+      const first = makeMockClient();
+      const second = makeMockClient();
+      first.streamEvents.mockRejectedValueOnce(refusal429('30'));
+
+      await new OperationBuilder(first.client, 'compress', 'a.jpg', {}).run({ maxWait: '30s' });
+      await new OperationBuilder(second.client, 'compress', 'b.jpg', {}).run({ maxWait: '30s' });
+
+      expect(second.streamEvents).toHaveBeenCalledTimes(1);
+    });
+
+    it('a refusal WITHOUT Retry-After records no window (nothing was asked of us)', async () => {
+      const mock = makeMockClient();
+      mock.streamEvents.mockRejectedValueOnce(refusal429());
+
+      await new OperationBuilder(mock.client, 'compress', 'a.jpg', {}).run({ maxWait: '30s' });
+      await new OperationBuilder(mock.client, 'compress', 'b.jpg', {}).run({ maxWait: '30s' });
+
+      expect(mock.streamEvents).toHaveBeenCalledTimes(2);
+    });
+
+    it('a SUB-SECOND HTTP-date window is honoured, not floored away (codex c37f52484178)', async () => {
+      nowMs = 1_000_500;
+      const mock = makeMockClient();
+      mock.streamEvents.mockRejectedValueOnce(refusal429(new Date(1_001_000).toUTCString()));
+
+      await new OperationBuilder(mock.client, 'compress', 'a.jpg', {}).run({ maxWait: '30s' });
+      nowMs += 400;
+      await new OperationBuilder(mock.client, 'compress', 'b.jpg', {}).run({ maxWait: '30s' });
+
+      expect(mock.streamEvents).toHaveBeenCalledTimes(1);
+    });
+
+    it('a later, SHORTER refusal does not shorten an open window (codex fd356dee2436)', async () => {
+      const mock = makeMockClient();
+      mock.streamEvents
+        .mockRejectedValueOnce(refusal429('30'))
+        .mockRejectedValueOnce(refusal429('5'));
+
+      // Two runs in flight at once: both connect, both are refused, the 30s one first.
+      await Promise.all([
+        new OperationBuilder(mock.client, 'compress', 'a.jpg', {}).run({ maxWait: '30s' }),
+        new OperationBuilder(mock.client, 'compress', 'b.jpg', {}).run({ maxWait: '30s' }),
+      ]);
+      expect(mock.streamEvents).toHaveBeenCalledTimes(2);
+
+      nowMs += 10_000;
+      await new OperationBuilder(mock.client, 'compress', 'c.jpg', {}).run({ maxWait: '30s' });
+      expect(mock.streamEvents, 'the 30s instruction still binds at +10s').toHaveBeenCalledTimes(2);
+    });
+
+    it('a Handle wait on the same client honours the window too', async () => {
+      const mock = makeMockClient();
+      mock.streamEvents.mockRejectedValueOnce(refusal429('30'));
+      await new OperationBuilder(mock.client, 'compress', 'a.jpg', {}).run({ maxWait: '30s' });
+
+      const handle = await new OperationBuilder(mock.client, 'compress', 'b.jpg', {}).submit();
+      await handle.wait('30s');
+
+      expect(mock.streamEvents).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('SSE connect refused with 503 falls back to polling', async () => {
     const mock = makeMockClient();
     mock.streamEvents.mockRejectedValueOnce(
