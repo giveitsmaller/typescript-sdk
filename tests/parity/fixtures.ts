@@ -692,6 +692,13 @@ export function validateFixture(raw: unknown, file: string): Fixture {
           `${ctx} mode=files submit variant requires expected_return (the returned Handle assertion)`,
         );
       }
+      // cEUWPgKW: fixture.schema.json requires it too - with no canned create
+      // response the submit cannot produce a Handle, so the fixture could never pass.
+      if (!Array.isArray(r.responses) || r.responses.length === 0) {
+        throw new Error(
+          `${ctx} mode=files submit variant requires at least one response (the create response the Handle is built from)`,
+        );
+      }
     } else {
       if (requests.length !== 0) {
         throw new Error(
@@ -1314,6 +1321,10 @@ function validateWatermarkOps(
  * PHP `FixtureLoader::validateLoweringOpParams`.
  */
 function validateLoweringOpParams(op: string, o: Record<string, unknown>, ctx: string): void {
+  // cEUWPgKW: the schema pins this vocabulary on EVERY op object, not just resize/output.
+  if ('fit' in o && !['max', 'crop', 'scale'].includes(o.fit as string)) {
+    throw new Error(`${ctx} ${op} 'fit' must be one of max|crop|scale when present`);
+  }
   switch (op) {
     case 'convert':
       if (typeof o.format !== 'string' || o.format === '') {
