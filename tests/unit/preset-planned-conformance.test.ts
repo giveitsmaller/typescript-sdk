@@ -8,6 +8,7 @@ import {
   resolveCompressOptions,
 } from '../../src/ergonomic/preset_resolver.js';
 import { OptimizeFor } from '../../src/generated/sdk_spec/enums.js';
+import { mostCautious } from './availability-ladder.js';
 
 /**
  * Planned-option emission guard (card 5Eksm9s7).
@@ -41,11 +42,12 @@ interface AvailabilityOption {
   default?: unknown;
   per_value_availability?: Record<string, { availability?: string }>;
 }
+interface AvailabilityGroup {
+  availability?: string;
+  options?: Record<string, AvailabilityOption>;
+}
 interface Availability {
-  operations: Record<
-    string,
-    { mime_groups?: Record<string, { options?: Record<string, AvailabilityOption> }> }
-  >;
+  operations: Record<string, { availability?: string; mime_groups?: Record<string, AvailabilityGroup> }>;
 }
 
 const availability = JSON.parse(
@@ -53,6 +55,29 @@ const availability = JSON.parse(
 ) as Availability;
 
 const compressGroups = availability.operations.compress.mime_groups ?? {};
+const compressRoot = availability.operations.compress.availability;
+
+/**
+ * XsjiXtqZ: every scalar wire value whose chain - op root -> mime group -> option ->
+ * value - resolves MOST-CAUTIOUSLY to `planned`. It read only the value link, so a
+ * value under a planned option, group or root was missed. Uses the watermark suite's
+ * ladder and resolver (PMvwhNI1), pinned to the contract's availability-ladder.yaml.
+ */
+export function plannedOffenders(
+  root: string | undefined,
+  group: AvailabilityGroup | undefined,
+  wireOptions: Record<string, unknown>,
+): string[] {
+  const options = group?.options ?? {};
+  return Object.entries(wireOptions)
+    .filter(([, value]) => ['string', 'number', 'boolean'].includes(typeof value))
+    .filter(([key, value]) => {
+      const option = options[key];
+      const valueLink = option?.per_value_availability?.[String(value)]?.availability;
+      return mostCautious(root, group?.availability, option?.availability, valueLink) === 'planned';
+    })
+    .map(([key, value]) => `${key}=${String(value)}`);
+}
 
 /** Planned option keys for a compress mime-group, read straight from the sidecar. */
 function plannedKeysFromContract(group: string): Set<string> {
@@ -180,12 +205,7 @@ describe('planned per-VALUE gating on the resolved preset media', () => {
           explicitOptions: {},
         });
 
-        const options = compressGroups[media]?.options ?? {};
-        const offenders = Object.entries(wireOptions).filter(([key, value]) => {
-          const perValue = options[key]?.per_value_availability ?? {};
-          return perValue[String(value)]?.availability === 'planned';
-        });
-        expect(offenders).toEqual([]);
+        expect(plannedOffenders(compressRoot, compressGroups[media], wireOptions)).toEqual([]);
       });
     }
   }
@@ -231,5 +251,26 @@ describe('a caller-supplied planned option is NOT swallowed', () => {
     expect(wireOptions.font_subsetting).toBe(false);
     expect(resolvedOptions.sources.callPresetOverride).toContain('font_subsetting');
     expect(wireOptions.strip_unused_css).toBeUndefined();
+  });
+});
+
+
+describe('the chain is resolved, not just the value link (XsjiXtqZ)', () => {
+  const wire = { metadata: 'strip' };
+  it('a value under a PLANNED option is flagged', () => {
+    expect(plannedOffenders(undefined, { options: { metadata: { availability: 'planned' } } }, wire)).toEqual([
+      'metadata=strip',
+    ]);
+  });
+  it('a value under a PLANNED group is flagged', () => {
+    expect(plannedOffenders(undefined, { availability: 'planned', options: { metadata: {} } }, wire)).toEqual([
+      'metadata=strip',
+    ]);
+  });
+  it('a value under a PLANNED root is flagged', () => {
+    expect(plannedOffenders('planned', { options: { metadata: {} } }, wire)).toEqual(['metadata=strip']);
+  });
+  it('positive control: nothing planned, nothing flagged', () => {
+    expect(plannedOffenders(undefined, { options: { metadata: {} } }, wire)).toEqual([]);
   });
 });
