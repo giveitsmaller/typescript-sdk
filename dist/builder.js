@@ -37,6 +37,7 @@ import { GislApiError, GislConfigError, GislTimeoutError, GislFanOutTimeoutError
 // under ESM (handle.ts imports the await-primitives from this module).
 import { Handle } from './handle.js';
 import { resolveCompressOptions, } from './ergonomic/preset_resolver.js';
+import { createWorkflowAwaitingProbe } from './probe-pending.js';
 /**
  * Best-effort detection of the compress-operation media from the
  * builder's input. T4b only resolves presets for compress; the wire's
@@ -318,7 +319,9 @@ export class OperationBuilder {
             operations: [{ type: this.opType, options: resolved.wireOptions }],
         };
         const payload = { jobs: [job] };
-        const created = await this.client.createWorkflow(payload);
+        const created = await createWorkflowAwaitingProbe(this.client, payload, {
+            timeoutMs: options.probeTimeoutMs, deadline, signal, enabled: options.probeBeforeCreate,
+        });
         _checkAborted(signal);
         // 3. Wait to terminal status.
         const finalStatus = await this.awaitTerminal({
@@ -379,7 +382,9 @@ export class OperationBuilder {
             jobs: [job],
             ...(options.webhook !== undefined ? { callback_url: options.webhook } : {}),
         };
-        const created = await this.client.createWorkflow(payload);
+        const created = await createWorkflowAwaitingProbe(this.client, payload, {
+            timeoutMs: options.probeTimeoutMs, enabled: options.probeBeforeCreate,
+        });
         // ⚠️ THE CLIENT IS THE POINT (36AZ98FV). Without it the returned Handle's
         // status()/wait()/result() throw `no_client`, which made `webhook` the only
         // channel for this call's outcome and is why it used to be mandatory. The

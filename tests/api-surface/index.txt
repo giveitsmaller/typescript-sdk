@@ -81,6 +81,7 @@ convertMetadata	value
 ConvertOptions	type
 ConvertVideoOptions	type
 create	value
+CreateAwaitingProbeOptions	type
 CreditsBalanceResponse	type
 CreditsUsageOptions	type
 CreditsUsageResponse	type

@@ -278,6 +278,8 @@ export {
 // `.submit({webhook})` returns a `Handle`. Progress events are the
 // SDK-synthesised `{phase:'upload'|'processing', ...}` discriminated union.
 export { OperationBuilder, MapEachBuilder } from './builder.js';
+// dql51via: the options type of GislClient.createWorkflowAwaitingProbe.
+export type { CreateAwaitingProbeOptions } from './probe-pending.js';
 export { MergeBuilder, asset, handle, clip } from './merge.js';
 export type {
   Asset,

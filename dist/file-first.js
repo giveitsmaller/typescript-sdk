@@ -28,6 +28,7 @@ import { wireMergeOptions } from './merge.js';
 // (handle.ts imports RunResult/projectDownloadsToRunResult from here) resolves
 // cleanly under ESM. Mirrors builder.ts/merge.ts importing Handle the same way.
 import { Handle } from './handle.js';
+import { createWorkflowAwaitingProbe } from './probe-pending.js';
 /**
  * Result of a file-first run. Coexists with the operation-first `Result`
  * (in `builder.ts`) until FF6.
@@ -1085,7 +1086,9 @@ export class Recipe {
         // 2. Create the workflow from the lowered payload (callback_url built into
         // the payload at construction when a webhook is given).
         const payload = this.toWorkflowPayload(fileId, webhook);
-        const created = await this.client.createWorkflow(payload);
+        const created = await createWorkflowAwaitingProbe(this.client, payload, {
+            timeoutMs: probeTimeoutMs, deadline, signal, enabled: probeBeforeCreate,
+        });
         _checkAborted(signal);
         return created;
     }
@@ -1644,7 +1647,9 @@ async function _uploadInputsAndCreate(client, inputs, toPayload, opts) {
     if (deadline !== undefined && Date.now() >= deadline) {
         throw new GislTimeoutError(`Probe wait completed but maxWait elapsed before ${workflowLabel} could be created`);
     }
-    const created = await client.createWorkflow(toPayload(fileIds, webhook));
+    const created = await createWorkflowAwaitingProbe(client, toPayload(fileIds, webhook), {
+        timeoutMs: probeTimeoutMs, deadline, signal, enabled: probeBeforeCreate,
+    });
     _checkAborted(signal);
     return created;
 }

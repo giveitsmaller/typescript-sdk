@@ -1,4 +1,5 @@
 import type { AudioWatermarkDecodeRequest, AudioWatermarkDecodeResponse, ExternalImportCreatedResponse, ExternalImportRequest, LoginUserRequest, LoginUser200ResponseData, ContactRequest, BillingCheckoutRequest, BillingCheckoutSession, AccountLimits, CreditsBalanceResponse, CreditsUsageResponse, UploadResponse, UploadProbeResponse, WorkflowCancelResponse, WorkflowArchiveResponse, WorkflowRestoreResponse, WorkflowCreateResponse, WorkflowResumeResponse, WorkflowStatusResponse, WorkflowListResponse, WorkflowSummary, WorkflowDownloadResponse, MetadataResponse, RetryResponse } from '@giveitsmaller/contracts/openapi';
+import { type CreateAwaitingProbeOptions } from './probe-pending.js';
 import type { CreditsUsageOptions, ListWorkflowsOptions, GetSchemaOptions, GetSchemaResult, GislClientConfig, GislSseEvent, GislSseParseFailure, PreflightClipsResult, ProbeWaitOptions, ProbeWaitResult, ReadCapabilityOptions, UploadOptions, WaitOptions, WorkflowCreatePayload, _Sdk3HandCodedKeepaliveResult, _Sdk3HandCodedMultipartStatusResult, _Sdk3HandCodedPresignPartsResult } from './types.js';
 export declare const MULTIPART_CONCURRENCY_DEFAULT: 4;
 export declare const DEFAULT_MULTIPART_FIRST_CHUNK_SIZE: number;
@@ -461,6 +462,29 @@ export declare class GislClient {
         timeoutMs?: number;
         signal?: AbortSignal;
     }): Promise<void>;
+    /**
+     * {@link createWorkflow}, recovering from a `422 probe_pending` (dql51via).
+     *
+     * With the server's probe gate on, a single-op video compress created before
+     * its upload's probe has landed is refused with {@link GislProbePendingError}
+     * naming the job. Per the contract's recovery rule this polls that job's
+     * upload(s) with {@link waitForProbe} and re-creates the SAME payload once the
+     * probe has landed `ok` (or `missing_metadata`, which the server then routes).
+     * It is a no-op when the server never returns `probe_pending`.
+     *
+     * Gives up by rethrowing the ORIGINAL typed error when:
+     * - recovery is disabled (`enabled: false`), or the ONE recovery budget
+     *   `timeoutMs` (default 30 s, capped by `deadline`) - covering the refusal's
+     *   Retry-After and every probe wait - runs out;
+     * - the probe landed `corrupt` / `unsupported_codec` (the contract says do not
+     *   retry: call {@link probeUpload} for the reason);
+     * - the error names no job whose upload the SDK can find;
+     * - three creates were all refused.
+     *
+     * `deadline` (epoch ms) is the caller's whole-run budget: a retry that would
+     * start past it throws {@link GislTimeoutError} instead.
+     */
+    createWorkflowAwaitingProbe(payload: WorkflowCreatePayload, options?: CreateAwaitingProbeOptions): Promise<WorkflowCreateResponse>;
     /**
      * Probe N uploaded files in parallel and partition the results by
      * outcome. Returns `{ ok, rejected, errors }` so the caller can

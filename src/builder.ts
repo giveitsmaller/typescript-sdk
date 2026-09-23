@@ -60,6 +60,7 @@ import {
   resolveCompressOptions,
   type ResolveCompressOptionsInput,
 } from './ergonomic/preset_resolver.js';
+import { createWorkflowAwaitingProbe } from './probe-pending.js';
 
 /**
  * Best-effort detection of the compress-operation media from the
@@ -407,6 +408,7 @@ export interface RunOptions {
    * after upload, before createWorkflow, wait for the server's probe to land
    * so it admits the parallel video split. Default `true`; set `false` to
    * skip the wait entirely. Never-bounce — a give-up just proceeds to create.
+   * `false` also skips the recovery from a `422 probe_pending` (dql51via).
    */
   readonly probeBeforeCreate?: boolean;
   /** Overall timeout (ms) for the probe-before-create wait. */
@@ -428,7 +430,8 @@ export interface SubmitOptions {
   readonly webhook?: string;
   /**
    * Best-effort probe-before-create for a VIDEO upload that went multipart.
-   * Default `true`; set `false` to skip the wait. See {@link RunOptions}.
+   * Default `true`; set `false` to skip the wait and the `probe_pending`
+   * recovery. See {@link RunOptions}.
    */
   readonly probeBeforeCreate?: boolean;
   /** Overall timeout (ms) for the probe-before-create wait. */
@@ -603,7 +606,9 @@ export class OperationBuilder {
       operations: [{ type: this.opType as OperationDef['type'], options: resolved.wireOptions }],
     };
     const payload: WorkflowCreatePayload = { jobs: [job] };
-    const created = await this.client.createWorkflow(payload);
+    const created = await createWorkflowAwaitingProbe(this.client, payload, {
+      timeoutMs: options.probeTimeoutMs, deadline, signal, enabled: options.probeBeforeCreate,
+    });
     _checkAborted(signal);
 
     // 3. Wait to terminal status.
@@ -675,7 +680,9 @@ export class OperationBuilder {
       jobs: [job],
       ...(options.webhook !== undefined ? { callback_url: options.webhook } : {}),
     };
-    const created = await this.client.createWorkflow(payload);
+    const created = await createWorkflowAwaitingProbe(this.client, payload, {
+      timeoutMs: options.probeTimeoutMs, enabled: options.probeBeforeCreate,
+    });
 
     // ⚠️ THE CLIENT IS THE POINT (36AZ98FV). Without it the returned Handle's
     // status()/wait()/result() throw `no_client`, which made `webhook` the only

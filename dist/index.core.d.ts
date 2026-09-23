@@ -23,6 +23,7 @@ export { ENVIRONMENT_ENDPOINTS, ENVIRONMENT_STREAM_ENDPOINTS } from './credentia
 export type { GislCreateOptions, Environment, ErgonomicClient, SingleInputOperationType, MultiInputOperationType, } from './gisl.js';
 export { presetDefaults, PresetDefaults, type PresetMedia, type PresetOp, type AnyPresetOptions, ImageCompressPresetOptions, type ImageCompressPresetOptionsInput, AudioCompressPresetOptions, type AudioCompressPresetOptionsInput, VideoCompressPresetOptions, type VideoCompressPresetOptionsInput, DocumentOfficeCompressPresetOptions, type DocumentOfficeCompressPresetOptionsInput, DocumentOdfCompressPresetOptions, type DocumentOdfCompressPresetOptionsInput, DocumentEpubCompressPresetOptions, type DocumentEpubCompressPresetOptionsInput, OptimizeFor, ImageMetadataPolicy, ImageFormat, VideoCodec, VideoPreset, VideoFit, AudioBitrate, AudioCodec, AudioSampleRate, } from './ergonomic/presets/index.js';
 export { OperationBuilder, MapEachBuilder } from './builder.js';
+export type { CreateAwaitingProbeOptions } from './probe-pending.js';
 export { MergeBuilder, asset, handle, clip } from './merge.js';
 export type { Asset, ClipEntry, ClipOptions, MergeMediaKind, MergeOptions, SequenceEntry, } from './merge.js';
 export type { Artifact, ArtifactRef, JobBreakdown, OperationBreakdown, ProcessingProgressEvent, ProgressEvent, ResolvedOptions, ResolvedOptionsSources, Result, RunOptions, SubmitOptions, UploadProgressEvent, } from './builder.js';

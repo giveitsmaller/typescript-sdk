@@ -61,6 +61,7 @@ import {
   _retryOn429,
 } from './builder.js';
 import { Handle } from './handle.js';
+import { createWorkflowAwaitingProbe } from './probe-pending.js';
 
 // ---------------------------------------------------------------------------
 // Asset + Clip types
@@ -273,7 +274,9 @@ export class MergeBuilder {
 
     // 3. Build the merge JobDefinitionPayload (multi-input).
     const payload = this.buildPayload(plan, uploadedByAssetId);
-    const created = await this.client.createWorkflow(payload);
+    const created = await createWorkflowAwaitingProbe(this.client, payload, {
+      timeoutMs: options.probeTimeoutMs, deadline, signal, enabled: options.probeBeforeCreate,
+    });
     _checkAborted(signal);
 
     // 4. Wait to terminal status.
@@ -328,7 +331,9 @@ export class MergeBuilder {
     // Set only when present — an own `callback_url: undefined` would make a
     // key-presence assertion pass vacuously. See builder.ts.
     if (options.webhook !== undefined) payload.callback_url = options.webhook;
-    const created = await this.client.createWorkflow(payload);
+    const created = await createWorkflowAwaitingProbe(this.client, payload, {
+      timeoutMs: options.probeTimeoutMs, enabled: options.probeBeforeCreate,
+    });
 
     // ⚠️ The client is passed so the returned Handle is usable (36AZ98FV). This
     // comment previously read "No client passed → the returned Handle's

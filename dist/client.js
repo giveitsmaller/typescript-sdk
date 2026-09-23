@@ -15,6 +15,7 @@ import { declaredStreamEnvironments, GISL_STREAM_BASE_URL_ENV, } from './credent
 // here so the retry-loop timing stays byte-identical.
 import { parseRetryAfterMs } from './retry-metadata.js';
 import { parseSseStream } from './sse.js';
+import { createWorkflowAwaitingProbe } from './probe-pending.js';
 const DEFAULT_TIMEOUT_MS = 30_000;
 // SDK-internal aliases derived from the contract-pinned UploadThresholds enums
 // (compression_contracts/openapi schema `UploadThresholds`, ticket u0ar7Yye).
@@ -2399,6 +2400,31 @@ export class GislClient {
         if (opts.sizeBytes === undefined || opts.sizeBytes <= this.multipartThreshold)
             return;
         await this.waitForProbe(fileId, { timeoutMs: opts.timeoutMs, signal: opts.signal });
+    }
+    /**
+     * {@link createWorkflow}, recovering from a `422 probe_pending` (dql51via).
+     *
+     * With the server's probe gate on, a single-op video compress created before
+     * its upload's probe has landed is refused with {@link GislProbePendingError}
+     * naming the job. Per the contract's recovery rule this polls that job's
+     * upload(s) with {@link waitForProbe} and re-creates the SAME payload once the
+     * probe has landed `ok` (or `missing_metadata`, which the server then routes).
+     * It is a no-op when the server never returns `probe_pending`.
+     *
+     * Gives up by rethrowing the ORIGINAL typed error when:
+     * - recovery is disabled (`enabled: false`), or the ONE recovery budget
+     *   `timeoutMs` (default 30 s, capped by `deadline`) - covering the refusal's
+     *   Retry-After and every probe wait - runs out;
+     * - the probe landed `corrupt` / `unsupported_codec` (the contract says do not
+     *   retry: call {@link probeUpload} for the reason);
+     * - the error names no job whose upload the SDK can find;
+     * - three creates were all refused.
+     *
+     * `deadline` (epoch ms) is the caller's whole-run budget: a retry that would
+     * start past it throws {@link GislTimeoutError} instead.
+     */
+    async createWorkflowAwaitingProbe(payload, options = {}) {
+        return createWorkflowAwaitingProbe(this, payload, options);
     }
     /**
      * Probe N uploaded files in parallel and partition the results by
