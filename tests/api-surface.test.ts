@@ -416,8 +416,27 @@ function describeDrift(committed: string, actual: string): string {
     .join('\n');
 }
 
-describe('public export surface — committed snapshot', () => {
+// The per-block timeout is for the ONE program build each entry still needs:
+// seconds on a quiet VM, and this VM is shared, so the 5s default is a load
+// sensor rather than a correctness check. Scoped to this block - the global
+// default stays (9JoRYvTp).
+describe('public export surface — committed snapshot', { timeout: 20_000 }, () => {
   const entries = entryModulesFromPackageJson();
+
+  // Each `collectExports` builds a full ts.Program over src/ and type-checks it,
+  // which is SECONDS under load. Unmemoised, this block built five programs for
+  // two entries, and the subset test (two of them) timed out at 6046ms > 5000ms
+  // on a loaded VM with no code defect (9JoRYvTp). Same entry, same program:
+  // memoise per entry. The tripwires below stay uncached - each is a new fixture.
+  const surfaceCache = new Map<string, Map<string, ExportKind>>();
+  const surfaceOf = (entryFile: string): Map<string, ExportKind> => {
+    let surface = surfaceCache.get(entryFile);
+    if (surface === undefined) {
+      surface = collectExports(entryFile);
+      surfaceCache.set(entryFile, surface);
+    }
+    return surface;
+  };
 
   it('discovers every entry point from package.json exports', () => {
     expect(entries.size).toBeGreaterThan(0);
@@ -426,7 +445,7 @@ describe('public export surface — committed snapshot', () => {
 
   for (const [label, entryFile] of entries) {
     it(`${label} matches its committed snapshot`, () => {
-      const actual = serialize(collectExports(entryFile));
+      const actual = serialize(surfaceOf(entryFile));
       const snapshotPath = join(SNAPSHOT_DIR, `${label.replace(/\//g, '__')}.txt`);
 
       if (UPDATE_MODE) {
@@ -450,8 +469,8 @@ describe('public export surface — committed snapshot', () => {
   it('the browser entry is a strict subset of the root entry', () => {
     // 🔴 ASSERTED SEPARATELY, because two snapshots CANNOT express this. A change
     // adding a browser-only export would update both files and pass.
-    const root = collectExports(join(SRC_DIR, 'index.ts'));
-    const browser = collectExports(join(SRC_DIR, 'index.browser.ts'));
+    const root = surfaceOf(join(SRC_DIR, 'index.ts'));
+    const browser = surfaceOf(join(SRC_DIR, 'index.browser.ts'));
     const browserOnly = [...browser.keys()].filter((n) => !root.has(n));
     expect(browserOnly, 'browser exports something the root entry does not').toEqual([]);
     const rootOnly = [...root.keys()].filter((n) => !browser.has(n)).sort();
@@ -465,7 +484,7 @@ describe('public export surface — committed snapshot', () => {
     // because each reaches the entry through `export { X } from './y.js'`. A class ->
     // const downgrade then removed the public TYPE with no snapshot drift. If this
     // assertion fails with `value`, that resolution has been lost again.
-    const root = collectExports(join(SRC_DIR, 'index.ts'));
+    const root = surfaceOf(join(SRC_DIR, 'index.ts'));
     expect(root.get('GislClient')).toBe('value+type');
     expect(root.get('Recipe')).toBe('value+type');
     expect(root.get('OperationBuilder')).toBe('value+type');
