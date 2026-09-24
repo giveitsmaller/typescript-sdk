@@ -3,6 +3,7 @@
 // Regenerate with: scripts/generate.py.
 
 export type ErrorCode =
+  | "stream_host_not_declared"
   | "missing_credentials"
   | "feature_requires_auth"
   | "undeclared_asset"
@@ -12,6 +13,10 @@ export type ErrorCode =
   | "multipart_part_invalid"
   | "multipart_part_count_exceeded"
   | "timeout"
+  | "transport_failed"
+  | "request_not_sent"
+  | "download_rejected"
+  | "download_unavailable"
   | "aborted"
   | "validation_failed"
   | "validation_error"
@@ -39,6 +44,7 @@ export type ErrorCode =
   | "unsupported_value"
   | "type_mismatch"
   | "image_dimensions_too_large"
+  | "unsupported_file_type"
   | "upload_failed"
   | "workflow_failed"
   | "sse_connection_limit_exceeded"
@@ -77,6 +83,17 @@ export interface ErrorEntry {
 }
 
 export const ERROR_CODES: Readonly<Record<ErrorCode, ErrorEntry>> = Object.freeze({
+  "stream_host_not_declared": Object.freeze({
+    code: "stream_host_not_declared",
+    category: "config" as ErrorCategory,
+    source: "SDK_local",
+    status: "wired" as ErrorStatus,
+    httpStatus: null,
+    retryable: false,
+    sdkClass: "GislStreamHostNotDeclaredError",
+    description: "streamEvents() was called with a configuration that declares no stream host (no environment, no streamBaseUrl). Pass streamBaseUrl, set GISL_STREAM_BASE_URL, or use an environment that declares one. run() does not raise it — it polls instead.",
+    metadataSchema: Object.freeze({}),
+  }),
   "missing_credentials": Object.freeze({
     code: "missing_credentials",
     category: "config" as ErrorCategory,
@@ -197,6 +214,54 @@ export const ERROR_CODES: Readonly<Record<ErrorCode, ErrorEntry>> = Object.freez
     metadataSchema: Object.freeze({
       "timeoutMs": "integer",
       "phase": "string",
+    }),
+  }),
+  "transport_failed": Object.freeze({
+    code: "transport_failed",
+    category: "network" as ErrorCategory,
+    source: "SDK_local",
+    status: "wired" as ErrorStatus,
+    httpStatus: null,
+    retryable: true,
+    sdkClass: "GislTransportError",
+    description: "A request or download failed below HTTP (DNS, TCP, TLS, a mid-stream disconnect) or a 2xx download delivered no bytes. Transient by nature.",
+    metadataSchema: Object.freeze({}),
+  }),
+  "request_not_sent": Object.freeze({
+    code: "request_not_sent",
+    category: "network" as ErrorCategory,
+    source: "SDK_local",
+    status: "wired" as ErrorStatus,
+    httpStatus: null,
+    retryable: false,
+    sdkClass: "GislRequestNotSentError",
+    description: "The client refused to send the request (for example a URL that does not parse). Re-sending it fails identically. The TS SDK detects fewer of these than the PHP SDK; the rest surface as transport_failed.",
+    metadataSchema: Object.freeze({}),
+  }),
+  "download_rejected": Object.freeze({
+    code: "download_rejected",
+    category: "network" as ErrorCategory,
+    source: "SDK_local",
+    status: "wired" as ErrorStatus,
+    httpStatus: null,
+    retryable: false,
+    sdkClass: "GislDownloadHttpError",
+    description: "A result download URL answered a non-2xx status other than 408, 429 or 5xx (for example 404 on an expired signed URL). Not a GISL API error: API non-2xx responses carry an envelope and surface as GislApiError subclasses.",
+    metadataSchema: Object.freeze({
+      "status": "integer",
+    }),
+  }),
+  "download_unavailable": Object.freeze({
+    code: "download_unavailable",
+    category: "network" as ErrorCategory,
+    source: "SDK_local",
+    status: "wired" as ErrorStatus,
+    httpStatus: null,
+    retryable: true,
+    sdkClass: "GislDownloadHttpError",
+    description: "A result download URL answered 408, 429 or 5xx. Retrying may succeed.",
+    metadataSchema: Object.freeze({
+      "status": "integer",
     }),
   }),
   "aborted": Object.freeze({
@@ -550,7 +615,18 @@ export const ERROR_CODES: Readonly<Record<ErrorCode, ErrorEntry>> = Object.freez
     httpStatus: 413,
     retryable: false,
     sdkClass: "GislUploadCapExceededError",
-    description: "413 — POST /api/uploads rejected a decodable raster image whose pixel area (width × height) exceeds the configured ceiling (UPLOAD_MAX_IMAGE_PIXELS, default 16 MP), read from the file header before decode (I0Rqj4jo). Wire `IMAGE_DIMENSIONS_TOO_LARGE`; flat ErrorEnvelope (no details[]). A pixel-dimension member of the upload-cap family — GislUploadCapExceededError, alongside the size/duration caps — matching the SDKs' existing status-based 413 dispatch (NOT GislValidationError, which is the structured-422 class). Retry only after downscaling the input.",
+    description: "413 — an upload rejected a decodable raster image whose pixel area (width × height) exceeds that path's ceiling, read from the file header before decode: POST /api/uploads uses the single-shot ceiling (UPLOAD_MAX_IMAGE_PIXELS, default 16 MP; I0Rqj4jo), and POST /api/uploads/multipart/initiate the separate multipart ceiling (UPLOAD_MAX_MULTIPART_IMAGE_PIXELS, default 50 MP; ae4Q1yCb). Wire `IMAGE_DIMENSIONS_TOO_LARGE`; flat ErrorEnvelope (no details[]). A pixel-dimension member of the upload-cap family — GislUploadCapExceededError, alongside the size/duration caps — matching the SDKs' existing status-based 413 dispatch (NOT GislValidationError, which is the structured-422 class). Retry only after downscaling the input.",
+    metadataSchema: Object.freeze({}),
+  }),
+  "unsupported_file_type": Object.freeze({
+    code: "unsupported_file_type",
+    category: "api" as ErrorCategory,
+    source: "ErrorEnvelope.error",
+    status: "planned" as ErrorStatus,
+    httpStatus: 415,
+    retryable: false,
+    sdkClass: "GislUnsupportedFileTypeError",
+    description: "415 — POST /api/uploads or POST /api/uploads/multipart/initiate refused a MIME type that NO tier can process. Wire `UNSUPPORTED_FILE_TYPE`; flat ErrorEnvelope (no details[]). Distinct from the 403 tier_restriction with restriction_kind mime_type, which some tier would accept — this one no upgrade fixes, so an SDK must never surface it as an upgrade prompt. A GislApiError subclass (sdks eWtnqHZm). `planned` until api's A1hdxtPC (PR #739) is live AND the SDKs export the class; promote to `wired`, and add the code to wire-error-inventory.txt, in that change (TOB5SvRQ).",
     metadataSchema: Object.freeze({}),
   }),
   "upload_failed": Object.freeze({
@@ -760,6 +836,7 @@ export const ERROR_CATEGORIES: Readonly<Record<ErrorCategory, readonly ErrorCode
     "probe_pending",
     "requires_reencode",
     "image_dimensions_too_large",
+    "unsupported_file_type",
     "workflow_failed",
     "sse_connection_limit_exceeded",
     "sse_capacity_exhausted",
@@ -767,6 +844,7 @@ export const ERROR_CATEGORIES: Readonly<Record<ErrorCategory, readonly ErrorCode
     "item_failed",
   ] as readonly ErrorCode[]),
   config: Object.freeze([
+    "stream_host_not_declared",
     "missing_credentials",
     "feature_requires_auth",
     "config_error",
@@ -775,6 +853,10 @@ export const ERROR_CATEGORIES: Readonly<Record<ErrorCategory, readonly ErrorCode
   ] as readonly ErrorCode[]),
   network: Object.freeze([
     "timeout",
+    "transport_failed",
+    "request_not_sent",
+    "download_rejected",
+    "download_unavailable",
     "aborted",
     "upload_failed",
     "fan_out_timeout",
