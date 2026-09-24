@@ -691,8 +691,14 @@ describe('operation() generic escape hatch (qUhxfDA5)', () => {
     const buildArchive = (): unknown => client.operation('archive', new Blob(['x']), {});
     // @ts-expect-error — 'image_watermark' is multi-input; use file(a).watermark(b).
     const buildOverlay = (): unknown => client.operation('image_watermark', new Blob(['x']), {});
+    // @ts-expect-error — 'audio_to_video' is multi-input (base + optional overlay).
+    const buildAudioToVideo = (): unknown => client.operation('audio_to_video', new Blob(['x']), {});
+    // @ts-expect-error — 'custom_luma' is multi-input (base + transition_mask).
+    const buildCustomLuma = (): unknown => client.operation('custom_luma', new Blob(['x']), {});
     expect(typeof buildMerge).toBe('function');
     expect(typeof buildArchive).toBe('function');
     expect(typeof buildOverlay).toBe('function');
+    expect(typeof buildAudioToVideo).toBe('function');
+    expect(typeof buildCustomLuma).toBe('function');
   });
 });

@@ -320,10 +320,9 @@ function wrapErgonomic(
         // pre-upload check is the planned-everywhere value gate (99Da2uyx) — the
         // server validates everything else.
         //
-        // Multi-input operations (merge, archive, image/video/audio overlay
-        // watermarks) canNOT be expressed here — they need multiple sources and
-        // have dedicated builders (`merge(...)`, `files(...).archive(...)`,
-        // `file(a).watermark(b)`). They are excluded from the op-type param.
+        // Multi-input operations canNOT be expressed here — they need multiple
+        // sources. They are excluded from the op-type param; see
+        // MultiInputOperationType for which have a builder and which have none.
         return (
           opType: SingleInputOperationType,
           input: string | Blob,
@@ -353,17 +352,34 @@ function isMergeOptions(value: unknown): value is MergeOptions {
 /**
  * Operation types that need MORE THAN ONE input source, so they cannot be
  * driven through the single-input {@link ErgonomicClient.operation} escape
- * hatch — each has a dedicated multi-input builder (`merge(...)`,
- * `files(...).archive(...)`, `file(a).watermark(b)`). Excluded from
- * `operation()`'s op-type autocomplete.
+ * hatch. Excluded from `operation()`'s op-type autocomplete.
+ *
+ * Four have a dedicated multi-input builder: `merge` → `merge(...)`, `archive`
+ * → `files(...).archive(...)`, `image_watermark` / `video_watermark` →
+ * `file(a).watermark(b)`. ⚠️ `audio_overlay`, `audio_to_video` and
+ * `custom_luma` have NO builder: the contract marks all three `planned`
+ * (workflow-create returns `feature_not_available`), so a builder could only
+ * refuse. Only the low-level `createWorkflow()` can send them. A test fails when
+ * any of them is re-listed, or when the contract adds a multi-input op this
+ * list does not name.
  */
-export type MultiInputOperationType =
-  | 'merge'
-  | 'archive'
-  | 'image_watermark'
-  | 'video_watermark'
-  | 'audio_overlay'
-  | 'audio_to_video';
+export type MultiInputOperationType = (typeof MULTI_INPUT_OPERATION_TYPES)[number];
+
+/**
+ * Runtime source of {@link MultiInputOperationType}, so the conformance test can
+ * compare it to the contract (the test files are not type-checked in CI).
+ *
+ * @internal Not re-exported from the package entry points.
+ */
+export const MULTI_INPUT_OPERATION_TYPES = [
+  'merge',
+  'archive',
+  'image_watermark',
+  'video_watermark',
+  'audio_overlay',
+  'audio_to_video',
+  'custom_luma',
+] as const;
 
 /**
  * Op types reachable via {@link ErgonomicClient.operation}: every
@@ -509,11 +525,13 @@ export type ErgonomicClient = GislClient & {
    * (`compress` / `convert` / `thumbnail`) when they exist — they add local
    * validation.
    *
-   * Multi-input operations (`merge`, `archive`, overlay watermarks — see
-   * {@link MultiInputOperationType}) are REJECTED at compile time: passing one
-   * of those literals is a type error (its dedicated builder is `merge(...)`,
-   * `files(...).archive(...)`, or `file(a).watermark(b)`). A genuinely-unknown
-   * (not-yet-in-contract) op string is still accepted.
+   * Multi-input operations (see {@link MultiInputOperationType}) are REJECTED
+   * at compile time: passing one of those literals is a type error. `merge`,
+   * `archive` and the image/video watermarks have a builder (`merge(...)`,
+   * `files(...).archive(...)`, `file(a).watermark(b)`); `audio_overlay`,
+   * `audio_to_video` and `custom_luma` have none while the contract marks them
+   * `planned`. A genuinely-unknown (not-yet-in-contract) op string is still
+   * accepted.
    *
    * The generic parameter enforces the exclusion: a known single-input op or an
    * unknown string maps to itself, while a {@link MultiInputOperationType}

@@ -243,10 +243,9 @@ function wrapErgonomic(client, presetDefaults, scopedPresetDefaults) {
                 // pre-upload check is the planned-everywhere value gate (99Da2uyx) — the
                 // server validates everything else.
                 //
-                // Multi-input operations (merge, archive, image/video/audio overlay
-                // watermarks) canNOT be expressed here — they need multiple sources and
-                // have dedicated builders (`merge(...)`, `files(...).archive(...)`,
-                // `file(a).watermark(b)`). They are excluded from the op-type param.
+                // Multi-input operations canNOT be expressed here — they need multiple
+                // sources. They are excluded from the op-type param; see
+                // MultiInputOperationType for which have a builder and which have none.
                 return (opType, input, options = {}) => new OperationBuilder(target, opType, input, options, presetDefaults, scopedPresetDefaults);
             }
             return Reflect.get(target, prop, receiver);
@@ -270,6 +269,21 @@ function isMergeOptions(value) {
         return false;
     return true;
 }
+/**
+ * Runtime source of {@link MultiInputOperationType}, so the conformance test can
+ * compare it to the contract (the test files are not type-checked in CI).
+ *
+ * @internal Not re-exported from the package entry points.
+ */
+export const MULTI_INPUT_OPERATION_TYPES = [
+    'merge',
+    'archive',
+    'image_watermark',
+    'video_watermark',
+    'audio_overlay',
+    'audio_to_video',
+    'custom_luma',
+];
 /**
  * Inner factory shared by `create()` and `_internalAnonymous()` — extracted
  * so the anonymous branch can ENTIRELY skip the credential chain rather
