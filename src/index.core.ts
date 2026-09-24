@@ -99,6 +99,7 @@ export {
   GislMultipartSessionNotFoundError,
   GislMultipartSessionOwnershipError,
   GislMultipartSessionAuthRequiredError,
+  GislUnsupportedFileTypeError,
   GislTimeoutError,
   // 4G4FaA9X — mapEach fan-out timed out mid-batch; carries the completed
   // child ids + parent id so the caller can recover without a whole-batch re-run.

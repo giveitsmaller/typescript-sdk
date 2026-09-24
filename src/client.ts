@@ -104,6 +104,7 @@ import {
   GislMultipartPartCountError,
   GislMultipartPartError,
   GislMultipartSessionNotFoundError,
+  GislUnsupportedFileTypeError,
   GislMultipartSessionOwnershipError,
   GislMultipartSessionAuthRequiredError,
   GislTierRestrictedError,
@@ -1120,6 +1121,11 @@ export class GislClient {
       }
       if (status === 403 && errorType === 'MULTIPART_SESSION_AUTH_REQUIRED') {
         throw new GislMultipartSessionAuthRequiredError(status, errorMessage, path, i18n);
+      }
+      // 415 — a file type no tier can process (eWtnqHZm). The contract body is
+      // a plain ErrorEnvelope, so the status is the discriminator.
+      if (status === 415) {
+        throw new GislUnsupportedFileTypeError(status, errorMessage, path, { ...i18n, payload: json });
       }
       // 422 `FILE_TOO_LARGE_FOR_MULTIPART` — pre-S3 capacity reject on the
       // resume-support presign endpoint (more parts than the manifest can

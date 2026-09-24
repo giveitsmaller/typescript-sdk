@@ -19,7 +19,7 @@ export { GislError, GislApiError, GislValidationError,
 // omission read as an oversight rather than a decision.
 GislAuthRejectionError, GislBalanceExhaustedError, GislLongFormConcurrencyError, GislTierRestrictedError, GislFeatureTierRestrictedError, GislFeatureNotAvailableError, GislWorkflowExpiredError, GislProbePendingError, GislAuthError, GislUploadCapExceededError, GislMultipartPartError, GislMultipartPartCountError, 
 // SDK-3 (Wb6ebOMM) — typed errors for the 3 resume-support endpoints.
-GislMultipartSessionNotFoundError, GislMultipartSessionOwnershipError, GislMultipartSessionAuthRequiredError, GislTimeoutError, 
+GislMultipartSessionNotFoundError, GislMultipartSessionOwnershipError, GislMultipartSessionAuthRequiredError, GislUnsupportedFileTypeError, GislTimeoutError, 
 // 4G4FaA9X — mapEach fan-out timed out mid-batch; carries the completed
 // child ids + parent id so the caller can recover without a whole-batch re-run.
 GislFanOutTimeoutError, GislAbortError, 

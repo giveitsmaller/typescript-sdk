@@ -16,6 +16,7 @@ import {
   GislFeatureTierRestrictedError,
   GislLongFormConcurrencyError,
   GislTierRestrictedError,
+  GislUnsupportedFileTypeError,
   GislTimeoutError,
   GislValidationError,
   GislProbePendingError,
@@ -1792,6 +1793,30 @@ describe('GislClient', () => {
 
       const [, options] = fetchSpy.mock.calls[0] as [string, RequestInit];
       expect(options.body).toBeInstanceOf(FormData);
+    });
+  });
+
+  describe('415 unsupported file type (eWtnqHZm)', () => {
+    const body = { success: false, error: 'UNSUPPORTED_FILE_TYPE', message: 'This file type is not supported.' };
+
+    it('single-shot upload: a GislUnsupportedFileTypeError, not a tier restriction', async () => {
+      fetchSpy.mockResolvedValueOnce(jsonResponse(body, 415));
+      const err = await client.uploadFile(new Blob(['x'])).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(GislUnsupportedFileTypeError);
+      expect(err).toBeInstanceOf(GislApiError);
+      expect(err).not.toBeInstanceOf(GislTierRestrictedError);
+      expect((err as GislApiError).statusCode).toBe(415);
+      expect((err as GislApiError).errorCode).toBe('UNSUPPORTED_FILE_TYPE');
+      expect((err as GislApiError).errorMessage).toBe('This file type is not supported.');
+    });
+
+    it('multipart initiate: the same error', async () => {
+      fetchSpy.mockResolvedValueOnce(jsonResponse(body, 415));
+      const big = new Blob([new Uint8Array(DEFAULT_MULTIPART_FIRST_CHUNK_SIZE + 16 * 1024 * 1024 + 1)]);
+      const err = await client.uploadFile(big).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(GislUnsupportedFileTypeError);
+      const [url] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      expect(url).toContain('/api/uploads/multipart/initiate');
     });
   });
 

@@ -5,7 +5,7 @@
 // dynamic one) so `vi.mock('node:fs/promises')` still intercepts it in tests.
 import { open, stat, basename } from './node-fs.js';
 import { AudioWatermarkDecodeRequestToJSON, AudioWatermarkDecodeResponseFromJSON, ExternalImportCreatedResponseFromJSON, ExternalImportRequestToJSON, LoginUser200ResponseDataFromJSON, AccountLimitsFromJSON, CreditsBalanceResponseFromJSON, BillingCheckoutRequestToJSON, BillingCheckoutSessionFromJSON, CreditsUsageResponseFromJSON, UploadResponseFromJSON, UploadProbeResponseFromJSON, MultipartInitiateResponseFromJSON, MultipartInitiateRequestMetadataHintToJSON, MultipartCompleteResponseFromJSON, MultipartCompleteRequestToJSON, WorkflowCancelResponseFromJSON, WorkflowArchiveResponseFromJSON, WorkflowRestoreResponseFromJSON, WorkflowCreateResponseFromJSON, WorkflowResumeResponseFromJSON, WorkflowStatusResponseFromJSON, WorkflowListResponseFromJSON, WorkflowDownloadResponseFromJSON, MetadataResponseFromJSON, OperationsSchemaResponseFromJSON, RetryResponseFromJSON, WorkflowStatus, AuthErrorResponseFromJSON, AuthErrorType, AuthRejectionEnvelopeFromJSON, AuthRejectionEnvelopeErrorTypeEnum, BalanceExhaustedResponseFromJSON, BalanceExhaustedResponseRequiredActionEnum, FeatureNotAvailableResponseFromJSON, FeatureTierRestrictedResponseFromJSON, LongFormConcurrencyLimitResponseFromJSON, TierRestrictionKind, TierRestrictionResponseFromJSON, UserTier, WorkflowExpiredResponseFromJSON, ProbePendingResponseFromJSON, UploadSizeExceedsTierResponseFromJSON, UploadDurationExceedsTierResponseFromJSON, UploadConstraintsAppliedProcessingClassPreAssignmentEnum, UploadThresholdsSingleShotMaxBytesEnum, UploadThresholdsMultipartChunkSizeEnum, UploadThresholdsMultipartConcurrencyDefaultEnum, } from '@giveitsmaller/contracts/openapi';
-import { GislAbortError, GislApiError, GislAuthError, GislAuthRejectionError, GislBalanceExhaustedError, GislConfigError, GislError, GislFeatureNotAvailableError, GislFeatureTierRestrictedError, GislLongFormConcurrencyError, GislMultipartPartCountError, GislMultipartPartError, GislMultipartSessionNotFoundError, GislMultipartSessionOwnershipError, GislMultipartSessionAuthRequiredError, GislTierRestrictedError, GislTimeoutError, GislProbePendingError, GislStreamHostNotDeclaredError, GislUploadCapExceededError, GislValidationError, GislWorkflowExpiredError, } from './errors.js';
+import { GislAbortError, GislApiError, GislAuthError, GislAuthRejectionError, GislBalanceExhaustedError, GislConfigError, GislError, GislFeatureNotAvailableError, GislFeatureTierRestrictedError, GislLongFormConcurrencyError, GislMultipartPartCountError, GislMultipartPartError, GislMultipartSessionNotFoundError, GislUnsupportedFileTypeError, GislMultipartSessionOwnershipError, GislMultipartSessionAuthRequiredError, GislTierRestrictedError, GislTimeoutError, GislProbePendingError, GislStreamHostNotDeclaredError, GislUploadCapExceededError, GislValidationError, GislWorkflowExpiredError, } from './errors.js';
 // Stream-host vocabulary for the fail-closed `streamEvents` guard. The
 // resolver itself runs in `gisl.create()`; the client only reports what a
 // caller can do about an absent host.
@@ -739,6 +739,11 @@ export class GislClient {
             }
             if (status === 403 && errorType === 'MULTIPART_SESSION_AUTH_REQUIRED') {
                 throw new GislMultipartSessionAuthRequiredError(status, errorMessage, path, i18n);
+            }
+            // 415 — a file type no tier can process (eWtnqHZm). The contract body is
+            // a plain ErrorEnvelope, so the status is the discriminator.
+            if (status === 415) {
+                throw new GislUnsupportedFileTypeError(status, errorMessage, path, { ...i18n, payload: json });
             }
             // 422 `FILE_TOO_LARGE_FOR_MULTIPART` — pre-S3 capacity reject on the
             // resume-support presign endpoint (more parts than the manifest can

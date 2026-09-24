@@ -172,6 +172,7 @@ GislTierRestrictedError	value+type
 GislTimeoutError	value+type
 GislTransportError	value+type
 GislUndeclaredAssetError	value+type
+GislUnsupportedFileTypeError	value+type
 GislUnusedAssetError	value+type
 GislUploadCapExceededError	value+type
 GislUploadCapKind	type

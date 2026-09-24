@@ -327,6 +327,17 @@ export declare class GislMultipartSessionAuthRequiredError extends GislApiError 
     constructor(statusCode: number, errorMessage: string, path?: string, options?: GislApiErrorOptions);
 }
 /**
+ * 415 — the upload's file type is one NO tier can process (eWtnqHZm; api
+ * A1hdxtPC). An upgrade does not help, unlike {@link GislTierRestrictedError}
+ * (403 `tier_restriction`, where some tier does permit the type). Thrown from
+ * `uploadFile()` (single-shot and multipart initiate). Dispatched on the status
+ * alone: the contract models the body as a plain `ErrorEnvelope`, and the
+ * machine code (`UNSUPPORTED_FILE_TYPE`) is on `.errorCode`.
+ */
+export declare class GislUnsupportedFileTypeError extends GislApiError {
+    constructor(statusCode: number, errorMessage: string, path?: string, options?: GislApiErrorOptions);
+}
+/**
  * Optional structured metadata attached to a {@link GislConfigError}. The
  * preset resolver (T4b) raises errors with these fields populated so
  * callers can branch on machine-readable codes rather than parsing the
