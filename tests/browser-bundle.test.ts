@@ -199,7 +199,12 @@ describe('package.json browser field', () => {
 });
 
 describe('browser entry — export surface', () => {
-  it('is a strict subset of the node entry, omitting only the Node-only symbols', async () => {
+  // A COLD import of both entry points: this file runs in its own vitest
+  // invocation, so the whole src graph is transformed inside this test. Measured
+  // on the arm64 CI server over 9 runs (2026-09-25): 3.8-4.6 s, against vitest's
+  // 5 s default, and it timed out once at 5.15 s. 30 s is headroom for a busy
+  // slot, not a hiding place: a real hang still fails.
+  it('is a strict subset of the node entry, omitting only the Node-only symbols', { timeout: 30_000 }, async () => {
     const browser = await import('../src/index.browser.js');
     const node = await import('../src/index.js');
 
