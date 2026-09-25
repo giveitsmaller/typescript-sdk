@@ -46,7 +46,7 @@ describe('GislAuthRejectionError is on the public surface', () => {
     const thrown = new GislAuthRejectionError(
       422,
       'Email already registered',
-      { errorType: 'unprocessable_entity', message: 'Email already registered' },
+      { success: false, error: 'unprocessable_entity', errorType: 'unprocessable_entity', message: 'Email already registered' },
       '/auth/register',
     );
 
@@ -68,7 +68,7 @@ describe('GislAuthRejectionError is on the public surface', () => {
     const thrown = new GislAuthRejectionError(
       422,
       'x',
-      { errorType: 'email_same', message: 'x' },
+      { success: false, error: 'email_same', errorType: 'email_same', message: 'x' },
       '/users/me',
     );
 

@@ -89,7 +89,15 @@ describe('createWorkflowAwaitingProbe', () => {
       if (calls === 1) throw refusal('op');
       return { workflowId: 'wf' };
     });
-    await expect(createWorkflowAwaitingProbe(d.client, single, { timeoutMs: 5_000 })).resolves.toEqual({ workflowId: 'wf' });
+    // The probe wait gets the REMAINING budget, read from Date.now(). Freeze the
+    // clock so "remaining" is exactly the budget; a live clock made this 4999
+    // whenever a millisecond elapsed (flaked on the CI server, #461).
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    try {
+      await expect(createWorkflowAwaitingProbe(d.client, single, { timeoutMs: 5_000 })).resolves.toEqual({ workflowId: 'wf' });
+    } finally {
+      now.mockRestore();
+    }
     expect(d.waitForProbe).toHaveBeenCalledOnce();
     expect(d.waitForProbe.mock.calls[0][0]).toBe('file_a');
     expect(d.waitForProbe.mock.calls[0][1]).toMatchObject({ timeoutMs: 5_000 });
@@ -216,7 +224,7 @@ function mockClient() {
     if (++creates === 1) throw refusal(payload.jobs[0].id ?? 'job_0');
     return { workflowId: 'wf_1', status: 'running' };
   });
-  const waitForProbe = vi.fn(async () => landed('ok'));
+  const waitForProbe = vi.fn(async (_fileId: string) => landed('ok'));
   const client = {
     uploadFile: vi.fn(async () => ({ fileId: 'file_up', contentType: 'video/mp4', sizeBytes: 1_000 })),
     createWorkflow,

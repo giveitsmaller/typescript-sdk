@@ -29,7 +29,7 @@ const caps = JSON.parse(
 ) as { operations: Record<string, { availability?: string; input?: { model?: string } }> };
 
 // Ops with a dedicated builder. Everything else in MULTI_INPUT_OPERATION_TYPES
-// is builderless. (A typed Record would not help: CI does not type-check tests.)
+// is builderless.
 const HAS_BUILDER: Record<string, boolean> = {
   merge: true,
   archive: true,

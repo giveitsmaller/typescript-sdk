@@ -271,7 +271,7 @@ function isMergeOptions(value) {
 }
 /**
  * Runtime source of {@link MultiInputOperationType}, so the conformance test can
- * compare it to the contract (the test files are not type-checked in CI).
+ * compare it to the contract at runtime; a type alone has no values to compare.
  *
  * @internal Not re-exported from the package entry points.
  */

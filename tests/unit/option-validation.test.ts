@@ -338,16 +338,14 @@ describe('duplicated verb bodies reject invalid bags too', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Compile-time documentation (NOT the enforcement gate).
+// Compile-time guards.
 //
 // The typed `ConvertOptions` / `ThumbnailOptions` interfaces forbid an unknown
 // key / a missing required dimension at `tsc` time. The `@ts-expect-error` lines
-// below DOCUMENT that compile-time rejection. They are NOT the gate, because
-// `tests/` is excluded from the package tsconfig (so these lines are never
-// type-checked in CI). The ACTUAL compile-time enforcement is the source-level
+// below assert that rejection, and since jKfm0IOu they are checked: CI runs
+// `npm run check:tests` (`tsc -p tsconfig.test.json`). The source-level
 // `Equal<...>` assertions in `src/ergonomic/option_types.ts` (checked when the
-// package builds). These remain as living documentation of the intended caller
-// experience and as the RUNTIME guard's typed counterpart.
+// package builds) remain the primary guard; these pin the caller experience.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------

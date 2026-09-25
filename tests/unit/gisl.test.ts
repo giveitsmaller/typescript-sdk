@@ -464,11 +464,9 @@ describe('single-op builder option validation (ExVcchMz)', () => {
   // nothing at runtime — the value is the `@ts-expect-error` compile guard; the
   // builders are never invoked, so no upload/create fires. Mirrors the multi-input
   // `operation()` type-guard block below.
-  // ⚠️ THIS IS NOT TYPE-CHECKED BY ANY GATE. The line here used to claim
-  // "(Enforced by `tsc -p tsconfig.test.json`.)" — nothing invokes that config.
-  // `npm run check` is `tsc -p tsconfig.json`, whose `exclude` lists `tests`, which
-  // is precisely why `src/_audit.ts` lives in `src/`. A reader trusting the old claim
-  // would add a test-side type assertion and get silence. Ticket `04qIcrNk`.
+  // Enforced by `npm run check:tests` (`tsc -p tsconfig.test.json`), which CI and
+  // `make project/test` run since jKfm0IOu. Until then nothing invoked that config
+  // and these guards were inert (04qIcrNk).
   it('rejects single-op convert/thumbnail bad bags at compile time (uFbM31dC)', async () => {
     const c = await client();
     // @ts-expect-error — single-op convert requires `output_format` in the bag.
