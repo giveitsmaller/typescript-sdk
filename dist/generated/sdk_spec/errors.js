@@ -2,6 +2,20 @@
 // Source: compression_contracts/sdk-spec/ (see sdk-spec/README.md).
 // Regenerate with: scripts/generate.py.
 export const ERROR_CODES = Object.freeze({
+    "response_contract_violation": Object.freeze({
+        code: "response_contract_violation",
+        category: "api",
+        source: "SDK_local",
+        status: "planned",
+        httpStatus: null,
+        retryable: false,
+        sdkClass: "GislResponseContractError",
+        description: "The API answered 2xx but the body does not match the contract (a required field missing, or a field of the wrong type), so the SDK could not read it. Distinct from a transport failure and from an API error: typically the SDK and the API are on different contract versions, for example during a co-land. Not retryable: re-reading the same host returns the same body. Requested by sdks (u6Q9oxuI) so a raw deserialiser TypeError never escapes a typed public method; sdks promote it to wired with the class.",
+        metadataSchema: Object.freeze({
+            "operation": "string",
+            "path": "string",
+        }),
+    }),
     "stream_host_not_declared": Object.freeze({
         code: "stream_host_not_declared",
         category: "config",
@@ -753,6 +767,7 @@ export const ERROR_CODES = Object.freeze({
 });
 export const ERROR_CATEGORIES = Object.freeze({
     api: Object.freeze([
+        "response_contract_violation",
         "feature_tier_restricted",
         "tier_restriction",
         "multipart_session_not_found",
