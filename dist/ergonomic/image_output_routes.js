@@ -74,21 +74,21 @@ const EXT_TOKEN = {
  */
 export const IMAGE_OUTPUT_ROUTES = {
     same_format: {
-        avif: { honored: ['auto_orient', 'avif_speed', 'color_profile', 'encoding_mode', 'fit', 'height', 'metadata', 'output_format', 'quality', 'quality_preset', 'target_size_bytes', 'width'], planned: [] },
-        gif: { honored: ['auto_orient', 'color_profile', 'fit', 'height', 'metadata', 'output_format', 'quality', 'width'], planned: [] },
-        jpeg: { honored: ['auto_orient', 'chroma_subsampling', 'color_profile', 'encoding_mode', 'fit', 'height', 'lossless', 'metadata', 'output_format', 'progressive', 'quality', 'quality_preset', 'target_size_bytes', 'width'], planned: [] },
-        png: { honored: ['auto_orient', 'color_profile', 'fit', 'height', 'metadata', 'optimization_level', 'output_format', 'quality', 'width'], planned: [] },
-        svg: { honored: ['metadata', 'output_format'], planned: [] },
-        tiff: { honored: ['auto_orient', 'color_profile', 'fit', 'height', 'metadata', 'output_format', 'quality', 'width'], planned: [] },
-        webp: { honored: ['auto_orient', 'color_profile', 'encoding_mode', 'fit', 'height', 'lossless', 'metadata', 'output_format', 'quality', 'quality_preset', 'target_size_bytes', 'width'], planned: [] },
+        avif: { honored: ['auto_orient', 'avif_speed', 'color_profile', 'encoding_mode', 'fit', 'height', 'metadata', 'output_format', 'quality', 'quality_preset', 'target_size_bytes', 'width'], planned: [], inert: [] },
+        gif: { honored: ['auto_orient', 'color_profile', 'fit', 'height', 'metadata', 'output_format', 'quality', 'width'], planned: [], inert: [] },
+        jpeg: { honored: ['auto_orient', 'chroma_subsampling', 'color_profile', 'encoding_mode', 'fit', 'height', 'lossless', 'metadata', 'output_format', 'progressive', 'quality', 'quality_preset', 'target_size_bytes', 'width'], planned: [], inert: [] },
+        png: { honored: ['auto_orient', 'color_profile', 'fit', 'height', 'metadata', 'output_format', 'quality', 'width'], planned: [], inert: ['optimization_level'] },
+        svg: { honored: ['metadata', 'output_format'], planned: [], inert: [] },
+        tiff: { honored: ['auto_orient', 'color_profile', 'fit', 'height', 'metadata', 'output_format', 'quality', 'width'], planned: [], inert: [] },
+        webp: { honored: ['auto_orient', 'color_profile', 'encoding_mode', 'fit', 'height', 'lossless', 'metadata', 'output_format', 'quality', 'quality_preset', 'target_size_bytes', 'width'], planned: [], inert: [] },
     },
     format_change: {
-        avif: { honored: ['auto_orient', 'color_profile', 'fit', 'height', 'output_format', 'quality', 'width'], planned: ['metadata'] },
-        gif: { honored: ['auto_orient', 'color_profile', 'fit', 'height', 'output_format', 'width'], planned: ['metadata'] },
-        jpeg: { honored: ['auto_orient', 'background', 'color_profile', 'fit', 'height', 'output_format', 'quality', 'width'], planned: ['metadata'] },
-        png: { honored: ['auto_orient', 'color_profile', 'fit', 'height', 'output_format', 'width'], planned: ['metadata'] },
-        tiff: { honored: ['auto_orient', 'color_profile', 'fit', 'height', 'output_format', 'width'], planned: ['metadata'] },
-        webp: { honored: ['auto_orient', 'color_profile', 'fit', 'height', 'output_format', 'quality', 'width'], planned: ['metadata'] },
+        avif: { honored: ['auto_orient', 'color_profile', 'fit', 'height', 'output_format', 'quality', 'width'], planned: ['metadata'], inert: [] },
+        gif: { honored: ['auto_orient', 'color_profile', 'fit', 'height', 'output_format', 'width'], planned: ['metadata'], inert: [] },
+        jpeg: { honored: ['auto_orient', 'background', 'color_profile', 'fit', 'height', 'output_format', 'quality', 'width'], planned: ['metadata'], inert: [] },
+        png: { honored: ['auto_orient', 'color_profile', 'fit', 'height', 'output_format', 'width'], planned: ['metadata'], inert: [] },
+        tiff: { honored: ['auto_orient', 'color_profile', 'fit', 'height', 'output_format', 'width'], planned: ['metadata'], inert: [] },
+        webp: { honored: ['auto_orient', 'color_profile', 'fit', 'height', 'output_format', 'quality', 'width'], planned: ['metadata'], inert: [] },
     },
 };
 /** The bare format token for a MIME type, or undefined if not a known image MIME. */
@@ -122,6 +122,7 @@ export function resolveOutputRoute(inputToken, outputFormat) {
             inputToken,
             honored: new Set(cell.honored),
             planned: new Set(cell.planned),
+            inert: new Set(cell.inert),
         };
     }
     const cell = IMAGE_OUTPUT_ROUTES.format_change[outToken];
@@ -144,6 +145,7 @@ export function resolveOutputRoute(inputToken, outputFormat) {
         inputToken,
         honored: new Set([...transcoderHonored, ...inputGated]),
         planned: new Set(cell.planned),
+        inert: new Set(cell.inert),
     };
 }
 /**

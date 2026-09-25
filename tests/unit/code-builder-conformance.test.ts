@@ -256,7 +256,7 @@ describe('code-builder compress conformance', () => {
   // Assertion 2a — routed keys are actually reachable through their target verb, on the
   // ACTUAL media/route (per-format for images, media-scoped for convert). This is what
   // prevents a wrong routing entry (or a per-format masking gap) from silently passing.
-  it('cross-verb routed keys are honored by their target verb on every applicable route', () => {
+  it('cross-verb routed keys are accepted (honored or inert) by their target verb on every applicable route', () => {
     for (const { group, key } of inScopeEntries()) {
       if (classify(group, key) !== 'routing') continue;
       const media = sdkMediaFor(group);
@@ -269,9 +269,12 @@ describe('code-builder compress conformance', () => {
           expect(token, `unknown image mime '${mime}' in group '${group}'`).toBeDefined();
           const cell = IMAGE_OUTPUT_ROUTES.same_format[token!];
           expect(cell, `no same_format route for token '${token}'`).toBeDefined();
+          // ACCEPTED is honored OR inert: an inert key (contract inert_options,
+          // e.g. PNG optimization_level) is still taken by output(), it just
+          // has no effect. What must never happen is output() refusing it.
           expect(
-            cell!.honored,
-            `${group}.${key} routes to output() but is not honored on the '${token}' route`,
+            [...cell!.honored, ...cell!.inert],
+            `${group}.${key} routes to output() but is not accepted on the '${token}' route`,
           ).toContain(key);
         }
       } else {

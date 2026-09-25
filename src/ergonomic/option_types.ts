@@ -247,7 +247,7 @@ export interface OutputOptions {
   background?: string;
   /** Progressive JPEG. Honored: same_format jpeg only. */
   progressive?: boolean;
-  /** PNG lossless optimisation effort. Honored: same_format png only. */
+  /** PNG only. Accepted but has NO effect: the server takes it and ignores it (contract `inert_options`). PNG compress is lossy at every quality. */
   optimization_level?: number;
   /** AVIF encode speed. Honored: same_format avif only. */
   avif_speed?: number;

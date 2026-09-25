@@ -1161,7 +1161,7 @@ export class Recipe {
                 throw new GislConfigError(`output(): '${key}' is advertised but not available yet on the ${resolved.route} route ` +
                     `for '${resolved.inputToken}' images (planned). It will work once stable-flipped.`, { reason: 'feature_not_available', conflictingFields: [key] });
             }
-            if (!resolved.honored.has(key)) {
+            if (!resolved.honored.has(key) && !resolved.inert.has(key)) {
                 throw new GislConfigError(`output(): '${key}' is not honored on the ${resolved.route} route ` +
                     `(${resolved.inputToken} → ${requested ?? resolved.inputToken}). ` +
                     'Check it applies to this format/route combination.', { reason: 'option_not_on_route', conflictingFields: [key] });

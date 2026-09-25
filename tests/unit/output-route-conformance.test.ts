@@ -33,6 +33,7 @@ interface RouteCell {
   source_op: string;
   honored_options: string[];
   planned_options: string[];
+  inert_options: string[];
 }
 interface Projection {
   media: {
@@ -88,6 +89,10 @@ describe('IMAGE_OUTPUT_ROUTES conformance with image-output-routes.json', () => 
 
           it('planned options match', () => {
             expect([...IMAGE_OUTPUT_ROUTES[route][fmt]!.planned].sort()).toEqual([...cell.planned_options].sort());
+          });
+
+          it('inert options match', () => {
+            expect([...IMAGE_OUTPUT_ROUTES[route][fmt]!.inert].sort()).toEqual([...cell.inert_options].sort());
           });
         });
       }
@@ -229,6 +234,7 @@ describe('output verb allowlist conformance', () => {
       for (const cell of Object.values(img[route])) {
         for (const k of cell.honored_options) keys.add(k);
         for (const k of cell.planned_options) keys.add(k);
+        for (const k of cell.inert_options) keys.add(k);
       }
     }
     return keys;

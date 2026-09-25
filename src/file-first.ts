@@ -1556,7 +1556,7 @@ export class Recipe {
           { reason: 'feature_not_available', conflictingFields: [key] },
         );
       }
-      if (!resolved.honored.has(key)) {
+      if (!resolved.honored.has(key) && !resolved.inert.has(key)) {
         throw new GislConfigError(
           `output(): '${key}' is not honored on the ${resolved.route} route ` +
             `(${resolved.inputToken} → ${requested ?? resolved.inputToken}). ` +

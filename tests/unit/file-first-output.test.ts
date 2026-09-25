@@ -104,7 +104,7 @@ describe('output() — route-aware option gating', () => {
     );
   });
 
-  it('optimization_level honored on same-format png only', () => {
+  it('optimization_level is accepted (inert) on same-format png only', () => {
     expect(soleOp(new Recipe(fileInput.path('a.png')).output('png', { optimization_level: 6 })).options).toMatchObject({
       optimization_level: 6,
     });

@@ -39,6 +39,13 @@ export declare const FACADE_MANAGED_OUTPUTS: readonly string[];
 interface RouteCell {
     readonly honored: readonly string[];
     readonly planned: readonly string[];
+    /**
+     * Accepted but INERT: the key is sent and the server takes it, but it has no
+     * effect on this route (contract `inert_options`, `honored_on: []`). Today
+     * only PNG `optimization_level`. Accepted, not refused: refusing would break
+     * a caller the contract still admits.
+     */
+    readonly inert: readonly string[];
 }
 /**
  * Per-route, per-output-format honored + planned option keys, mirroring
@@ -65,6 +72,8 @@ export interface ResolvedOutputRoute {
     readonly honored: ReadonlySet<string>;
     /** Planned option keys → gate as `feature_not_available`. */
     readonly planned: ReadonlySet<string>;
+    /** Accepted-but-inert option keys: sent, never refused, no effect. */
+    readonly inert: ReadonlySet<string>;
 }
 /** The bare format token for a MIME type, or undefined if not a known image MIME. */
 export declare function tokenForMime(mime: string): string | undefined;
