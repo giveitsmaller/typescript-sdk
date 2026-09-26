@@ -63,22 +63,6 @@ const METHOD_ENDPOINTS: Record<AllowlistedMethod, readonly string[]> = {
 };
 
 /**
- * ⚠️ CONTRACT-VS-API DISAGREEMENTS. The contract marks these `optional`, but the
- * API requires authentication — measured 2026-09-26 in compression_api
- * `compression/config/packages/security.yaml` access_control (origin/main
- * 566d3350): `^/api/uploads/multipart/initiate$` and
- * `^/api/operations/[^/]+/retry$` are `IS_AUTHENTICATED_FULLY`. The API is the
- * source of truth for what a guest may do, so they stay off the guest surface.
- * Delete these exclusions when the contract is corrected; the stale-exclusion
- * check below goes red on its own once it is.
- */
-const API_REQUIRES_AUTH_MULTIPART =
-  'contract says optional, but the API requires auth on multipart initiate (security.yaml ' +
-  'IS_AUTHENTICATED_FULLY), so a guest cannot start a multipart upload and complete is unreachable';
-const API_REQUIRES_AUTH_RETRY =
-  'contract says optional, but the API requires auth on retry (security.yaml IS_AUTHENTICATED_FULLY)';
-
-/**
  * Every public method NOT on the allowlist, with the endpoints it reaches. The
  * reason is the contract's `required` unless `policy` says otherwise.
  */
@@ -103,10 +87,7 @@ const EXCLUDED_METHODS: Record<ExcludedMethod, { endpoints: readonly string[]; p
   probeUpload: { endpoints: ['POST /api/uploads/{id}/probe'] },
   waitForProbe: { endpoints: ['POST /api/uploads/{id}/probe'] },
   preflightClips: { endpoints: ['POST /api/uploads/{id}/probe'] },
-  retryOperation: {
-    endpoints: ['POST /api/operations/{id}/retry'],
-    policy: API_REQUIRES_AUTH_RETRY,
-  },
+  retryOperation: { endpoints: ['POST /api/operations/{id}/retry'] },
   login: {
     endpoints: ['POST /api/auth/login'],
     policy:
@@ -118,9 +99,6 @@ const EXCLUDED_METHODS: Record<ExcludedMethod, { endpoints: readonly string[]; p
 
 /** Non-`required` endpoints no allowlisted method reaches, and why. */
 const ENDPOINT_EXCLUSIONS: Record<string, string> = {
-  'POST /api/uploads/multipart/initiate': API_REQUIRES_AUTH_MULTIPART,
-  'POST /api/uploads/multipart/complete': API_REQUIRES_AUTH_MULTIPART,
-  'POST /api/operations/{id}/retry': API_REQUIRES_AUTH_RETRY,
   'GET /healthz': 'infrastructure probe; the SDK has no method for it',
   'GET /readyz': 'infrastructure probe; the SDK has no method for it',
   'POST /api/auth/login': 'policy exclusion: see EXCLUDED_METHODS.login',
