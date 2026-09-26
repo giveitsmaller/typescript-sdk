@@ -61,7 +61,11 @@ function installFakeFile(
   openMock.mockImplementation(async () => {
     opened += 1;
     return {
-      read: vi.fn(
+      // A PLAIN function, not vi.fn: a spy records every argument, and the
+      // buffer argument is a 16 MiB chunk, so the >5 GiB test kept all ~320 of
+      // them alive (5 GB RSS; it OOM-killed the shared CI host, JrKTnHD2).
+      // `reads` records what the assertions need: position and length.
+      read: (
         async (
           buffer: Buffer,
           offset: number,
@@ -86,7 +90,7 @@ function installFakeFile(
             return { bytesRead: length - 1 }; // simulate truncation mid-upload
           }
           return { bytesRead: length };
-        },
+        }
       ),
       close: vi.fn(async () => {
         closed += 1;
@@ -135,7 +139,10 @@ describe('streaming upload (string-path branch)', () => {
     chunkSize: number,
     totalParts: number,
   ): void {
-    fetchSpy.mockImplementation(async (url: string, opts?: RequestInit) => {
+    // A PLAIN fetch, not the spy: every S3 PUT's body is a chunk Blob, and a
+    // spy would retain all of them for the life of the test (JrKTnHD2). No
+    // test that uses this helper asserts fetch calls.
+    vi.stubGlobal('fetch', async (url: string, opts?: RequestInit) => {
       if (url.endsWith('/api/uploads/multipart/initiate')) {
         const presigned: Array<{
           part_number: number;

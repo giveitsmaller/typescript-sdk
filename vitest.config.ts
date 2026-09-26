@@ -42,8 +42,10 @@ export default defineConfig({
         // that keeps a leak in the main process from taking a shared VM.
         // execArgv wins over NODE_OPTIONS for this child, so lowering the
         // script's number alone would NOT change the worker.
-        // ⇒ CI has no main-process bound. The 05-28 property therefore holds
-        // locally and only half-holds in CI, where the runner is not shared.
+        // ⇒ CI sets the same NODE_OPTIONS on its TS test step since JrKTnHD2
+        // (2026-09-26), when the runner had BECOME shared and a runaway took
+        // the host down. That runaway was external ArrayBuffers (see below),
+        // which neither bound reaches.
         //
         // ⚠️ And this caps V8's OLD SPACE, not RSS: code space, external
         // ArrayBuffers and pages V8 has freed but not returned to the OS all
