@@ -427,7 +427,9 @@ export declare class GislStreamHostNotDeclaredError extends GislConfigError {
 }
 /**
  * The caller used `gisl.anonymous()` and then invoked an operation that is
- * not in the anonymous-capable allowlist. Local-only — thrown before any I/O.
+ * not in the anonymous-capable allowlist, or uploaded a file too large for the
+ * single-shot path (a guest cannot upload multipart). Local-only — thrown
+ * before any request.
  * Distinct from server-side `GislAuthError` (401/403 on the wire).
  */
 export declare class GislFeatureRequiresAuthError extends GislConfigError {

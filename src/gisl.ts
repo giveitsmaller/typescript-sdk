@@ -5,19 +5,17 @@
  * developer writing `import { gisl } from '@giveitsmaller/sdk'` and then
  * `const client = await gisl.create();`.
  *
- * Scope of this card (T1, `wVU4xHx3`):
- * - `gisl.create()` — full functionality. Resolves credentials + endpoint
- *   via `credentials.ts`, fails early with `GislMissingCredentialsError`
- *   when no apiKey is found AND the caller hasn't opted into cookie-mode
- *   or anonymous mode.
- * - INTERNAL `_gislAnonymous` capability + `ANONYMOUS_ALLOWLIST` constant
- *   are wired but NOT publicly exported until the free-tier launch decides
- *   which operations are anonymous-capable (plan §12 open decision). A
- *   non-empty allowlist + the named export will arrive in a follow-up PR
- *   the moment user picks; this card avoids shipping a dead `gisl.anonymous()`.
+ * Two factories:
+ * - `gisl.create()` — resolves credentials + endpoint via `credentials.ts`,
+ *   fails early with `GislMissingCredentialsError` when no apiKey is found
+ *   AND the caller hasn't opted into cookie-mode. It never falls back to
+ *   anonymous: a missing key there is usually a misconfiguration.
+ * - `gisl.anonymous()` — the explicit opt-in to the no-credential flow
+ *   (`OuegCUtq`). Gated by `ANONYMOUS_ALLOWLIST`, which is pinned to the
+ *   endpoints the vendored contract marks anonymous-capable.
  */
 
-import { GislClient } from './client.js';
+import { GislClient, _markAnonymousClient } from './client.js';
 import {
   GislConfigError,
   GislFeatureRequiresAuthError,
@@ -31,12 +29,13 @@ import {
   type ResolveEndpointOptions,
 } from './credentials.js';
 import type { CreditsUsageOptions, GislClientConfig, CapabilitiesSnapshot } from './types.js';
-import type {
-  AccountLimits,
-  CreditsBalanceResponse,
-  CreditsUsageResponse,
-  OperationCapability,
-  OperationType,
+import {
+  UploadThresholdsSingleShotMaxBytesEnum,
+  type AccountLimits,
+  type CreditsBalanceResponse,
+  type CreditsUsageResponse,
+  type OperationCapability,
+  type OperationType,
 } from '@giveitsmaller/contracts/openapi';
 import { OperationBuilder } from './builder.js';
 import {
@@ -49,25 +48,84 @@ import { MergeBuilder, asset, type Asset, type MergeOptions } from './merge.js';
 import { PresetDefaults } from './ergonomic/presets/index.js';
 import { Recipe, FilesRecipe, BatchRecipe, fileInput, type FileInput } from './file-first.js';
 import { Handle } from './handle.js';
+import { createWorkflowAwaitingProbe, type CreateAwaitingProbeOptions } from './probe-pending.js';
+import type { ReadCapabilityOptions, UploadOptions, WaitOptions, WorkflowCreatePayload } from './types.js';
+// Remapped to the throwing browser stub by the package.json `browser` field,
+// exactly as for client.ts: a path-string upload is Node-only either way.
+import { stat } from './node-fs.js';
 
 // ---------------------------------------------------------------------------
 // Anonymous-capable operation allowlist (internal)
 // ---------------------------------------------------------------------------
 
 /**
- * Operations that may be invoked on a `gisl.anonymous()` client without
- * raising `GislFeatureRequiresAuthError`. Empty until the free-tier launch
- * decision lands (plan §12). Typed as a `readonly []` tuple (NOT
- * `readonly string[]`) so the audit-gate compile-time assertion in
- * `_audit.ts` fires if a future PR widens this without flipping the
- * parking-decision + adding the public `gisl.anonymous()` export.
+ * Low-level `GislClient` methods that may be invoked on a `gisl.anonymous()`
+ * client. Every other method throws `GislFeatureRequiresAuthError` before any
+ * I/O.
  *
- * Consumers must not depend on its emptiness today — only `package.json`
- * `exports` keeps deep-imports blocked; the marker is internal.
+ * ⚠️ THIS LIST IS DERIVED, NOT CHOSEN (owner decision 610(4): the guest
+ * surface is exactly what the API accepts). Each entry is here because every
+ * endpoint it can reach on an anonymous client is marked `auth: optional` (or
+ * `anonymous`) in the vendored `availability.json` AND is open to guests in the
+ * API:
  *
- * @internal
+ * | method | endpoint(s) |
+ * |---|---|
+ * | `uploadFile` | `POST /api/uploads` ONLY. A guest upload is single-shot: a file over the 10,000,000-byte single-shot cap, or a `resumeUploadId`, is refused locally before any request (see below). |
+ * | `getMetadata` | `GET /api/uploads/{id}/metadata` |
+ * | `createWorkflow` | `POST /api/workflows` |
+ * | `createWorkflowAwaitingProbe` | `POST /api/workflows` (its probe wait goes back through this gate, so it cannot reach the `required` probe endpoint) |
+ * | `getWorkflowStatus`, `waitForWorkflow` | `GET /api/workflows/{id}/status` |
+ * | `getWorkflowDownloads` | `GET /api/workflows/{id}/downloads` |
+ * | `streamEvents` | `GET /api/workflows/{id}/events` |
+ * | `getSchema` | `GET /api/operations/schema` |
+ * | `submitContact` | `POST /api/contact` |
+ * | `maybeWaitForVideoProbe` | none — a no-op on an anonymous client, because the probe endpoint is `required` and the wait is best-effort by design |
+ *
+ * ⚠️ WHERE THE CONTRACT AND THE API DISAGREE, THE API WINS (hub directive).
+ * Measured 2026-09-26 in compression_api `config/packages/security.yaml`
+ * (origin/main 566d3350): `POST /api/uploads/multipart/initiate` and
+ * `POST /api/operations/{id}/retry` are `IS_AUTHENTICATED_FULLY`, although
+ * `availability.json` marks both `optional`. So multipart (initiate, and the
+ * `/complete` that is useless without it) is NOT on the guest surface — which
+ * makes 10,000,000 bytes (the single-shot cap, below the API's 10 MiB guest
+ * cap) the effective guest file limit — and `retryOperation` is excluded.
+ * Both are named, reasoned exclusions in the conformance test, to be removed
+ * when the contract is corrected.
+ *
+ * `tests/unit/anonymous-allowlist-conformance.test.ts` fails in both
+ * directions: an entry reaching a `required` endpoint, or a non-`required`
+ * endpoint no entry reaches and no exclusion names.
+ *
+ * WHAT a guest may upload and run (today: images up to 10,000,000 bytes;
+ * compress, convert, thumbnail; 30 creates/IP/day) is enforced by the API, not
+ * here: the SDK surfaces the API's typed refusal rather than copying a list
+ * that would drift. The one local check is the upload size, because above it
+ * the only route is multipart, which a guest cannot use. See {@link anonymous}.
+ *
+ * @internal Not re-exported from the package entry points.
  */
-export const ANONYMOUS_ALLOWLIST = [] as const satisfies readonly string[];
+export const ANONYMOUS_ALLOWLIST = [
+  'uploadFile',
+  'getMetadata',
+  'createWorkflow',
+  'createWorkflowAwaitingProbe',
+  'getWorkflowStatus',
+  'waitForWorkflow',
+  'getWorkflowDownloads',
+  'streamEvents',
+  'getSchema',
+  'submitContact',
+  'maybeWaitForVideoProbe',
+] as const satisfies readonly (keyof GislClient)[];
+
+/**
+ * The largest file a guest can upload: the contract's single-shot cap. The
+ * API's own guest cap is 10 MiB, but multipart needs an account, so nothing
+ * above single-shot can reach it.
+ */
+const ANONYMOUS_MAX_UPLOAD_BYTES: number =
+  UploadThresholdsSingleShotMaxBytesEnum.NUMBER_10000000 satisfies number;
 
 // ---------------------------------------------------------------------------
 // Options
@@ -90,10 +148,29 @@ export interface GislCreateOptions
 }
 
 /**
- * Internal options shape for `_internalAnonymous()` — extends the public
+ * Options for {@link anonymous} — {@link GislCreateOptions} minus every way of
+ * supplying a credential. An anonymous client carries no API key, reads no
+ * `GISL_API_KEY` / `~/.gisl/credentials` profile, and sends no session cookie;
+ * it has no multipart knobs because a guest cannot upload multipart.
+ */
+export type GislAnonymousOptions = Omit<
+  GislCreateOptions,
+  | 'apiKey'
+  | 'profile'
+  | 'profilePath'
+  | 'useSessionCookie'
+  // Multipart needs an account, so a guest has no multipart to tune.
+  | 'multipartThreshold'
+  | 'multipartConcurrency'
+  | 'multipartMaxAttempts'
+  | 'multipartRetryBaseMs'
+>;
+
+/**
+ * Internal options shape for `_createInternal()` — extends the public
  * `GislCreateOptions` with the `allowAnonymous` flag. Kept off the public
- * type so callers can NOT opt into anonymous mode via `gisl.create()`
- * before the allowlist user-decision lands (codex r1 medium 9d56061c3229).
+ * type so callers can NOT opt into anonymous mode via `gisl.create()`: the
+ * only door is `gisl.anonymous()` (codex r1 medium 9d56061c3229).
  *
  * @internal
  */
@@ -126,11 +203,65 @@ export async function create(opts: GislCreateOptions = {}): Promise<ErgonomicCli
 }
 
 /**
+ * Construct an ergonomic client with NO credential — the guest front door
+ * (`OuegCUtq`):
+ *
+ * ```ts
+ * const client = await gisl.anonymous({ environment: 'staging' });
+ * const result = await client.file('photo.jpg').compress().run();
+ * ```
+ *
+ * Never reads an API key from anywhere (explicit, `GISL_API_KEY`, or the
+ * `~/.gisl/credentials` profile) and sends no session cookie, so no request it
+ * makes carries a credential of any kind.
+ *
+ * Only the methods in the anonymous allowlist — upload, workflow create, status,
+ * wait, downloads, events, metadata, schema, contact — work; everything else
+ * (credits, limits, cancel, resume, retry, list, probe, profile, login/logout…)
+ * throws `GislFeatureRequiresAuthError` before any I/O. The
+ * file-first and single-op builders (`file()`, `files()`, `compress()`, `run()`,
+ * `submit()`) work through that gate.
+ *
+ * The workflow capability token (`cap`) that an anonymous create returns is
+ * remembered per workflow and sent as `X-Workflow-Capability` on that
+ * workflow's status / downloads / events reads, so `run()` and
+ * `submit().wait()` need nothing from you. It lives only in this client: a
+ * workflow re-attached from another process (`client.workflow(id)`) has no
+ * `cap`, so read it with the low-level `getWorkflowStatus(id, { capability })`.
+ *
+ * **What a guest may do is the API's rule, not the SDK's.** The SDK does not
+ * pre-check the media, operation or quota rules, so they cannot drift from the
+ * server's; it checks only the file size, which is a transport fact (above the
+ * single-shot cap the only route is multipart). As the API enforces
+ * it today (owner decision 610(4); not yet declared machine-readably in the
+ * contract, so it is stated here rather than pinned):
+ * - uploads: images only, at most 10,000,000 bytes per file, single-shot. The
+ *   API's guest cap is 10 MiB, but multipart needs an account, so the
+ *   single-shot cap is the one that binds. A larger file is refused HERE,
+ *   before any request, with `GislFeatureRequiresAuthError`; a non-image is
+ *   refused by the API as a `GislTierRestrictedError` (`restrictionKind`
+ *   `mime_type`).
+ * - operations: `compress`, `convert` and `thumbnail`. Anything else is a 403
+ *   at workflow create: a `GislApiError` with `errorCode`
+ *   `ANONYMOUS_OPERATION_NOT_ALLOWED`.
+ * - 30 workflow creates per IP per 24 hours: then `GislApiError` with
+ *   `errorCode` `ANONYMOUS_QUOTA_EXHAUSTED` (plus the usual per-minute 429s).
+ *
+ * `gisl.create()` is unchanged: without a key it still throws
+ * `GislMissingCredentialsError` and never falls back to this mode.
+ */
+export async function anonymous(opts: GislAnonymousOptions = {}): Promise<ErgonomicClient> {
+  const presetDefaults = opts.presetDefaults;
+  return wrapErgonomic(await _internalAnonymous(opts), presetDefaults);
+}
+
+/**
  * Compose the ergonomic operation surface (`.compress` / `.convert` /
  * `.thumbnail`) on top of a `GislClient` via Proxy — matches the
- * `wrapAnonymous` precedent (no prototype mutation). Layer order is
- * builder-wrap INSIDE, anonymous-wrap OUTSIDE so the allowlist gate
- * runs last in `_internalAnonymous` (see `_createInternal`).
+ * `wrapAnonymous` precedent (no prototype mutation). For `gisl.anonymous()`
+ * the anonymous gate is the INNER layer and this one wraps it, so the
+ * builders this creates receive the gated client as their `target` and every
+ * low-level call they make passes the allowlist.
  */
 function wrapErgonomic(
   client: GislClient,
@@ -581,20 +712,34 @@ async function _createInternal(opts: _InternalCreateOptions): Promise<GislClient
 
   // Anonymous mode entirely BYPASSES the credential chain. Any env / profile
   // key that happens to exist on the host MUST NOT leak into the request
-  // (codex r1 high e9e1c1182d56). Cookie-mode also bypasses, since the
-  // caller authenticates via session cookie later.
+  // (codex r1 high e9e1c1182d56). `apiKey` / `profile` / `useSessionCookie`
+  // were destructured out above and are deliberately NOT re-applied: a
+  // session cookie is a credential too, and an untyped JS caller could still
+  // pass one. The client is built without them.
   if (allowAnonymous === true) {
+    // No caller-supplied header may carry a credential either (codex on the
+    // anonymous PR): Authorization and Cookie are dropped, case-insensitively.
+    const guestHeaders = transportConfig.headers === undefined
+      ? undefined
+      : Object.fromEntries(
+          Object.entries(transportConfig.headers).filter(
+            ([name]) => !['authorization', 'cookie'].includes(name.toLowerCase()),
+          ),
+        );
     const config: GislClientConfig = {
       baseUrl: resolvedBaseUrl,
       ...transportConfig,
+      ...(guestHeaders === undefined ? {} : { headers: guestHeaders }),
+      // Pinned, whatever an untyped caller passed: every upload the gate lets
+      // through (<= the single-shot cap) must route single-shot.
+      multipartThreshold: ANONYMOUS_MAX_UPLOAD_BYTES,
     };
     if (resolvedStreamBaseUrl !== null) {
       config.streamBaseUrl = resolvedStreamBaseUrl;
     }
-    if (useSessionCookie !== undefined) {
-      config.useSessionCookie = useSessionCookie;
-    }
-    return wrapAnonymous(new GislClient(config));
+    const guest = new GislClient(config);
+    _markAnonymousClient(guest);
+    return wrapAnonymous(guest);
   }
 
   // Cookie-mode: skip env / profile resolution entirely UNLESS the caller
@@ -642,46 +787,115 @@ async function _createInternal(opts: _InternalCreateOptions): Promise<GislClient
 
 /**
  * Wrap a `GislClient` so calls to non-allowlisted operations throw
- * `GislFeatureRequiresAuthError` BEFORE any I/O. This is the internal
- * capability that backs `gisl.anonymous()` once the allowlist is non-empty.
+ * `GislFeatureRequiresAuthError` BEFORE any I/O, and so the anonymous
+ * workflow capability token is threaded automatically. Backs
+ * `gisl.anonymous()`.
+ *
+ * Layering: the ergonomic Proxy wraps THIS Proxy, so every builder
+ * (`file().compress().run()`, `submit()`, `Handle`) calls the low-level client
+ * through the gate and through the `cap` store. A method on the raw client
+ * that calls another method internally (`waitForWorkflow` ->
+ * `getWorkflowStatus`) runs on the raw client, which is why the overrides below
+ * inject `cap` at each entry point rather than relying on the inner call.
  *
  * @internal
  */
 function wrapAnonymous(client: GislClient): GislClient {
-  // Explicit Set<string> — `ANONYMOUS_ALLOWLIST` is currently typed as the
-  // empty tuple `readonly []` (audit-gate parking-invariant in _audit.ts).
-  // Without this, `new Set(ANONYMOUS_ALLOWLIST)` would infer `Set<never>`.
-  const allowlist: Set<string> = new Set(ANONYMOUS_ALLOWLIST);
-  return new Proxy(client, {
+  const allowlist: ReadonlySet<string> = new Set<string>(ANONYMOUS_ALLOWLIST);
+  // workflowId -> `cap` from the anonymous create response. One entry per
+  // workflow this client created; a guest's daily allowance bounds its size.
+  const capabilityByWorkflow = new Map<string, string>();
+  const withCapability = <T extends ReadCapabilityOptions>(workflowId: string, opts: T | undefined): T => {
+    const remembered = capabilityByWorkflow.get(workflowId);
+    return (opts?.capability === undefined && remembered !== undefined
+      ? { ...opts, capability: remembered }
+      : { ...opts }) as T;
+  };
+
+  // Entry points that need more than a pass-through. Each is ALSO in the
+  // allowlist (a key outside it is unreachable: the gate throws first).
+  const overrides: Partial<Record<keyof GislClient, unknown>> = {
+    uploadFile: async (file: string | Blob, options?: UploadOptions) => {
+      if (typeof options?.resumeUploadId === 'string' && options.resumeUploadId !== '') {
+        // Resume walks `/status` and re-presigns via `/presign`: both need an
+        // account.
+        throw new GislFeatureRequiresAuthError(
+          'uploadFile',
+          'Resuming a multipart upload (resumeUploadId) is not available on an anonymous client: ' +
+            'multipart uploads require an account. Use gisl.create({apiKey}).',
+        );
+      }
+      // Multipart needs an account (the API requires auth on initiate), so a
+      // guest upload is single-shot and capped at the single-shot size. Refuse
+      // a larger file before any request rather than send an initiate the API
+      // will 401. An unreadable path is left to uploadFile's own error.
+      let size: number | undefined;
+      if (typeof file === 'string') {
+        try {
+          size = (await stat(file)).size;
+        } catch {
+          size = undefined;
+        }
+      } else {
+        size = file.size;
+      }
+      if (size !== undefined && size > ANONYMOUS_MAX_UPLOAD_BYTES) {
+        throw new GislFeatureRequiresAuthError(
+          'uploadFile',
+          `This file is ${size} bytes. Anonymous uploads are single-shot, up to ` +
+            `${ANONYMOUS_MAX_UPLOAD_BYTES} bytes; larger files need an account (multipart upload ` +
+            'requires authentication). Use gisl.create({apiKey}).',
+        );
+      }
+      return client.uploadFile(file, options);
+    },
+    createWorkflow: async (payload: WorkflowCreatePayload) => {
+      const created = await client.createWorkflow(payload);
+      if (typeof created.cap === 'string' && created.cap !== '') {
+        capabilityByWorkflow.set(created.workflowId, created.cap);
+      }
+      return created;
+    },
+    // Routed through the gated proxy (not the raw client) so the create
+    // records `cap`, and a `probe_pending` recovery's `waitForProbe` meets the
+    // gate instead of calling the auth-required probe endpoint unauthenticated.
+    createWorkflowAwaitingProbe: (payload: WorkflowCreatePayload, options?: CreateAwaitingProbeOptions) =>
+      createWorkflowAwaitingProbe(gated, payload, options),
+    getWorkflowStatus: (workflowId: string, opts?: ReadCapabilityOptions) =>
+      client.getWorkflowStatus(workflowId, withCapability(workflowId, opts)),
+    waitForWorkflow: (workflowId: string, options?: WaitOptions) =>
+      client.waitForWorkflow(workflowId, withCapability(workflowId, options)),
+    getWorkflowDownloads: (workflowId: string, opts?: ReadCapabilityOptions) =>
+      client.getWorkflowDownloads(workflowId, withCapability(workflowId, opts)),
+    streamEvents: (workflowId: string, opts?: Parameters<GislClient['streamEvents']>[1]) =>
+      client.streamEvents(workflowId, withCapability(workflowId, opts)),
+    // The probe endpoint is `required`, and the wait is best-effort by design
+    // (a give-up already proceeds to create). An anonymous client therefore
+    // skips it; the API then answers the create itself - for a guest's video,
+    // with its typed anonymous refusal rather than a 401 from the probe.
+    maybeWaitForVideoProbe: async (): Promise<void> => undefined,
+  };
+
+  const gated: GislClient = new Proxy(client, {
     get(target, prop, receiver) {
       const value = Reflect.get(target, prop, receiver);
-      if (typeof value !== 'function' || typeof prop !== 'string') {
+      if (typeof value !== 'function' || typeof prop !== 'string' || prop === 'constructor') {
         return value;
       }
-      // Allow base infrastructure methods that don't carry user operations.
-      if (
-        prop.startsWith('_') ||
-        prop === 'login' ||
-        prop === 'logout' ||
-        prop === 'getSchema' ||
-        prop === 'submitContact' ||
-        prop === 'constructor'
-      ) {
-        return value.bind(target);
-      }
-      // Allowlist gate: throw if the op isn't approved for anonymous use.
       if (!allowlist.has(prop)) {
         return () => {
           throw new GislFeatureRequiresAuthError(
             prop,
-            `Operation '${prop}' is not available on an anonymous client. ` +
-              `Use gisl.create({apiKey}) for authenticated access, or wait for the operation to be added to the anonymous allowlist.`,
+            `Operation '${prop}' is not available on an anonymous client: the API requires ` +
+              'authentication for it. Use gisl.create({apiKey}) for authenticated access.',
           );
         };
       }
-      return value.bind(target);
+      const override = overrides[prop as keyof GislClient];
+      return override !== undefined ? override : value.bind(target);
     },
   });
+  return gated;
 }
 
 // ---------------------------------------------------------------------------
@@ -689,23 +903,27 @@ function wrapAnonymous(client: GislClient): GislClient {
 // ---------------------------------------------------------------------------
 
 /**
- * The `gisl` namespace — primary ergonomic-layer entry point.
- * Exports `gisl.create()` only for v0.7; `gisl.anonymous()` lands once
- * the anonymous-capable operation allowlist is non-empty (plan §12).
+ * The `gisl` namespace - primary ergonomic-layer entry point.
+ * `gisl.create()` for an authenticated client; `gisl.anonymous()` for the
+ * no-credential guest flow.
  */
 export const gisl = {
   create,
+  anonymous,
 } as const;
 
 // Re-export the option types so callers can satisfy them by name.
 export type { Environment } from './credentials.js';
 
-// `_internalAnonymous` is the implementation behind the future public
-// `gisl.anonymous()` export. Kept underscore-prefixed so it does not
-// reach the audit gate as a public symbol.
-/** @internal */
+/**
+ * The gated LOW-LEVEL client behind `gisl.anonymous()` (no ergonomic verbs).
+ * Kept underscore-prefixed so it does not reach the audit gate as a public
+ * symbol; the public door is `gisl.anonymous()`.
+ *
+ * @internal
+ */
 export async function _internalAnonymous(
-  opts: GislCreateOptions = {},
+  opts: GislAnonymousOptions = {},
 ): Promise<GislClient> {
   return _createInternal({ ...opts, allowAnonymous: true });
 }

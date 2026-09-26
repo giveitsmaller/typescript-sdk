@@ -678,6 +678,19 @@ function normaliseStreamBaseUrl(value: string | undefined): string | null {
   return trimmed.replace(/\/+$/, '');
 }
 
+/**
+ * Clients built by `gisl.anonymous()`. Their requests are sent with
+ * `credentials: 'omit'` so no ambient cookie authenticates them.
+ *
+ * @internal Not re-exported from the package entry points.
+ */
+const ANONYMOUS_CLIENTS = new WeakSet<object>();
+
+/** @internal Marks a client as a guest client (see ANONYMOUS_CLIENTS). */
+export function _markAnonymousClient(client: object): void {
+  ANONYMOUS_CLIENTS.add(client);
+}
+
 export class GislClient {
   private readonly baseUrl: string;
   /**
@@ -820,6 +833,9 @@ export class GislClient {
         // No-op in Node (fetch ignores the field there); mandatory for
         // cross-origin browser SPAs to send the session cookie.
         ...(this.useSessionCookie ? { credentials: 'include' as const } : {}),
+        // A guest client must send NO credential: a browser's default
+        // (`same-origin`) would still attach a same-origin session cookie.
+        ...(ANONYMOUS_CLIENTS.has(this) ? { credentials: 'omit' as const } : {}),
       });
     } catch (err: unknown) {
       if (isAbortError(err)) {

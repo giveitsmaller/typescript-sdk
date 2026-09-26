@@ -133,6 +133,7 @@ GetSchemaOptions	type
 GetSchemaResult	type
 gisl	value
 GislAbortError	value+type
+GislAnonymousOptions	type
 GislApiError	value+type
 GislApiErrorOptions	type
 GislAuthError	value+type

@@ -25,6 +25,8 @@ export interface ValidationDetail {
     locale?: string;
     messageParams?: Record<string, unknown>;
 }
+/** @internal Marks a client as a guest client (see ANONYMOUS_CLIENTS). */
+export declare function _markAnonymousClient(client: object): void;
 export declare class GislClient {
     private readonly baseUrl;
     /**

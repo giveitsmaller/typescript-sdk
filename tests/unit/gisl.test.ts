@@ -64,10 +64,10 @@ describe('gisl.create', () => {
     expect(gisl.create).toBe(create);
   });
 
-  it('does NOT expose gisl.anonymous yet (parked pending allowlist user-pick)', () => {
-    // The internal capability exists at `_internalAnonymous` (task 3); the
-    // public `gisl.anonymous` named export should NOT be present in v0.7.
-    expect((gisl as Record<string, unknown>).anonymous).toBeUndefined();
+  it('exposes gisl.anonymous as the explicit guest door (OuegCUtq)', () => {
+    // Parked until owner decision 610(4); the behaviour is covered in
+    // anonymous.test.ts and the contract pin in anonymous-allowlist-conformance.
+    expect(typeof gisl.anonymous).toBe('function');
   });
 
   it('resolves apiKey from explicit arg (overriding env) — explicit wires through to GislClient', async () => {
@@ -266,7 +266,7 @@ describe('ergonomic billing/limits accessors (8yqUXLCS)', () => {
 
 // ---------------------------------------------------------------------------
 
-describe('_internalAnonymous (internal capability behind future gisl.anonymous)', () => {
+describe('_internalAnonymous (the gated low-level client behind gisl.anonymous)', () => {
   it('constructs without throwing even when no apiKey is configured', async () => {
     // Anonymous explicitly opts out of the missing-creds throw.
     const client = await _internalAnonymous();
@@ -301,79 +301,71 @@ describe('_internalAnonymous (internal capability behind future gisl.anonymous)'
     }
   });
 
-  it('throws GislFeatureRequiresAuthError for any current operation (allowlist empty in v0.7)', async () => {
+  it('throws GislFeatureRequiresAuthError for an operation outside the allowlist', async () => {
     const client = await _internalAnonymous();
-    // Any public operation method — for v0.7 this is the low-level GislClient
-    // surface, since the ergonomic builders (T2+) haven't shipped yet.
     let thrown: unknown;
     try {
-      await (client as unknown as { uploadFile: (...args: unknown[]) => Promise<unknown> }).uploadFile('photo.jpg');
+      await (client as unknown as { cancelWorkflow: (...args: unknown[]) => Promise<unknown> }).cancelWorkflow('wf');
     } catch (err) {
       thrown = err;
     }
     expect(thrown).toBeInstanceOf(GislFeatureRequiresAuthError);
     expect(thrown).toBeInstanceOf(GislConfigError);
-    expect((thrown as GislFeatureRequiresAuthError).operation).toBe('uploadFile');
+    expect((thrown as GislFeatureRequiresAuthError).operation).toBe('cancelWorkflow');
   });
 
   it('does NOT fetch when an anonymous-gated operation is called (fail-early)', async () => {
     const client = await _internalAnonymous();
     try {
-      await (client as unknown as { createWorkflow: (...args: unknown[]) => Promise<unknown> }).createWorkflow({});
+      await (client as unknown as { getCreditsBalance: () => Promise<unknown> }).getCreditsBalance();
     } catch {
       /* expected throw */
     }
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it('still permits getSchema (anonymous-safe public-metadata op)', async () => {
-    // Public-metadata endpoints (schema introspection) MUST remain reachable
-    // on an anonymous client; they're documented as separate from processing.
-    const client = await _internalAnonymous();
-    // Access the method without invoking; existence + correct type is the assertion.
-    expect(typeof (client as unknown as { getSchema: () => unknown }).getSchema).toBe(
-      'function',
-    );
+  it('lets an allowlisted operation through the gate to the transport', async () => {
+    const client = await _internalAnonymous({ baseUrl: 'https://api.example.com' });
+    let thrown: unknown;
+    try {
+      await client.getSchema();
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).not.toBeInstanceOf(GislFeatureRequiresAuthError);
+    expect(fetchSpy).toHaveBeenCalledOnce();
   });
 
-  it('invokes login/logout WITHOUT the anonymous gate (passthrough branch positively tested)', async () => {
-    // Test-reviewer finding: typeof-only assertions can't catch a regression
-    // that inverts the passthrough branch. Invoke each method through the
-    // proxy and assert NO GislFeatureRequiresAuthError is thrown — the call
-    // reaches the transport (we don't care about the response shape here,
-    // only that the gate didn't fire).
+  it('gates login and logout: an anonymous client carries no credential of any kind', async () => {
+    // login's endpoint accepts guests, but it would turn this client into a
+    // session client; logout's endpoint is auth-only. Both are refused
+    // locally (see EXCLUDED_METHODS.login in anonymous-allowlist-conformance).
     const client = await _internalAnonymous();
-    let loginErr: unknown;
-    try {
-      await (client as unknown as { login: (...args: unknown[]) => Promise<unknown> }).login(
-        'user@example.com',
-        'pw',
-      );
-    } catch (err) {
-      loginErr = err;
+    for (const op of ['login', 'logout'] as const) {
+      let thrown: unknown;
+      try {
+        await (client as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>)[op]!({});
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toBeInstanceOf(GislFeatureRequiresAuthError);
+      expect((thrown as GislFeatureRequiresAuthError).operation).toBe(op);
     }
-    expect(loginErr).not.toBeInstanceOf(GislFeatureRequiresAuthError);
-    let logoutErr: unknown;
-    try {
-      await (client as unknown as { logout: () => Promise<unknown> }).logout();
-    } catch (err) {
-      logoutErr = err;
-    }
-    expect(logoutErr).not.toBeInstanceOf(GislFeatureRequiresAuthError);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it('carries the actual operation name on GislFeatureRequiresAuthError (not hardcoded)', async () => {
-    // Test-reviewer finding: prior uploadFile-only test wouldn't catch
-    // `this.operation = 'uploadFile'` hardcoded into the error constructor.
+    // Test-reviewer finding: a single-method test wouldn't catch a hardcoded
+    // operation name in the error constructor.
     const client = await _internalAnonymous();
     let thrown: unknown;
     try {
-      await (client as unknown as { createWorkflow: (...args: unknown[]) => Promise<unknown> }).createWorkflow({});
+      await (client as unknown as { resumeWorkflow: (...args: unknown[]) => Promise<unknown> }).resumeWorkflow('wf');
     } catch (err) {
       thrown = err;
     }
     expect(thrown).toBeInstanceOf(GislFeatureRequiresAuthError);
-    expect((thrown as GislFeatureRequiresAuthError).operation).toBe('createWorkflow');
+    expect((thrown as GislFeatureRequiresAuthError).operation).toBe('resumeWorkflow');
   });
 });
 

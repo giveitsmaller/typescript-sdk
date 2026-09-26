@@ -98,8 +98,8 @@ export { BatchRecipe } from './file-first.js';
 // prior `export type { Handle }` is replaced) because `Handle` is now a class.
 export { Handle, StatusSnapshot } from './handle.js';
 // Ergonomic-layer entrypoint (T1 / wVU4xHx3) — `gisl.create()` factory +
-// credential-chain types. `gisl.anonymous()` (public export) lands once
-// the anonymous-capable operation allowlist is non-empty (plan §12).
+// credential-chain types. `gisl.anonymous()` (OuegCUtq) is the no-credential
+// guest door; it is a member of `gisl`, not a separate named export.
 export { gisl, create } from './gisl.js';
 // 🔑 THE TWO ENDPOINT TABLES, EXPORTED BECAUSE THE SDK DEMANDS A VALUE IT DID
 // NOT PUBLISH (e2e, 2026-09-15).

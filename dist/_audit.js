@@ -68,6 +68,7 @@ export function _runAudit() {
     // T1 / wVU4xHx3 — ergonomic-layer entry points.
     accept();
     accept();
+    accept();
     // T2 / xVDTIm8C — operation-builder surface.
     accept();
     // 8yqUXLCS — pin the credits/limits accessor SIGNATURES on ErgonomicClient.
