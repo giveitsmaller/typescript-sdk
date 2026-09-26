@@ -4,7 +4,7 @@
 // blobByteSource, which never touches these). Kept as a STATIC import (not a
 // dynamic one) so `vi.mock('node:fs/promises')` still intercepts it in tests.
 import { open, stat, basename } from './node-fs.js';
-import { AudioWatermarkDecodeRequestToJSON, AudioWatermarkDecodeResponseFromJSON, ExternalImportCreatedResponseFromJSON, ExternalImportRequestToJSON, LoginUser200ResponseDataFromJSON, AccountLimitsFromJSON, CreditsBalanceResponseFromJSON, BillingCheckoutRequestToJSON, BillingCheckoutSessionFromJSON, CreditsUsageResponseFromJSON, UploadResponseFromJSON, UploadProbeResponseFromJSON, MultipartInitiateResponseFromJSON, MultipartInitiateRequestMetadataHintToJSON, MultipartCompleteResponseFromJSON, MultipartCompleteRequestToJSON, WorkflowCancelResponseFromJSON, WorkflowArchiveResponseFromJSON, WorkflowRestoreResponseFromJSON, WorkflowCreateResponseFromJSON, WorkflowResumeResponseFromJSON, WorkflowStatusResponseFromJSON, WorkflowListResponseFromJSON, WorkflowDownloadResponseFromJSON, MetadataResponseFromJSON, OperationsSchemaResponseFromJSON, RetryResponseFromJSON, WorkflowStatus, AuthErrorResponseFromJSON, AuthErrorType, AuthRejectionEnvelopeFromJSON, AuthRejectionEnvelopeErrorTypeEnum, BalanceExhaustedResponseFromJSON, BalanceExhaustedResponseRequiredActionEnum, FeatureNotAvailableResponseFromJSON, FeatureTierRestrictedResponseFromJSON, LongFormConcurrencyLimitResponseFromJSON, TierRestrictionKind, TierRestrictionResponseFromJSON, UserTier, WorkflowExpiredResponseFromJSON, ProbePendingResponseFromJSON, UploadSizeExceedsTierResponseFromJSON, UploadDurationExceedsTierResponseFromJSON, UploadConstraintsAppliedProcessingClassPreAssignmentEnum, UploadThresholdsSingleShotMaxBytesEnum, UploadThresholdsMultipartChunkSizeEnum, UploadThresholdsMultipartConcurrencyDefaultEnum, } from '@giveitsmaller/contracts/openapi';
+import { AudioWatermarkDecodeRequestToJSON, AudioWatermarkDecodeResponseFromJSON, ExternalImportCreatedResponseFromJSON, ExternalImportRequestToJSON, LoginUser200ResponseDataFromJSON, AccountLimitsFromJSON, GetProfile200ResponseDataFromJSON, CreditsBalanceResponseFromJSON, BillingCheckoutRequestToJSON, BillingCheckoutSessionFromJSON, CreditsUsageResponseFromJSON, UploadResponseFromJSON, UploadProbeResponseFromJSON, MultipartInitiateResponseFromJSON, MultipartInitiateRequestMetadataHintToJSON, MultipartCompleteResponseFromJSON, MultipartCompleteRequestToJSON, WorkflowCancelResponseFromJSON, WorkflowArchiveResponseFromJSON, WorkflowRestoreResponseFromJSON, WorkflowCreateResponseFromJSON, WorkflowResumeResponseFromJSON, WorkflowStatusResponseFromJSON, WorkflowListResponseFromJSON, WorkflowDownloadResponseFromJSON, MetadataResponseFromJSON, OperationsSchemaResponseFromJSON, RetryResponseFromJSON, WorkflowStatus, AuthErrorResponseFromJSON, AuthErrorType, AuthRejectionEnvelopeFromJSON, AuthRejectionEnvelopeErrorTypeEnum, BalanceExhaustedResponseFromJSON, BalanceExhaustedResponseRequiredActionEnum, FeatureNotAvailableResponseFromJSON, FeatureTierRestrictedResponseFromJSON, LongFormConcurrencyLimitResponseFromJSON, TierRestrictionKind, TierRestrictionResponseFromJSON, UserTier, WorkflowExpiredResponseFromJSON, ProbePendingResponseFromJSON, UploadSizeExceedsTierResponseFromJSON, UploadDurationExceedsTierResponseFromJSON, UploadConstraintsAppliedProcessingClassPreAssignmentEnum, UploadThresholdsSingleShotMaxBytesEnum, UploadThresholdsMultipartChunkSizeEnum, UploadThresholdsMultipartConcurrencyDefaultEnum, } from '@giveitsmaller/contracts/openapi';
 import { GislAbortError, GislApiError, GislAuthError, GislAuthRejectionError, GislBalanceExhaustedError, GislConfigError, GislError, GislFeatureNotAvailableError, GislFeatureTierRestrictedError, GislLongFormConcurrencyError, GislMultipartPartCountError, GislMultipartPartError, GislMultipartSessionNotFoundError, GislUnsupportedFileTypeError, GislMultipartSessionOwnershipError, GislMultipartSessionAuthRequiredError, GislTierRestrictedError, GislTimeoutError, GislProbePendingError, GislResponseContractError, GislStreamHostNotDeclaredError, GislUploadCapExceededError, GislValidationError, GislWorkflowExpiredError, } from './errors.js';
 // Stream-host vocabulary for the fail-closed `streamEvents` guard. The
 // resolver itself runs in `gisl.create()`; the client only reports what a
@@ -2216,6 +2216,38 @@ export class GislClient {
     // -----------------------------------------------------------------------
     // Auth
     // -----------------------------------------------------------------------
+    /**
+     * Who am I? The identity the configured credentials resolve to
+     * (6zgxH2JI). `GET /api/auth/profile`; the envelope's `data.user` is
+     * unwrapped to {@link AuthenticatedIdentity}.
+     *
+     * Read-only and cheap, so it is safe as a precondition: compare `id`
+     * against the account you mean to act on BEFORE a destructive call such as
+     * deleting an account — an API key and a user id supplied separately are
+     * otherwise never checked against each other.
+     *
+     * @throws {GislAuthError} 401 carrying a recognised auth `error_type`.
+     * @throws {GislApiError} 401 bare `ErrorEnvelope` (e.g.
+     *   `AUTHENTICATION_REQUIRED`), and 404 `USER_NOT_FOUND` when the principal
+     *   no longer resolves to a stored user — the same dispatch as every other
+     *   call on the shared request path.
+     * @throws {GislResponseContractError} a 2xx whose body does not carry
+     *   `data.user` with a string `id`.
+     */
+    async getProfile() {
+        const path = '/api/auth/profile';
+        const data = await this.request('GET', path, {
+            deserialize: GetProfile200ResponseDataFromJSON,
+        });
+        // The generated FromJSON is lenient: a missing `user` or `id` comes back
+        // as `undefined` rather than throwing, and a whoami that silently returns
+        // no id is the one answer a pre-destructive-call check must never get.
+        const user = data?.user;
+        if (typeof user !== 'object' || user === null || typeof user.id !== 'string') {
+            throw responseContractError(path, 'expected `data.user` with a string `id`.');
+        }
+        return user;
+    }
     /**
      * Authenticate with email/password. On success the server issues a
      * session cookie via `Set-Cookie`; subsequent requests authenticate

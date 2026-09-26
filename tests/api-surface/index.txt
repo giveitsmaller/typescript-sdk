@@ -44,6 +44,7 @@ AudioWatermarkVideoDensity	value
 AudioWatermarkVideoMethod	value
 AudioWatermarkVideoOptions	type
 AudioWatermarkVideoRobustness	value
+AuthenticatedIdentity	type
 AuthErrorResponse	type
 AuthErrorType	value
 AvailabilityEntry	type

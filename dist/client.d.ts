@@ -1,4 +1,4 @@
-import type { AudioWatermarkDecodeRequest, AudioWatermarkDecodeResponse, ExternalImportCreatedResponse, ExternalImportRequest, LoginUserRequest, LoginUser200ResponseData, ContactRequest, BillingCheckoutRequest, BillingCheckoutSession, AccountLimits, CreditsBalanceResponse, CreditsUsageResponse, UploadResponse, UploadProbeResponse, WorkflowCancelResponse, WorkflowArchiveResponse, WorkflowRestoreResponse, WorkflowCreateResponse, WorkflowResumeResponse, WorkflowStatusResponse, WorkflowListResponse, WorkflowSummary, WorkflowDownloadResponse, MetadataResponse, RetryResponse } from '@giveitsmaller/contracts/openapi';
+import type { AudioWatermarkDecodeRequest, AudioWatermarkDecodeResponse, ExternalImportCreatedResponse, ExternalImportRequest, LoginUserRequest, LoginUser200ResponseData, ContactRequest, BillingCheckoutRequest, BillingCheckoutSession, AccountLimits, AuthenticatedIdentity, CreditsBalanceResponse, CreditsUsageResponse, UploadResponse, UploadProbeResponse, WorkflowCancelResponse, WorkflowArchiveResponse, WorkflowRestoreResponse, WorkflowCreateResponse, WorkflowResumeResponse, WorkflowStatusResponse, WorkflowListResponse, WorkflowSummary, WorkflowDownloadResponse, MetadataResponse, RetryResponse } from '@giveitsmaller/contracts/openapi';
 import { type CreateAwaitingProbeOptions } from './probe-pending.js';
 import type { CreditsUsageOptions, ListWorkflowsOptions, GetSchemaOptions, GetSchemaResult, GislClientConfig, GislSseEvent, GislSseParseFailure, PreflightClipsResult, ProbeWaitOptions, ProbeWaitResult, ReadCapabilityOptions, UploadOptions, WaitOptions, WorkflowCreatePayload, _Sdk3HandCodedKeepaliveResult, _Sdk3HandCodedMultipartStatusResult, _Sdk3HandCodedPresignPartsResult } from './types.js';
 export declare const MULTIPART_CONCURRENCY_DEFAULT: 4;
@@ -321,6 +321,25 @@ export declare class GislClient {
      * {@link AccountLimits} model (mirrors {@link getCreditsBalance}).
      */
     getAccountLimits(): Promise<AccountLimits>;
+    /**
+     * Who am I? The identity the configured credentials resolve to
+     * (6zgxH2JI). `GET /api/auth/profile`; the envelope's `data.user` is
+     * unwrapped to {@link AuthenticatedIdentity}.
+     *
+     * Read-only and cheap, so it is safe as a precondition: compare `id`
+     * against the account you mean to act on BEFORE a destructive call such as
+     * deleting an account — an API key and a user id supplied separately are
+     * otherwise never checked against each other.
+     *
+     * @throws {GislAuthError} 401 carrying a recognised auth `error_type`.
+     * @throws {GislApiError} 401 bare `ErrorEnvelope` (e.g.
+     *   `AUTHENTICATION_REQUIRED`), and 404 `USER_NOT_FOUND` when the principal
+     *   no longer resolves to a stored user — the same dispatch as every other
+     *   call on the shared request path.
+     * @throws {GislResponseContractError} a 2xx whose body does not carry
+     *   `data.user` with a string `id`.
+     */
+    getProfile(): Promise<AuthenticatedIdentity>;
     /**
      * Authenticate with email/password. On success the server issues a
      * session cookie via `Set-Cookie`; subsequent requests authenticate

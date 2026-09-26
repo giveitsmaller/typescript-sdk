@@ -189,4 +189,49 @@ describe('GislResponseContractError (u6Q9oxuI)', () => {
       expect(status.workflowId).toBe('wf-1');
     });
   });
+
+  describe('getProfile (6zgxH2JI) — the unwrapped data.user', () => {
+    // The generated FromJSON does not enforce `required`, so these would
+    // otherwise RESOLVE with an undefined identity.
+    it.each([
+      ['missing `user`', { success: true, data: {} }],
+      ['`user` is null', { success: true, data: { user: null } }],
+      ['`user` without an `id`', { success: true, data: { user: { email: 'a@example.com' } } }],
+      ['`id` not a string', { success: true, data: { user: { id: 42, email: 'a@example.com' } } }],
+    ])('a 200 with %s rejects typed', async (_label, body) => {
+      fetchSpy.mockResolvedValueOnce(jsonResponse(body));
+
+      const err = await rejectionOf(client.getProfile());
+
+      const e = expectContractError(err, '/api/auth/profile');
+      expect(e.message).toContain('/api/auth/profile');
+    });
+
+    it('a 200 whose body does not parse rejects typed', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        new Response('{ not json', { status: 200, headers: { 'Content-Type': 'application/json' } }),
+      );
+
+      expectContractError(await rejectionOf(client.getProfile()), '/api/auth/profile');
+    });
+
+    // Positive control.
+    it('a well-formed 200 still resolves', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            user: {
+              id: 'usr-1',
+              email: 'a@example.com',
+              tier: 'free',
+              email_verified: false,
+              created_at: '2026-08-22T10:00:00Z',
+            },
+          },
+        }),
+      );
+      expect((await client.getProfile()).id).toBe('usr-1');
+    });
+  });
 });

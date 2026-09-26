@@ -372,6 +372,7 @@ export const KNOWN_SDK_METHODS: ReadonlySet<string> = new Set([
   'getCreditsBalance',
   'getCreditsUsage',
   'getAccountLimits',
+  'getProfile',
   'getMetadata',
   'getSchema',
   'login',

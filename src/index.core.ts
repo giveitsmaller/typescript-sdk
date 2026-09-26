@@ -320,6 +320,8 @@ export type {
   AccountLimits,
   AccountLimitsLimits,
   AccountLimitEntry,
+  // 6zgxH2JI — return shape of GislClient.getProfile() (whoami).
+  AuthenticatedIdentity,
   AudioWatermarkDecodeRequest,
   AudioWatermarkDecodeResponse,
   BillingCheckoutRequest,

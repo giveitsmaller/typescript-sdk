@@ -1769,6 +1769,88 @@ describe('GislClient', () => {
     });
   });
 
+  describe('getProfile (6zgxH2JI)', () => {
+    const identity = {
+      id: 'usr-01936fb2',
+      email: 'owner@example.com',
+      name: null,
+      tier: 'pro',
+      email_verified: true,
+      pending_email: null,
+      created_at: '2026-08-22T10:00:00+00:00',
+      delete_requested_at: null,
+    };
+
+    it('GETs /api/auth/profile and unwraps data.user to the identity the key resolves to', async () => {
+      fetchSpy.mockResolvedValueOnce(jsonResponse({ success: true, data: { user: identity } }));
+
+      const me = await client.getProfile();
+      expect(me.id).toBe('usr-01936fb2');
+      expect(me.email).toBe('owner@example.com');
+      expect(me.tier).toBe('pro');
+      expect(me.emailVerified).toBe(true);
+      expect(me.createdAt).toBeInstanceOf(Date);
+      expect(me.createdAt.toISOString()).toBe('2026-08-22T10:00:00.000Z');
+
+      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('https://api.example.com/api/auth/profile');
+      expect(init.method).toBe('GET');
+      expect(init.body).toBeUndefined();
+    });
+
+    it('401 with an auth error_type → GislAuthError, as on every other call', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'API_KEY_INVALID',
+            error_type: 'api_key_invalid',
+            message: 'The provided API key is invalid or no longer recognised.',
+          },
+          401,
+        ),
+      );
+
+      const err = await client.getProfile().then(
+        () => expect.unreachable('should have thrown'),
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(GislAuthError);
+      expect((err as GislAuthError).statusCode).toBe(401);
+      expect((err as GislAuthError).payload.errorType).toBe('api_key_invalid');
+    });
+
+    it('401 bare ErrorEnvelope (AUTHENTICATION_REQUIRED) → GislApiError 401, same as the shared path', async () => {
+      // No recognised `error_type`, so TS falls through to the base class —
+      // the documented TS/PHP divergence in handleResponse, not a getProfile rule.
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({ success: false, error: 'AUTHENTICATION_REQUIRED', message: 'Authentication required.' }, 401),
+      );
+
+      const err = await client.getProfile().then(
+        () => expect.unreachable('should have thrown'),
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(GislApiError);
+      expect(err).not.toBeInstanceOf(GislAuthError);
+      expect((err as GislApiError).statusCode).toBe(401);
+      expect((err as GislApiError).errorCode).toBe('AUTHENTICATION_REQUIRED');
+    });
+
+    it('404 USER_NOT_FOUND → GislApiError', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({ success: false, error: 'USER_NOT_FOUND', message: 'User not found.' }, 404),
+      );
+
+      const err = await client.getProfile().then(
+        () => expect.unreachable('should have thrown'),
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(GislApiError);
+      expect((err as GislApiError).statusCode).toBe(404);
+    });
+  });
+
   // -----------------------------------------------------------------------
   // Single upload
   // -----------------------------------------------------------------------
