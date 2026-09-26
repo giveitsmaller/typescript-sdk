@@ -5,7 +5,7 @@
 // dynamic one) so `vi.mock('node:fs/promises')` still intercepts it in tests.
 import { open, stat, basename } from './node-fs.js';
 import { AudioWatermarkDecodeRequestToJSON, AudioWatermarkDecodeResponseFromJSON, ExternalImportCreatedResponseFromJSON, ExternalImportRequestToJSON, LoginUser200ResponseDataFromJSON, AccountLimitsFromJSON, CreditsBalanceResponseFromJSON, BillingCheckoutRequestToJSON, BillingCheckoutSessionFromJSON, CreditsUsageResponseFromJSON, UploadResponseFromJSON, UploadProbeResponseFromJSON, MultipartInitiateResponseFromJSON, MultipartInitiateRequestMetadataHintToJSON, MultipartCompleteResponseFromJSON, MultipartCompleteRequestToJSON, WorkflowCancelResponseFromJSON, WorkflowArchiveResponseFromJSON, WorkflowRestoreResponseFromJSON, WorkflowCreateResponseFromJSON, WorkflowResumeResponseFromJSON, WorkflowStatusResponseFromJSON, WorkflowListResponseFromJSON, WorkflowDownloadResponseFromJSON, MetadataResponseFromJSON, OperationsSchemaResponseFromJSON, RetryResponseFromJSON, WorkflowStatus, AuthErrorResponseFromJSON, AuthErrorType, AuthRejectionEnvelopeFromJSON, AuthRejectionEnvelopeErrorTypeEnum, BalanceExhaustedResponseFromJSON, BalanceExhaustedResponseRequiredActionEnum, FeatureNotAvailableResponseFromJSON, FeatureTierRestrictedResponseFromJSON, LongFormConcurrencyLimitResponseFromJSON, TierRestrictionKind, TierRestrictionResponseFromJSON, UserTier, WorkflowExpiredResponseFromJSON, ProbePendingResponseFromJSON, UploadSizeExceedsTierResponseFromJSON, UploadDurationExceedsTierResponseFromJSON, UploadConstraintsAppliedProcessingClassPreAssignmentEnum, UploadThresholdsSingleShotMaxBytesEnum, UploadThresholdsMultipartChunkSizeEnum, UploadThresholdsMultipartConcurrencyDefaultEnum, } from '@giveitsmaller/contracts/openapi';
-import { GislAbortError, GislApiError, GislAuthError, GislAuthRejectionError, GislBalanceExhaustedError, GislConfigError, GislError, GislFeatureNotAvailableError, GislFeatureTierRestrictedError, GislLongFormConcurrencyError, GislMultipartPartCountError, GislMultipartPartError, GislMultipartSessionNotFoundError, GislUnsupportedFileTypeError, GislMultipartSessionOwnershipError, GislMultipartSessionAuthRequiredError, GislTierRestrictedError, GislTimeoutError, GislProbePendingError, GislStreamHostNotDeclaredError, GislUploadCapExceededError, GislValidationError, GislWorkflowExpiredError, } from './errors.js';
+import { GislAbortError, GislApiError, GislAuthError, GislAuthRejectionError, GislBalanceExhaustedError, GislConfigError, GislError, GislFeatureNotAvailableError, GislFeatureTierRestrictedError, GislLongFormConcurrencyError, GislMultipartPartCountError, GislMultipartPartError, GislMultipartSessionNotFoundError, GislUnsupportedFileTypeError, GislMultipartSessionOwnershipError, GislMultipartSessionAuthRequiredError, GislTierRestrictedError, GislTimeoutError, GislProbePendingError, GislResponseContractError, GislStreamHostNotDeclaredError, GislUploadCapExceededError, GislValidationError, GislWorkflowExpiredError, } from './errors.js';
 // Stream-host vocabulary for the fail-closed `streamEvents` guard. The
 // resolver itself runs in `gisl.create()`; the client only reports what a
 // caller can do about an absent host.
@@ -132,6 +132,30 @@ function headersToRecord(headers) {
         r[k] = v;
     });
     return r;
+}
+/**
+ * Run a 2xx body through its deserialiser so a contract violation surfaces as a
+ * typed {@link GislResponseContractError} instead of a raw `TypeError`
+ * (u6Q9oxuI). EVERY deserialiser call on a success body goes through here —
+ * `tests/unit/response-contract-gate.test.ts` fails on a new unwrapped site.
+ *
+ * A `GislError` the deserialiser throws itself (the hand-coded multipart
+ * readers already raise one for a malformed envelope) passes through
+ * unchanged: it is already typed, and re-wrapping would change its message.
+ */
+function readContractBody(deserialize, raw, requestPath) {
+    try {
+        return deserialize(raw);
+    }
+    catch (err) {
+        if (err instanceof GislError)
+            throw err;
+        throw responseContractError(requestPath, err instanceof Error ? err.message : String(err), err);
+    }
+}
+function responseContractError(requestPath, detail, cause) {
+    const operation = requestPath.split('?')[0] ?? requestPath;
+    return new GislResponseContractError(`Response from ${operation} does not match the contract: ${detail}`, { operation, path: null, cause });
 }
 // Canonical human-readable fallback when a failure envelope carries NO `message`
 // field. Kept IDENTICAL to the PHP SDK (`GislClient::fallbackErrorMessage`) so a
@@ -558,6 +582,14 @@ export class GislClient {
                     contentLanguage,
                 });
             }
+            // A caller that asked for a typed body (a deserializer) cannot use a
+            // non-JSON 2xx: that is the response not matching the contract, not an
+            // empty success. Endpoints with no body (no deserializer) still return.
+            if (deserialize !== undefined) {
+                const operation = path.split('?', 1)[0];
+                throw new GislResponseContractError(`Response from ${operation} does not match the contract: expected JSON, got ` +
+                    `'${contentType || 'no content-type'}'.`, { operation });
+            }
             return undefined;
         }
         // Wire-side fields are snake_case (raw response.json() — never run through
@@ -568,11 +600,27 @@ export class GislClient {
         try {
             json = await response.json();
         }
-        catch {
+        catch (parseError) {
+            // A 2xx that claims JSON but does not parse is the body violating the
+            // contract (codex r2): the exchange succeeded. A non-2xx stays an API error.
+            if (response.ok) {
+                throw responseContractError(path, 'body is not valid JSON', parseError);
+            }
             throw new GislApiError(response.status, 'Invalid JSON response', path, undefined, {
                 responseHeaders,
                 contentLanguage,
             });
+        }
+        // A literal `null` body parses fine and then made `json.success` below a
+        // raw TypeError (u6Q9oxuI).
+        if (json === null) {
+            if (!response.ok) {
+                throw new GislApiError(response.status, 'Invalid JSON response', path, undefined, {
+                    responseHeaders,
+                    contentLanguage,
+                });
+            }
+            throw responseContractError(path, 'body is JSON null, not an envelope');
         }
         // Standard envelope: { success, data } or { success, error, details }
         if (!response.ok || json.success === false) {
@@ -768,7 +816,7 @@ export class GislClient {
             throw new GislApiError(status, errorMessage, path, json.details, { ...i18n, payload: json });
         }
         const data = json.data ?? json;
-        return deserialize ? deserialize(data) : data;
+        return deserialize ? readContractBody(deserialize, data, path) : data;
     }
     // Membership check for the AuthErrorType discriminator. Reads the generated
     // enum object directly so a future contract addition lands here without a
@@ -2073,8 +2121,18 @@ export class GislClient {
                 contentLanguage: response.headers.get('content-language') ?? undefined,
             });
         }
-        const raw = await response.json();
-        const data = OperationsSchemaResponseFromJSON(raw);
+        let raw;
+        try {
+            raw = await response.json();
+        }
+        catch (err) {
+            // Only a PARSE failure is the body's fault. Anything else (a stream
+            // dropped mid-body) keeps propagating as it did before.
+            if (!(err instanceof SyntaxError))
+                throw err;
+            throw responseContractError(path, `body is not valid JSON (${err.message})`, err);
+        }
+        const data = readContractBody(OperationsSchemaResponseFromJSON, raw, path);
         return { notModified: false, data, etag, lastModified };
     }
     /**

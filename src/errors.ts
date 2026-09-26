@@ -932,6 +932,68 @@ export class GislFanOutTimeoutError extends GislTimeoutError {
 }
 
 /**
+ * The API answered **2xx**, but the body does not match the contract — a
+ * required field is missing, or a field has the wrong type — so the SDK could
+ * not read it (`response_contract_violation`, `u6Q9oxuI`).
+ *
+ * Distinct from both of its neighbours, on purpose, so a caller can branch on
+ * it instead of catching everything and sorting afterwards:
+ *
+ * - not a {@link GislApiError} — the HTTP exchange SUCCEEDED; there is no error
+ *   envelope and no failing status to report;
+ * - not a {@link GislNetworkError} — the response arrived intact.
+ *
+ * The usual cause is the SDK and the API being on different contract versions,
+ * e.g. in the window between a producer and a consumer deploying. That is the
+ * window where a consumer must read new-OR-old, and it can only fall back from
+ * an error it was told about — which is why a raw deserialiser `TypeError` must
+ * never escape a typed public method.
+ *
+ * **Never retryable:** re-reading the same host returns the same body.
+ *
+ * - `operation` — the request path the response answered, query string
+ *   removed (e.g. `/api/workflows/{id}/status`).
+ * - `path` — the offending field when it is known, else `null`.
+ * - `cause` — the underlying deserialiser failure.
+ *
+ * ⚠️ **THE TWO SDKs DETECT DIFFERENT SUBSETS**, because each wraps what its own
+ * generated deserialiser throws. The TS `FromJSON` helpers do no validation:
+ * an absent required map or list makes them THROW (`mapValues` over
+ * `undefined`, `.map` on a non-array) — reported here, with `path` `null`
+ * because the throw does not name the field — while an absent scalar passes
+ * through as `undefined`, undetected. PHP's generated setters additionally
+ * reject out-of-range and pattern-violating values (and name the field), but
+ * leave an absent required map or list `null`. Neither SDK fails a call merely
+ * because a required field is ABSENT: new required response fields ship
+ * contract-first, and that would break every call against a producer not yet
+ * deployed. Same class, same meaning, same `retryable`.
+ *
+ * Mirrors the PHP `Gisl\Sdk\Errors\GislResponseContractError`.
+ */
+export class GislResponseContractError extends GislError {
+  readonly operation: string;
+  readonly path: string | null;
+
+  constructor(
+    message: string,
+    opts: { readonly operation: string; readonly path?: string | null; readonly cause?: unknown },
+  ) {
+    super(message);
+    this.name = 'GislResponseContractError';
+    this.operation = opts.operation;
+    this.path = opts.path ?? null;
+    if (opts.cause !== undefined) {
+      (this as { cause?: unknown }).cause = opts.cause;
+    }
+  }
+
+  /** Always `false` — re-reading the same host returns the same body. */
+  get retryable(): boolean {
+    return false;
+  }
+}
+
+/**
  * Base for every failure that happened **off the contract envelope** — the
  * request did not come back as a typed API error, it came back (or failed to)
  * at the transport or raw-HTTP level. Subclasses `GislError` rather than

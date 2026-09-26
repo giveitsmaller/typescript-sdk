@@ -163,6 +163,7 @@ GislNoSuchKeyError	value+type
 GislPerInputOptionsNotSupportedError	value+type
 GislProbePendingError	value+type
 GislRequestNotSentError	value+type
+GislResponseContractError	value+type
 GislResultNotReadyError	value+type
 GislSinkError	value+type
 GislSseEvent	type

@@ -36,6 +36,9 @@ GislTransportError, GislDownloadHttpError,
 // it can see BEFORE the call (an unparseable URL); PHP also classifies
 // PSR-18's RequestExceptionInterface, which `fetch` gives no equivalent of.
 GislRequestNotSentError, 
+// u6Q9oxuI — a 2xx whose body does not match the contract. Not a
+// GislApiError (the exchange succeeded) and never retryable.
+GislResponseContractError, 
 // T1 / wVU4xHx3 — local config-error tree (pre-I/O; sibling of GislApiError).
 GislConfigError, GislMissingCredentialsError, 
 // VUozk5Bc — `streamEvents` on a client with no DECLARED stream host. The

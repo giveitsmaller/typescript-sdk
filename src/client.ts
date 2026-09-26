@@ -110,6 +110,7 @@ import {
   GislTierRestrictedError,
   GislTimeoutError,
   GislProbePendingError,
+  GislResponseContractError,
   GislStreamHostNotDeclaredError,
   GislUploadCapExceededError,
   type GislUploadCapKind,
@@ -320,6 +321,41 @@ function headersToRecord(headers: Headers): Record<string, string> {
     r[k] = v;
   });
   return r;
+}
+
+/**
+ * Run a 2xx body through its deserialiser so a contract violation surfaces as a
+ * typed {@link GislResponseContractError} instead of a raw `TypeError`
+ * (u6Q9oxuI). EVERY deserialiser call on a success body goes through here —
+ * `tests/unit/response-contract-gate.test.ts` fails on a new unwrapped site.
+ *
+ * A `GislError` the deserialiser throws itself (the hand-coded multipart
+ * readers already raise one for a malformed envelope) passes through
+ * unchanged: it is already typed, and re-wrapping would change its message.
+ */
+function readContractBody<T>(
+  deserialize: (raw: unknown) => T,
+  raw: unknown,
+  requestPath: string,
+): T {
+  try {
+    return deserialize(raw);
+  } catch (err: unknown) {
+    if (err instanceof GislError) throw err;
+    throw responseContractError(requestPath, err instanceof Error ? err.message : String(err), err);
+  }
+}
+
+function responseContractError(
+  requestPath: string,
+  detail: string,
+  cause?: unknown,
+): GislResponseContractError {
+  const operation = requestPath.split('?')[0] ?? requestPath;
+  return new GislResponseContractError(
+    `Response from ${operation} does not match the contract: ${detail}`,
+    { operation, path: null, cause },
+  );
 }
 
 // Canonical human-readable fallback when a failure envelope carries NO `message`
@@ -829,6 +865,17 @@ export class GislClient {
           contentLanguage,
         });
       }
+      // A caller that asked for a typed body (a deserializer) cannot use a
+      // non-JSON 2xx: that is the response not matching the contract, not an
+      // empty success. Endpoints with no body (no deserializer) still return.
+      if (deserialize !== undefined) {
+        const operation = path.split('?', 1)[0]!;
+        throw new GislResponseContractError(
+          `Response from ${operation} does not match the contract: expected JSON, got ` +
+            `'${contentType || 'no content-type'}'.`,
+          { operation },
+        );
+      }
       return undefined as unknown as T;
     }
 
@@ -849,11 +896,27 @@ export class GislClient {
     };
     try {
       json = await response.json();
-    } catch {
+    } catch (parseError) {
+      // A 2xx that claims JSON but does not parse is the body violating the
+      // contract (codex r2): the exchange succeeded. A non-2xx stays an API error.
+      if (response.ok) {
+        throw responseContractError(path, 'body is not valid JSON', parseError);
+      }
       throw new GislApiError(response.status, 'Invalid JSON response', path, undefined, {
         responseHeaders,
         contentLanguage,
       });
+    }
+    // A literal `null` body parses fine and then made `json.success` below a
+    // raw TypeError (u6Q9oxuI).
+    if (json === null) {
+      if (!response.ok) {
+        throw new GislApiError(response.status, 'Invalid JSON response', path, undefined, {
+          responseHeaders,
+          contentLanguage,
+        });
+      }
+      throw responseContractError(path, 'body is JSON null, not an envelope');
     }
 
     // Standard envelope: { success, data } or { success, error, details }
@@ -1172,7 +1235,7 @@ export class GislClient {
     }
 
     const data = json.data ?? json;
-    return deserialize ? deserialize(data) : (data as T);
+    return deserialize ? readContractBody(deserialize, data, path) : (data as T);
   }
 
   // Membership check for the AuthErrorType discriminator. Reads the generated
@@ -2835,8 +2898,16 @@ export class GislClient {
       });
     }
 
-    const raw: unknown = await response.json();
-    const data = OperationsSchemaResponseFromJSON(raw);
+    let raw: unknown;
+    try {
+      raw = await response.json();
+    } catch (err: unknown) {
+      // Only a PARSE failure is the body's fault. Anything else (a stream
+      // dropped mid-body) keeps propagating as it did before.
+      if (!(err instanceof SyntaxError)) throw err;
+      throw responseContractError(path, `body is not valid JSON (${err.message})`, err);
+    }
+    const data = readContractBody(OperationsSchemaResponseFromJSON, raw, path);
     return { notModified: false, data, etag, lastModified };
   }
 

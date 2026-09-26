@@ -809,6 +809,15 @@ export async function _consumeSseToTerminal(client, args) {
                     // wire data. Deserialise via the generator-provided FromJSON helper
                     // to map snake_case -> camelCase BEFORE projecting; otherwise
                     // `data.jobRef` / `data.operationId` are undefined at runtime.
+                    //
+                    // u6Q9oxuI — DELIBERATELY NOT wrapped in GislResponseContractError. A
+                    // progress frame is advisory; the terminal state is read from the
+                    // authoritative status endpoint, which IS wrapped. This FromJSON cannot
+                    // throw on an object (missing fields project as `undefined`), and a
+                    // `null` frame fails in the projection below as a TypeError that the
+                    // mid-stream catch turns into a GislTransportError → poll fallback. Wrapping it as a contract error
+                    // (not a GislNetworkError) would turn one skippable progress frame into
+                    // a hard failure of the whole wait.
                     const data = SseOperationProgressDataFromJSON(event.data);
                     const proj = {
                         phase: 'processing',
