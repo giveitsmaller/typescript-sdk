@@ -46,6 +46,7 @@ export type ErrorCode =
   | "unsupported_value"
   | "type_mismatch"
   | "file_too_large"
+  | "anonymous_limit_exceeded"
   | "image_dimensions_too_large"
   | "unsupported_file_type"
   | "upload_failed"
@@ -648,6 +649,21 @@ export const ERROR_CODES: Readonly<Record<ErrorCode, ErrorEntry>> = Object.freez
       "max_bytes": "integer",
     }),
   }),
+  "anonymous_limit_exceeded": Object.freeze({
+    code: "anonymous_limit_exceeded",
+    category: "api" as ErrorCategory,
+    source: "ErrorEnvelope.error",
+    status: "planned" as ErrorStatus,
+    httpStatus: 403,
+    retryable: false,
+    sdkClass: "GislAnonymousLimitExceededError",
+    description: "403 — an ANONYMOUS caller's input exceeds a guest-only limit declared in schemas/anonymous-policy.yaml (today: video duration, measured on the upload probe). Wire `ANONYMOUS_LIMIT_EXCEEDED`, `error_type: anonymous_limit_exceeded`, top-level `limit` / `actual` / `maximum`. PLANNED: the API emits it with the guest allowance, part 2 (card 43dDKeEh).",
+    metadataSchema: Object.freeze({
+      "limit": "string",
+      "actual": "integer",
+      "maximum": "integer",
+    }),
+  }),
   "image_dimensions_too_large": Object.freeze({
     code: "image_dimensions_too_large",
     category: "api" as ErrorCategory,
@@ -878,6 +894,7 @@ export const ERROR_CATEGORIES: Readonly<Record<ErrorCategory, readonly ErrorCode
     "probe_pending",
     "requires_reencode",
     "file_too_large",
+    "anonymous_limit_exceeded",
     "image_dimensions_too_large",
     "unsupported_file_type",
     "workflow_failed",

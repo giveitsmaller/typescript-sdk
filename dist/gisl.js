@@ -58,15 +58,17 @@ import { stat } from './node-fs.js';
  * Multipart (initiate and complete) and `POST /api/operations/{id}/retry`
  * require an account: the API enforced that first, and since contracts
  * v2.217.0 `availability.json` says so too, so they need no exclusion. That
- * makes 10,000,000 bytes (the single-shot cap, below the API's 10 MiB guest
- * cap) the effective guest file limit, and `retryOperation` is not here.
+ * makes 10,000,000 bytes (the single-shot cap, which `anonymous-policy.yaml`
+ * also declares as the guest per-file cap) the effective guest file limit, and
+ * `retryOperation` is not here.
  *
  * `tests/unit/anonymous-allowlist-conformance.test.ts` fails in both
  * directions: an entry reaching a `required` endpoint, or a non-`required`
  * endpoint no entry reaches and no exclusion names.
  *
- * WHAT a guest may upload and run (today: images up to 10,000,000 bytes;
- * compress, convert, thumbnail; 30 creates/IP/day) is enforced by the API, not
+ * WHAT a guest may upload and run (today: any media up to 10,000,000 bytes,
+ * video at most 60 s; compress, convert, thumbnail; 30 credits per IP per
+ * rolling 24 h) is enforced by the API, not
  * here: the SDK surfaces the API's typed refusal rather than copying a list
  * that would drift. The one local check is the upload size, because above it
  * the only route is multipart, which a guest cannot use. See {@link anonymous}.
@@ -87,9 +89,9 @@ export const ANONYMOUS_ALLOWLIST = [
     'maybeWaitForVideoProbe',
 ];
 /**
- * The largest file a guest can upload: the contract's single-shot cap. The
- * API's own guest cap is 10 MiB, but multipart needs an account, so nothing
- * above single-shot can reach it.
+ * The largest file a guest can upload: the contract's single-shot cap, which
+ * `anonymous-policy.yaml` (`upload.max_file_bytes`) also declares as the guest
+ * per-file cap. Multipart needs an account, so nothing above it is reachable.
  */
 const ANONYMOUS_MAX_UPLOAD_BYTES = UploadThresholdsSingleShotMaxBytesEnum.NUMBER_10000000;
 // ---------------------------------------------------------------------------
@@ -145,19 +147,21 @@ export async function create(opts = {}) {
  * pre-check the media, operation or quota rules, so they cannot drift from the
  * server's; it checks only the file size, which is a transport fact (above the
  * single-shot cap the only route is multipart). As the API enforces
- * it today (owner decision 610(4); declared since contracts v2.217.0 in
- * `anonymous-policy.yaml`, which the contracts package ships):
- * - uploads: images only, at most 10,000,000 bytes per file, single-shot. The
- *   API's guest cap is 10 MiB, but multipart needs an account, so the
- *   single-shot cap is the one that binds. A larger file is refused HERE,
- *   before any request, with `GislFeatureRequiresAuthError`; a non-image is
- *   refused by the API as a `GislTierRestrictedError` (`restrictionKind`
- *   `mime_type`).
+ * it today (declared in `anonymous-policy.yaml` 2.0.0, contracts v2.218.0,
+ * which the contracts package ships):
+ * - uploads: all media, at most 10,000,000 bytes per file, single-shot
+ *   (multipart needs an account). A larger file is refused HERE, before any
+ *   request, with `GislFeatureRequiresAuthError`.
+ * - video: at most 60 seconds, measured on the upload probe. A longer one is
+ *   a 403 at workflow create: a `GislApiError` with `errorCode`
+ *   `ANONYMOUS_LIMIT_EXCEEDED`.
  * - operations: `compress`, `convert` and `thumbnail`. Anything else is a 403
  *   at workflow create: a `GislApiError` with `errorCode`
  *   `ANONYMOUS_OPERATION_NOT_ALLOWED`.
- * - 30 workflow creates per IP per 24 hours: then `GislApiError` with
- *   `errorCode` `ANONYMOUS_QUOTA_EXHAUSTED` (plus the usual per-minute 429s).
+ * - 30 credits per IP per rolling 24 hours, priced like a signed-in caller's
+ *   workflow. A create that would cost more than is left is refused whole
+ *   with `GislApiError` `errorCode` `ANONYMOUS_QUOTA_EXHAUSTED` (plus the
+ *   usual per-minute 429s).
  *
  * `gisl.create()` is unchanged: without a key it still throws
  * `GislMissingCredentialsError` and never falls back to this mode.
