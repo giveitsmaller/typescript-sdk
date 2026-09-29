@@ -28,16 +28,16 @@ import type { Fixture, FixtureValue, FixtureLoweringOp } from './fixtures.js';
 import { decodeBytesValue } from './fetch-stub.js';
 
 /**
- * Dhje3Faq — `thumbnail` now requires BOTH dimensions (the contract marks them
- * required). A fixture op that omits one no longer type-checks against the typed
- * `ThumbnailOptions`, so the parity adapter asserts both are present up front
- * (a fixture authoring error → a clear harness message, not a downstream throw).
+ * Project a parity thumbnail op-spec into `ThumbnailOptions`. Both dimensions are
+ * optional in the contract (gkxZIIuw), so only the dimensions the fixture supplies
+ * are passed — an absent one must stay ABSENT, never become `undefined`-valued
+ * noise. Mirrors PHP `Invoke::thumbnailOptions`.
  */
-function thumbnailDimsOf(op: FixtureLoweringOp): { width: number; height: number } {
-  if (op.width === undefined || op.height === undefined) {
-    throw new Error('[parity] thumbnail fixture must supply both width and height');
-  }
-  return { width: op.width, height: op.height };
+function thumbnailDimsOf(op: FixtureLoweringOp): { width?: number; height?: number } {
+  const dims: { width?: number; height?: number } = {};
+  if (op.width !== undefined) dims.width = op.width;
+  if (op.height !== undefined) dims.height = op.height;
+  return dims;
 }
 
 // Ergonomic-facade verbs whose dispatch is wired through `OperationBuilder`

@@ -93,9 +93,8 @@ describe('Recipe chain options — explicit options reach the wire', () => {
     // TS drops only `undefined` (the absent-key signal); the PHP mirror drops
     // `null` (its absent-key signal). Each language drops its own omission
     // sentinel — see the PHP RecipeChainOptionsTest::thumbnail_drops_a_null_value.
-    // Both REQUIRED dims are present; the dropped sentinel rides on an OPTIONAL
-    // key (`fit`) — an undefined width/height would instead throw the
-    // missing_required_field guard (assertThumbnailDimensions).
+    // The dropped sentinel rides on `fit`; an undefined width/height is dropped
+    // the same way (both dimensions are optional in the contract, gkxZIIuw).
     const ops = operations(
       recipe('photo.jpg').thumbnail({ width: 200, height: 150, fit: undefined } as never),
     );

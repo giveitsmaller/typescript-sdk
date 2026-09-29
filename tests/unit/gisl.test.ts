@@ -382,18 +382,23 @@ describe('single-op builder option validation (ExVcchMz)', () => {
   }
 
   describe('thumbnail', () => {
-    it('rejects an empty bag (missing width + height) pre-upload, no fetch', async () => {
+    // gkxZIIuw — width/height are OPTIONAL in the contract, so one or neither is
+    // accepted at the factory. The wire payload for these bags is pinned in
+    // builder.test.ts (`opType="thumbnail"` cases).
+    it('accepts a width-only, height-only or empty bag at the factory', async () => {
       const c = await client();
-      // `as never` — the tightened compile-time type rejects this bag (uFbM31dC);
-      // this test exercises the RUNTIME guard (vitest strips types), so it bypasses
-      // the compile check. Compile-time rejection is asserted separately below.
-      expect(() => c.thumbnail('photo.png', {} as never)).toThrow(GislConfigError);
+      expect(() => c.thumbnail('photo.png', { width: 320 })).not.toThrow();
+      expect(() => c.thumbnail('photo.png', { height: 240 })).not.toThrow();
+      expect(() => c.thumbnail('photo.png', {})).not.toThrow();
+      expect(() => c.thumbnail('photo.png')).not.toThrow();
       expect(fetchSpy).not.toHaveBeenCalled();
     });
 
-    it('rejects a width-only bag (missing height) pre-upload, no fetch', async () => {
+    it('rejects a null dimension pre-upload with type_mismatch, no fetch', async () => {
       const c = await client();
-      expect(() => c.thumbnail('photo.png', { width: 320 } as never)).toThrow(/height/);
+      expect(() => c.thumbnail('photo.png', { width: 320, height: null } as never)).toThrow(
+        /thumbnail height cannot be null/,
+      );
       expect(fetchSpy).not.toHaveBeenCalled();
     });
 
@@ -469,10 +474,6 @@ describe('single-op builder option validation (ExVcchMz)', () => {
     const badConvertUnknown = (): unknown => c.convert('a.png', { output_format: 'webp', bogus: 1 });
     // @ts-expect-error — `format` is the file-first alias, not the single-op wire key.
     const badConvertAlias = (): unknown => c.convert('a.png', { format: 'webp' });
-    // @ts-expect-error — thumbnail requires width + height.
-    const badThumbEmpty = (): unknown => c.thumbnail('a.png', {});
-    // @ts-expect-error — thumbnail requires height too.
-    const badThumbWidthOnly = (): unknown => c.thumbnail('a.png', { width: 320 });
     // @ts-expect-error — unknown key rejected by ThumbnailOptions.
     const badThumbUnknown = (): unknown => c.thumbnail('a.png', { width: 1, height: 1, bogus: 1 });
 
@@ -480,11 +481,17 @@ describe('single-op builder option validation (ExVcchMz)', () => {
     // surface as a plain tsc error here (not an unused-`@ts-expect-error`).
     const okConvert = (): unknown => c.convert('a.png', { output_format: 'webp', quality: 80 });
     const okThumb = (): unknown => c.thumbnail('a.png', { width: 320, height: 240, fit: 'crop' });
+    // gkxZIIuw — one or neither dimension must compile (both optional in the contract).
+    const okThumbWidthOnly = (): unknown => c.thumbnail('a.png', { width: 320 });
+    const okThumbHeightOnly = (): unknown => c.thumbnail('a.png', { height: 240 });
+    const okThumbEmpty = (): unknown => c.thumbnail('a.png', {});
+    const okThumbNoBag = (): unknown => c.thumbnail('a.png');
 
     // Reference the closures (never invoked) so no-unused-var stays quiet.
     expect(
       [badConvertEmpty, badConvertNoFormat, badConvertUnknown, badConvertAlias,
-        badThumbEmpty, badThumbWidthOnly, badThumbUnknown, okConvert, okThumb].every(
+        badThumbUnknown, okConvert, okThumb, okThumbWidthOnly, okThumbHeightOnly, okThumbEmpty,
+        okThumbNoBag].every(
         (f) => typeof f === 'function',
       ),
     ).toBe(true);

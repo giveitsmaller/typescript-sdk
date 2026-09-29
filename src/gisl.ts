@@ -329,7 +329,7 @@ function wrapErgonomic(
       if (prop === 'compress' || prop === 'convert' || prop === 'thumbnail' || prop === 'transform') {
         return (input: string | Blob, options: Record<string, unknown> = {}): OperationBuilder => {
           // ExVcchMz — validate the option bag pre-upload for the exported
-          // single-op builder so a bad bag (unknown key / missing thumbnail dims /
+          // single-op builder so a bad bag (unknown key / null thumbnail dim /
           // missing convert target) fails locally instead of as a server 422.
           // `compress` is EXCLUDED: it validates through the preset resolver
           // (resolveCompressOptions / KNOWN_WIRE_FIELDS), not these guards.
@@ -340,8 +340,9 @@ function wrapErgonomic(
           // (it has no positional-owned keys).
           if (prop === 'convert') validateSingleOpConvertOptions(options);
           if (prop === 'thumbnail') {
-            validateVerbOptions('thumbnail', options);
+            // Shape first: a string/array bag would otherwise surface as a bogus unknown_field.
             assertThumbnailDimensions(options);
+            validateVerbOptions('thumbnail', options);
           }
           // `transform` is a passthrough (rotate/flip); no positional-owned keys
           // and no required dims — just the generic key-validation.
@@ -583,13 +584,14 @@ export type ErgonomicClient = GislClient & {
    */
   convert(input: string | Blob, options: ConvertOptions & { output_format: string }): OperationBuilder;
   /**
-   * Single-op thumbnail. {@link ThumbnailOptions} requires `width` + `height`;
-   * omitting either is a compile-time error (uFbM31dC). An unknown key is a
-   * compile-time error for an INLINE bag only — aliased bags bypass TS
+   * Single-op thumbnail. {@link ThumbnailOptions} makes `width` and `height`
+   * optional, as the contract does: give one and the server derives the other
+   * from the source aspect ratio; give neither for a 320px longest edge. An
+   * unknown key is a compile-time error for an INLINE bag only — aliased bags bypass TS
    * excess-property checks — so the runtime guard remains the backstop (also
    * for untyped JS callers).
    */
-  thumbnail(input: string | Blob, options: ThumbnailOptions): OperationBuilder;
+  thumbnail(input: string | Blob, options?: ThumbnailOptions): OperationBuilder;
   /** Geometric transform (rotate/flip). Passthrough; the op is `planned` (server 422s until Lambdas ship). */
   transform(input: string | Blob, options?: Record<string, unknown>): OperationBuilder;
   /**

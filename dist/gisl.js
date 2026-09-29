@@ -237,7 +237,7 @@ function wrapErgonomic(client, presetDefaults, scopedPresetDefaults) {
             if (prop === 'compress' || prop === 'convert' || prop === 'thumbnail' || prop === 'transform') {
                 return (input, options = {}) => {
                     // ExVcchMz — validate the option bag pre-upload for the exported
-                    // single-op builder so a bad bag (unknown key / missing thumbnail dims /
+                    // single-op builder so a bad bag (unknown key / null thumbnail dim /
                     // missing convert target) fails locally instead of as a server 422.
                     // `compress` is EXCLUDED: it validates through the preset resolver
                     // (resolveCompressOptions / KNOWN_WIRE_FIELDS), not these guards.
@@ -249,8 +249,9 @@ function wrapErgonomic(client, presetDefaults, scopedPresetDefaults) {
                     if (prop === 'convert')
                         validateSingleOpConvertOptions(options);
                     if (prop === 'thumbnail') {
-                        validateVerbOptions('thumbnail', options);
+                        // Shape first: a string/array bag would otherwise surface as a bogus unknown_field.
                         assertThumbnailDimensions(options);
+                        validateVerbOptions('thumbnail', options);
                     }
                     // `transform` is a passthrough (rotate/flip); no positional-owned keys
                     // and no required dims — just the generic key-validation.

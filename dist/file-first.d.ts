@@ -441,12 +441,14 @@ export declare class Recipe {
      */
     convert(format: string, options?: ConvertOptions): Recipe;
     /**
-     * Generate a preview / resize. `width` AND `height` are required (the contract
-     * marks both required for image/video/document); any additional per-op
-     * thumbnail option passes through. An omitted (`undefined`) optional value is
-     * dropped from the wire options (not sent as `undefined`).
+     * Generate a preview / resize. `width` and `height` are both OPTIONAL (the
+     * contract, every mime group): give one and the server derives the other from
+     * the source aspect ratio; give neither for a 320px longest edge. Any
+     * additional per-op thumbnail option passes through. An omitted (`undefined`)
+     * value is dropped from the wire options (not sent as `undefined`); a `null`
+     * dimension is rejected pre-upload.
      */
-    thumbnail(options: ThumbnailOptions): Recipe;
+    thumbnail(options?: ThumbnailOptions): Recipe;
     /**
      * Geometric transform: rotate (0/90/180/270°) and/or flip. Chainable — the
      * canonical single-job order is `transform → convert → compress → thumbnail`,
@@ -721,8 +723,8 @@ export declare class FilesRecipe {
     compress(optimize?: OptimizeFor, options?: Record<string, unknown>): FilesRecipe;
     /** Change every input's format. `format` lowers to the contract `output_format` wire key (via {@link Recipe.convert}), NOT `format`. Option keys are validated (via the base {@link Recipe}) before any upload. */
     convert(format: string, options?: ConvertOptions): FilesRecipe;
-    /** Generate a preview of every input. `width` AND `height` are required; validated via the base {@link Recipe} before any upload. */
-    thumbnail(options: ThumbnailOptions): FilesRecipe;
+    /** Generate a preview of every input. `width` / `height` are optional (see {@link Recipe.thumbnail}); validated via the base {@link Recipe} before any upload. */
+    thumbnail(options?: ThumbnailOptions): FilesRecipe;
     /** Apply the same geometric transform (rotate/flip) to every input. Validated via the base {@link Recipe}. */
     transform(options?: TransformOptions): FilesRecipe;
     /** Apply the same text watermark to every input. Option keys validated via the base {@link Recipe}. */
@@ -862,8 +864,8 @@ export declare class MergedRecipe {
     compress(optimize?: OptimizeFor, options?: Record<string, unknown>): MergedRecipe;
     /** Change the merged output's format. See {@link Recipe.convert}. Option keys validated pre-upload. */
     convert(format: string, options?: ConvertOptions): MergedRecipe;
-    /** Thumbnail the merged output. `width` AND `height` are required; validated pre-upload. */
-    thumbnail(options: ThumbnailOptions): MergedRecipe;
+    /** Thumbnail the merged output. `width` / `height` are optional (see {@link Recipe.thumbnail}); validated pre-upload. */
+    thumbnail(options?: ThumbnailOptions): MergedRecipe;
     /** Geometric transform (rotate/flip) of the merged output. Passthrough; see {@link Recipe.transform}. */
     transform(options?: TransformOptions): MergedRecipe;
     /**
@@ -1052,8 +1054,8 @@ export declare class WatermarkedRecipe {
     compress(optimize?: OptimizeFor, options?: Record<string, unknown>): WatermarkedRecipe;
     /** Change the watermarked output's format. See {@link Recipe.convert}. Option keys validated pre-upload. */
     convert(format: string, options?: ConvertOptions): WatermarkedRecipe;
-    /** Thumbnail the watermarked output. `width` AND `height` are required; validated pre-upload. */
-    thumbnail(options: ThumbnailOptions): WatermarkedRecipe;
+    /** Thumbnail the watermarked output. `width` / `height` are optional (see {@link Recipe.thumbnail}); validated pre-upload. */
+    thumbnail(options?: ThumbnailOptions): WatermarkedRecipe;
     /** Geometric transform (rotate/flip) of the watermarked output. Passthrough; see {@link Recipe.transform}. */
     transform(options?: TransformOptions): WatermarkedRecipe;
     /**

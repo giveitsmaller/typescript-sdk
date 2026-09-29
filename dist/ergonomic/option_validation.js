@@ -95,11 +95,8 @@ export function allowedKeysFor(verb) {
  *   option set.
  */
 export function validateVerbOptions(verb, options) {
-    // The typed signatures require an options object, but an untyped JS caller can
-    // still omit it (e.g. `thumbnail()` — which dropped its `= {}` default when
-    // width/height became required). A nullish bag has no keys to reject; the
-    // separate `assertThumbnailDimensions` then reports the missing dimensions as a
-    // clean GislConfigError rather than a raw TypeError.
+    // An untyped JS caller can pass an explicit `null`/`undefined` bag. A nullish
+    // bag has no keys to reject, so it must not surface as a raw TypeError.
     if (options === null || options === undefined)
         return;
     const owned = POSITIONAL_OWNED[verb];
@@ -149,28 +146,48 @@ export function validateSingleOpConvertOptions(options) {
     }
 }
 /**
- * Assert thumbnail `width` AND `height` are both present and non-nullish (the
- * contract marks both `required` for image/video/document). The typed signature
- * already enforces this at compile time; this RUNTIME guard catches JS callers and
- * an explicit `undefined`/`null` BEFORE upload. Rejecting `null` (not just
- * `undefined`) keeps TS in lockstep with the PHP `assertThumbnailDimensions`, which
- * must reject `null` because PHP drops null values pre-lower — so a `null` dimension
- * is a pre-upload error in BOTH languages, never a wire `null` that 422s. Mirrored
- * in PHP.
+ * Reject an explicit `null` thumbnail `width` / `height`. Both dimensions are
+ * OPTIONAL in the contract (thumbnail.yaml, every mime group, since v2.148.0):
+ * omitting one lets the server derive it from the source aspect ratio, omitting
+ * both gives a 320px longest edge. So absence (and an explicit `undefined`, which
+ * the verbs drop from the wire) is accepted. `null` is not: it would reach the
+ * wire as a JSON `null`, which the contract's `type: integer` refuses with a 422.
+ * The PHP `assertThumbnailDimensions` rejects `null` too, so a null dimension is
+ * a pre-upload error in BOTH languages. Mirrored in PHP.
  *
- * @throws {GislConfigError} reason `missing_required_field` naming the absent
- *   dimension(s) in `conflictingFields`.
+ * @throws {GislConfigError} reason `type_mismatch` naming the null dimension(s)
+ *   in `conflictingFields`.
  */
+function isPlainObject(value) {
+    if (typeof value !== 'object' || value === null)
+        return false;
+    const proto = Object.getPrototypeOf(value);
+    return proto === Object.prototype || proto === null;
+}
+function describeBag(value) {
+    if (Array.isArray(value))
+        return 'an array';
+    if (typeof value === 'object' && value !== null)
+        return `a ${value.constructor?.name ?? 'non-plain object'}`;
+    return typeof value;
+}
 export function assertThumbnailDimensions(options) {
-    // Null-safe so an untyped JS `thumbnail()` (no args, no default) reports both
-    // dimensions missing as a clean GislConfigError instead of a raw TypeError.
+    // Null-safe: an untyped JS `thumbnail()` with no bag is the contract's
+    // both-omitted default, not an error. Anything else that is not a plain
+    // object (`0`, `false`, an array, a Date/Map/class instance) would lower as
+    // an empty bag and silently request that default, so it is refused.
+    if (options !== null && options !== undefined && !isPlainObject(options)) {
+        throw new GislConfigError(`thumbnail options must be a plain object (or omitted); got ${describeBag(options)}.`, { reason: 'type_mismatch', conflictingFields: [] });
+    }
     const o = options ?? {};
-    const missing = [];
-    if (o.width === undefined || o.width === null)
-        missing.push('width');
-    if (o.height === undefined || o.height === null)
-        missing.push('height');
-    if (missing.length > 0) {
-        throw new GislConfigError(`thumbnail requires both width and height (the contract marks both required); missing: ${missing.join(', ')}.`, { reason: 'missing_required_field', conflictingFields: missing });
+    const nulled = [];
+    if (o.width === null)
+        nulled.push('width');
+    if (o.height === null)
+        nulled.push('height');
+    if (nulled.length > 0) {
+        throw new GislConfigError(`thumbnail ${nulled.join(' and ')} cannot be null; pass an integer (1-16384) or omit the key ` +
+            `(the contract makes both optional: omit one to derive it from the source aspect ratio, ` +
+            `omit both for a 320px longest edge).`, { reason: 'type_mismatch', conflictingFields: nulled });
     }
 }

@@ -55,10 +55,10 @@ export interface ConvertOptions {
     dpi?: number;
 }
 export interface ThumbnailOptions {
-    /** Target width in pixels (1-16384). REQUIRED. */
-    width: number;
-    /** Target height in pixels (1-16384). REQUIRED. */
-    height: number;
+    /** Target width in pixels (1-16384; width*height <= 16MP). Optional: omit it to derive it from the source aspect ratio. */
+    width?: number;
+    /** Target height in pixels (1-16384; width*height <= 16MP). Optional: omit it to derive it from the source aspect ratio. */
+    height?: number;
     /** Resize mode. */
     fit?: 'max' | 'crop' | 'scale';
     /** Output format for the thumbnail. */

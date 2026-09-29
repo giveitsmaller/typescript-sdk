@@ -1273,6 +1273,25 @@ describe('T4b — non-compress ops bypass the resolver (passthrough)', () => {
     expect(payload.jobs[0].operations[0].options).toEqual({ width: 200 });
   });
 
+  it('opType="thumbnail" with height only sends only height (gkxZIIuw)', async () => {
+    const mock = makeMockClient();
+    await new OperationBuilder(mock.client, 'thumbnail', 'p.jpg', {
+      height: 240,
+    }).run({ maxWait: '30s' });
+    const payload = mock.createWorkflow.mock.calls[0][0];
+    expect(payload.jobs[0].operations[0].options).toEqual({ height: 240 });
+  });
+
+  it('opType="thumbnail" with no dimensions sends no dimension keys (gkxZIIuw)', async () => {
+    const mock = makeMockClient();
+    await new OperationBuilder(mock.client, 'thumbnail', 'p.jpg', {}).run({ maxWait: '30s' });
+    const payload = mock.createWorkflow.mock.calls[0][0];
+    // TS sends an empty OBJECT; the PHP single-op builder omits the key. Both mean
+    // "no options" to the server (the PHP side cannot send `{}`: an empty PHP
+    // array encodes as the JSON list `[]`).
+    expect(payload.jobs[0].operations[0]).toEqual({ type: 'thumbnail', options: {} });
+  });
+
   it('compress op with unknown media (e.g. Blob without type/name) passes opOptions through verbatim', async () => {
     const mock = makeMockClient();
     const blob = new Blob(['x']); // no type, no name → _detectCompressMedia → undefined

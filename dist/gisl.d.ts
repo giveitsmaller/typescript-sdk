@@ -244,13 +244,14 @@ export type ErgonomicClient = GislClient & {
         output_format: string;
     }): OperationBuilder;
     /**
-     * Single-op thumbnail. {@link ThumbnailOptions} requires `width` + `height`;
-     * omitting either is a compile-time error (uFbM31dC). An unknown key is a
-     * compile-time error for an INLINE bag only — aliased bags bypass TS
+     * Single-op thumbnail. {@link ThumbnailOptions} makes `width` and `height`
+     * optional, as the contract does: give one and the server derives the other
+     * from the source aspect ratio; give neither for a 320px longest edge. An
+     * unknown key is a compile-time error for an INLINE bag only — aliased bags bypass TS
      * excess-property checks — so the runtime guard remains the backstop (also
      * for untyped JS callers).
      */
-    thumbnail(input: string | Blob, options: ThumbnailOptions): OperationBuilder;
+    thumbnail(input: string | Blob, options?: ThumbnailOptions): OperationBuilder;
     /** Geometric transform (rotate/flip). Passthrough; the op is `planned` (server 422s until Lambdas ship). */
     transform(input: string | Blob, options?: Record<string, unknown>): OperationBuilder;
     /**

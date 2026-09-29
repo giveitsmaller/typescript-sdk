@@ -6,6 +6,7 @@ import {
   assertThumbnailDimensions,
   type ValidatedVerb,
 } from '../../src/ergonomic/option_validation.js';
+import type { ThumbnailOptions } from '../../src/ergonomic/option_types.js';
 import { GislConfigError } from '../../src/errors.js';
 import { MergedRecipe, Recipe, fileInput } from '../../src/file-first.js';
 
@@ -16,8 +17,9 @@ import { MergedRecipe, Recipe, fileInput } from '../../src/file-first.js';
  * (`output_format` / `format` on convert; `text` on textWatermark) and (2) any
  * key absent from the op's contract option set — both with
  * `GislConfigError(reason: 'unknown_field')`. `assertThumbnailDimensions`
- * additionally rejects a missing/undefined width or height with
- * `reason: 'missing_required_field'`. The allowed key sets are read from the
+ * additionally rejects an explicit `null` width or height with
+ * `reason: 'type_mismatch'` — both dimensions are OPTIONAL in the contract
+ * (gkxZIIuw), so absence is accepted. The allowed key sets are read from the
  * generated `OperationMetadata` sidecars, so they track the contract.
  *
  * Mirrored by the PHP `OptionValidationTest` — keep the two in lockstep.
@@ -154,7 +156,8 @@ describe('validateVerbOptions — watermark allows the image∪video union', () 
 });
 
 // ---------------------------------------------------------------------------
-// assertThumbnailDimensions — both dims required.
+// assertThumbnailDimensions — both dims OPTIONAL (contract v2.148.0+, gkxZIIuw);
+// only an explicit null is refused, because it would reach the wire as JSON null.
 // ---------------------------------------------------------------------------
 
 describe('assertThumbnailDimensions', () => {
@@ -162,58 +165,44 @@ describe('assertThumbnailDimensions', () => {
     expect(() => assertThumbnailDimensions({ width: 10, height: 10 })).not.toThrow();
   });
 
-  it('throws missing_required_field naming height when height is absent', () => {
-    const err = captureConfigError(() => assertThumbnailDimensions({ width: 10 }));
-    expect(err.reason).toBe('missing_required_field');
-    expect(err.conflictingFields).toEqual(['height']);
-    expect(err.message).toContain('missing: height');
+  it('passes with width only (the server derives height from the aspect ratio)', () => {
+    expect(() => assertThumbnailDimensions({ width: 10 })).not.toThrow();
   });
 
-  it('throws missing_required_field naming width when width is absent', () => {
-    const err = captureConfigError(() => assertThumbnailDimensions({ height: 10 }));
-    expect(err.reason).toBe('missing_required_field');
+  it('passes with height only (the server derives width from the aspect ratio)', () => {
+    expect(() => assertThumbnailDimensions({ height: 10 })).not.toThrow();
+  });
+
+  it('passes with neither (the server default: 320px longest edge)', () => {
+    expect(() => assertThumbnailDimensions({})).not.toThrow();
+  });
+
+  it('passes a nullish bag (untyped JS caller, no arg) — no TypeError', () => {
+    expect(() => assertThumbnailDimensions(undefined)).not.toThrow();
+    expect(() => assertThumbnailDimensions(null)).not.toThrow();
+  });
+
+  it('passes an explicit undefined (the verbs drop it from the wire)', () => {
+    expect(() => assertThumbnailDimensions({ width: 10, height: undefined })).not.toThrow();
+  });
+
+  it('rejects an explicit null width with type_mismatch and an accurate message', () => {
+    // null would reach the wire as JSON null, which the contract's
+    // `type: integer` refuses. PHP rejects it too (lockstep).
+    const err = captureConfigError(() => assertThumbnailDimensions({ width: null, height: 1 }));
+    expect(err.reason).toBe('type_mismatch');
     expect(err.conflictingFields).toEqual(['width']);
+    expect(err.message).toContain('thumbnail width cannot be null');
+    expect(err.message).toContain('omit the key');
+    // The old message claimed the contract requires both — it does not.
+    expect(err.message).not.toMatch(/requires both|marks both required/);
   });
 
-  it('throws naming BOTH dims when both are absent', () => {
-    const err = captureConfigError(() => assertThumbnailDimensions({}));
-    expect(err.reason).toBe('missing_required_field');
+  it('names BOTH dims when both are null', () => {
+    const err = captureConfigError(() => assertThumbnailDimensions({ width: null, height: null }));
+    expect(err.reason).toBe('type_mismatch');
     expect(err.conflictingFields).toEqual(['width', 'height']);
-  });
-
-  it('treats a nullish bag (untyped JS caller, no arg) as both dims absent — clean error, not a TypeError', () => {
-    const err = captureConfigError(() => assertThumbnailDimensions(undefined));
-    expect(err.reason).toBe('missing_required_field');
-    expect(err.conflictingFields).toEqual(['width', 'height']);
-  });
-
-  it('thumbnail() called with NO argument (JS caller) throws a clean GislConfigError, not a raw TypeError', () => {
-    // The typed signature requires `{ width, height }`, but an untyped JS caller
-    // can omit the argument entirely. The verb must surface a clean, pre-upload
-    // GislConfigError — captureConfigError re-throws anything that is NOT one
-    // (e.g. a TypeError), so this fails if the nullish bag is unhandled.
-    const callNoArg = recipe('photo.jpg').thumbnail as (opts?: unknown) => unknown;
-    const err = captureConfigError(() => callNoArg());
-    expect(err.reason).toBe('missing_required_field');
-    expect(err.conflictingFields).toEqual(['width', 'height']);
-  });
-
-  it('treats an explicit undefined as absent (the JS-caller bypass)', () => {
-    const err = captureConfigError(() =>
-      assertThumbnailDimensions({ width: 10, height: undefined }),
-    );
-    expect(err.reason).toBe('missing_required_field');
-    expect(err.conflictingFields).toEqual(['height']);
-  });
-
-  it('treats an explicit null as absent too (PHP-lockstep: PHP drops null pre-lower)', () => {
-    // TS rejects `null` as well as `undefined` so a null dimension is a
-    // pre-upload error in BOTH languages, never a wire `null` that 422s.
-    const err = captureConfigError(() =>
-      assertThumbnailDimensions({ width: null, height: 1 }),
-    );
-    expect(err.reason).toBe('missing_required_field');
-    expect(err.conflictingFields).toEqual(['width']);
+    expect(err.message).toContain('thumbnail width and height cannot be null');
   });
 });
 
@@ -247,10 +236,14 @@ describe('verb-call validation is pre-upload (no client, no network)', () => {
     expect(err.conflictingFields).toEqual(['text']);
   });
 
-  it('thumbnail missing a dimension throws synchronously at the verb call', () => {
-    const err = captureConfigError(() => recipe('photo.jpg').thumbnail({ width: 320 } as never));
-    expect(err.reason).toBe('missing_required_field');
-    expect(err.conflictingFields).toContain('height');
+  it('thumbnail with ONE dimension is accepted at the verb call (contract: both optional)', () => {
+    expect(() => recipe('photo.jpg').thumbnail({ width: 320 })).not.toThrow();
+    expect(() => recipe('photo.jpg').thumbnail({ height: 240 })).not.toThrow();
+  });
+
+  it('thumbnail with NO options is accepted at the verb call (server default)', () => {
+    expect(() => recipe('photo.jpg').thumbnail()).not.toThrow();
+    expect(() => recipe('photo.jpg').thumbnail({})).not.toThrow();
   });
 
   it('thumbnail with an unknown key throws synchronously at the verb call', () => {
@@ -265,8 +258,8 @@ describe('verb-call validation is pre-upload (no client, no network)', () => {
     const err = captureConfigError(() =>
       recipe('photo.jpg').thumbnail({ width: 320, height: null } as never),
     );
-    expect(err.reason).toBe('missing_required_field');
-    expect(err.conflictingFields).toContain('height');
+    expect(err.reason).toBe('type_mismatch');
+    expect(err.conflictingFields).toEqual(['height']);
   });
 });
 
@@ -282,10 +275,44 @@ describe('duplicated verb bodies reject invalid bags too', () => {
   const videoMerge = (): MergedRecipe =>
     new MergedRecipe([fileInput.path('a.mp4'), fileInput.path('b.mp4')], { mediaKind: 'video' });
 
-  it('MergedRecipe.thumbnail({ width }) rejects the missing height', () => {
-    const err = captureConfigError(() => videoMerge().thumbnail({ width: 320 } as never));
-    expect(err.reason).toBe('missing_required_field');
-    expect(err.conflictingFields).toContain('height');
+  it('MergedRecipe.thumbnail rejects a null height', () => {
+    const err = captureConfigError(() => videoMerge().thumbnail({ width: 320, height: null } as never));
+    expect(err.reason).toBe('type_mismatch');
+    expect(err.conflictingFields).toEqual(['height']);
+  });
+
+  it('MergedRecipe.thumbnail rejects an unknown key', () => {
+    const err = captureConfigError(() => videoMerge().thumbnail({ width: 320, nope: 1 } as never));
+    expect(err.reason).toBe('unknown_field');
+    expect(err.conflictingFields).toEqual(['nope']);
+  });
+
+  // An untyped JS `thumbnail(null)` is the both-omitted default. Each duplicated
+  // body iterates the bag to build the wire options, so a missing `?? {}` on any
+  // one of them surfaces as a raw TypeError from Object.entries(null).
+  it.each([
+    ['Recipe', () => recipe('photo.jpg').thumbnail(null as never)],
+    ['MergedRecipe', () => videoMerge().thumbnail(null as never)],
+    ['WatermarkedRecipe', () => recipe('photo.jpg').watermark(overlay()).thumbnail(null as never)],
+  ])('%s.thumbnail(null) is the no-dimension default, not a TypeError', (_name, call) => {
+    expect(call).not.toThrow();
+  });
+
+  // ...but a non-object bag is NOT the default: it would lower as empty options
+  // and silently request a 320px thumbnail.
+  it.each([
+    ['Recipe', (bag: unknown) => recipe('photo.jpg').thumbnail(bag as never)],
+    ['MergedRecipe', (bag: unknown) => videoMerge().thumbnail(bag as never)],
+    ['WatermarkedRecipe', (bag: unknown) => recipe('photo.jpg').watermark(overlay()).thumbnail(bag as never)],
+  ])('%s.thumbnail rejects a non-object bag', (_name, call) => {
+    class Opts {}
+    for (const bag of [0, false, 'x', [320], new Date(0), new Map([['width', 320]]), /w/, new Opts()]) {
+      const err = captureConfigError(() => call(bag));
+      expect(err.reason).toBe('type_mismatch');
+      expect(err.message).toContain('thumbnail options must be a plain object');
+    }
+    // A null-prototype bag IS a plain object: accepted.
+    expect(() => call(Object.assign(Object.create(null), { width: 320 }))).not.toThrow();
   });
 
   it('WatermarkedRecipe.convert with a typo throws unknown_field', () => {
@@ -296,12 +323,12 @@ describe('duplicated verb bodies reject invalid bags too', () => {
     expect(err.conflictingFields).toEqual(['quaity']);
   });
 
-  it('WatermarkedRecipe.thumbnail({ width }) rejects the missing height', () => {
+  it('WatermarkedRecipe.thumbnail rejects a null width', () => {
     const err = captureConfigError(() =>
-      recipe('photo.jpg').watermark(overlay()).thumbnail({ width: 320 } as never),
+      recipe('photo.jpg').watermark(overlay()).thumbnail({ width: null, height: 240 } as never),
     );
-    expect(err.reason).toBe('missing_required_field');
-    expect(err.conflictingFields).toContain('height');
+    expect(err.reason).toBe('type_mismatch');
+    expect(err.conflictingFields).toEqual(['width']);
   });
 
   it('the watermark verb body key-validates BEFORE the media gate / upload', () => {
@@ -392,9 +419,18 @@ describe('typed-interface documentation (compile-time intent)', () => {
     expect(err.reason).toBe('unknown_field');
   });
 
-  it('a thumbnail missing height is a compile error for typed callers', () => {
-    // @ts-expect-error ThumbnailOptions requires both width and height
-    const err = captureConfigError(() => recipe('photo.jpg').thumbnail({ width: 1 }));
-    expect(err.reason).toBe('missing_required_field');
+  it('a thumbnail with one or no dimension COMPILES (both optional in the contract)', () => {
+    // Positive controls: a regression that made either dimension required again
+    // would surface here as a plain tsc error under `npm run check:tests`.
+    const widthOnly: ThumbnailOptions = { width: 1 };
+    const heightOnly: ThumbnailOptions = { height: 1 };
+    const neither: ThumbnailOptions = {};
+    expect(() => recipe('photo.jpg').thumbnail(widthOnly).thumbnail(heightOnly).thumbnail(neither)).not.toThrow();
+  });
+
+  it('an unknown thumbnail key is still a compile error for typed callers', () => {
+    // @ts-expect-error unknown key 'nope' is rejected by ThumbnailOptions
+    const err = captureConfigError(() => recipe('photo.jpg').thumbnail({ width: 1, nope: 1 }));
+    expect(err.reason).toBe('unknown_field');
   });
 });

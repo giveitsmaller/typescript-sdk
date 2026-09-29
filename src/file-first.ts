@@ -1011,16 +1011,20 @@ export class Recipe {
   }
 
   /**
-   * Generate a preview / resize. `width` AND `height` are required (the contract
-   * marks both required for image/video/document); any additional per-op
-   * thumbnail option passes through. An omitted (`undefined`) optional value is
-   * dropped from the wire options (not sent as `undefined`).
+   * Generate a preview / resize. `width` and `height` are both OPTIONAL (the
+   * contract, every mime group): give one and the server derives the other from
+   * the source aspect ratio; give neither for a 320px longest edge. Any
+   * additional per-op thumbnail option passes through. An omitted (`undefined`)
+   * value is dropped from the wire options (not sent as `undefined`); a `null`
+   * dimension is rejected pre-upload.
    */
-  thumbnail(options: ThumbnailOptions): Recipe {
-    validateVerbOptions('thumbnail', options);
+  thumbnail(options: ThumbnailOptions = {}): Recipe {
+    // Shape first: a string/array bag would otherwise surface as a bogus unknown_field.
     assertThumbnailDimensions(options);
+    validateVerbOptions('thumbnail', options);
     const wire: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(options)) {
+    // `?? {}`: an untyped JS `thumbnail(null)` is the both-omitted default, not a raw TypeError.
+    for (const [key, value] of Object.entries(options ?? {})) {
       if (value !== undefined) wire[key] = value;
     }
     return this.withStep({ opType: 'thumbnail', options: wire });
@@ -2190,8 +2194,8 @@ export class FilesRecipe {
     return this.withStep(this.baseRecipe().convert(format, options));
   }
 
-  /** Generate a preview of every input. `width` AND `height` are required; validated via the base {@link Recipe} before any upload. */
-  thumbnail(options: ThumbnailOptions): FilesRecipe {
+  /** Generate a preview of every input. `width` / `height` are optional (see {@link Recipe.thumbnail}); validated via the base {@link Recipe} before any upload. */
+  thumbnail(options: ThumbnailOptions = {}): FilesRecipe {
     return this.withStep(this.baseRecipe().thumbnail(options));
   }
 
@@ -2545,12 +2549,14 @@ export class MergedRecipe {
     return this.withStep({ opType: 'convert', options: { ...options, output_format: format } });
   }
 
-  /** Thumbnail the merged output. `width` AND `height` are required; validated pre-upload. */
-  thumbnail(options: ThumbnailOptions): MergedRecipe {
-    validateVerbOptions('thumbnail', options);
+  /** Thumbnail the merged output. `width` / `height` are optional (see {@link Recipe.thumbnail}); validated pre-upload. */
+  thumbnail(options: ThumbnailOptions = {}): MergedRecipe {
+    // Shape first: a string/array bag would otherwise surface as a bogus unknown_field.
     assertThumbnailDimensions(options);
+    validateVerbOptions('thumbnail', options);
     const wire: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(options)) {
+    // `?? {}`: an untyped JS `thumbnail(null)` is the both-omitted default, not a raw TypeError.
+    for (const [key, value] of Object.entries(options ?? {})) {
       if (value !== undefined) wire[key] = value;
     }
     return this.withStep({ opType: 'thumbnail', options: wire });
@@ -3143,12 +3149,14 @@ export class WatermarkedRecipe {
     return this.withStep({ opType: 'convert', options: { ...options, output_format: format } });
   }
 
-  /** Thumbnail the watermarked output. `width` AND `height` are required; validated pre-upload. */
-  thumbnail(options: ThumbnailOptions): WatermarkedRecipe {
-    validateVerbOptions('thumbnail', options);
+  /** Thumbnail the watermarked output. `width` / `height` are optional (see {@link Recipe.thumbnail}); validated pre-upload. */
+  thumbnail(options: ThumbnailOptions = {}): WatermarkedRecipe {
+    // Shape first: a string/array bag would otherwise surface as a bogus unknown_field.
     assertThumbnailDimensions(options);
+    validateVerbOptions('thumbnail', options);
     const wire: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(options)) {
+    // `?? {}`: an untyped JS `thumbnail(null)` is the both-omitted default, not a raw TypeError.
+    for (const [key, value] of Object.entries(options ?? {})) {
       if (value !== undefined) wire[key] = value;
     }
     return this.withStep({ opType: 'thumbnail', options: wire });

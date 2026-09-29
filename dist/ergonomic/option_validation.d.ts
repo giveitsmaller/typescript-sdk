@@ -57,19 +57,6 @@ export declare function validateVerbOptions(verb: ValidatedVerb, options: object
  *   `output_format` is absent/nullish.
  */
 export declare function validateSingleOpConvertOptions(options: object | null | undefined): void;
-/**
- * Assert thumbnail `width` AND `height` are both present and non-nullish (the
- * contract marks both `required` for image/video/document). The typed signature
- * already enforces this at compile time; this RUNTIME guard catches JS callers and
- * an explicit `undefined`/`null` BEFORE upload. Rejecting `null` (not just
- * `undefined`) keeps TS in lockstep with the PHP `assertThumbnailDimensions`, which
- * must reject `null` because PHP drops null values pre-lower — so a `null` dimension
- * is a pre-upload error in BOTH languages, never a wire `null` that 422s. Mirrored
- * in PHP.
- *
- * @throws {GislConfigError} reason `missing_required_field` naming the absent
- *   dimension(s) in `conflictingFields`.
- */
 export declare function assertThumbnailDimensions(options: {
     width?: unknown;
     height?: unknown;

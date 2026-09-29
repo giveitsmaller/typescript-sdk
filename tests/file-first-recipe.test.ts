@@ -164,28 +164,37 @@ describe('Recipe — single-op lowering', () => {
     ]);
   });
 
-  it('thumbnail rejects a missing height', () => {
-    // The contract marks BOTH width and height required for image/video/document.
-    // A JS caller omitting one (the typed interface forbids it) is rejected
-    // eagerly at the verb call (assertThumbnailDimensions), before any upload.
-    expect(() => recipe('photo.jpg').thumbnail({ width: 320 } as never)).toThrow(GislConfigError);
-    try {
-      recipe('photo.jpg').thumbnail({ width: 320 } as never);
-      expect.unreachable('thumbnail without a height must throw');
-    } catch (err) {
-      expect((err as GislConfigError).reason).toBe('missing_required_field');
-      expect((err as GislConfigError).conflictingFields).toContain('height');
-    }
+  // gkxZIIuw — the contract makes width/height OPTIONAL in every thumbnail mime
+  // group (v2.148.0): an omitted dimension is derived server-side from the source
+  // aspect ratio, and omitting both gives a 320px longest edge. The wire carries
+  // exactly the dimensions given — an absent one is absent, never null.
+  it('thumbnail with width only sends only width', () => {
+    const ops = operations(recipe('photo.jpg').thumbnail({ width: 320 }));
+    expect(ops).toEqual([{ type: 'thumbnail', options: { width: 320 } }]);
+    expect(ops[0].options).not.toHaveProperty('height');
   });
 
-  it('thumbnail rejects a missing width', () => {
-    expect(() => recipe('photo.jpg').thumbnail({ height: 240 } as never)).toThrow(GislConfigError);
+  it('thumbnail with height only sends only height', () => {
+    const ops = operations(recipe('photo.jpg').thumbnail({ height: 240, fit: 'max' }));
+    expect(ops).toEqual([{ type: 'thumbnail', options: { height: 240, fit: 'max' } }]);
+    expect(ops[0].options).not.toHaveProperty('width');
+  });
+
+  it('thumbnail with neither dimension sends no options (the server default applies)', () => {
+    // Empty options omit the `options` key entirely (see the test below).
+    expect(operations(recipe('photo.jpg').thumbnail())).toEqual([{ type: 'thumbnail' }]);
+    expect(operations(recipe('photo.jpg').thumbnail({}))).toEqual([{ type: 'thumbnail' }]);
+  });
+
+  it('thumbnail still rejects a null dimension, naming it accurately', () => {
     try {
-      recipe('photo.jpg').thumbnail({ height: 240 } as never);
-      expect.unreachable('thumbnail without a width must throw');
+      recipe('photo.jpg').thumbnail({ width: 320, height: null } as never);
+      expect.unreachable('a null height must throw');
     } catch (err) {
-      expect((err as GislConfigError).reason).toBe('missing_required_field');
-      expect((err as GislConfigError).conflictingFields).toContain('width');
+      expect(err).toBeInstanceOf(GislConfigError);
+      expect((err as GislConfigError).reason).toBe('type_mismatch');
+      expect((err as GislConfigError).conflictingFields).toEqual(['height']);
+      expect((err as GislConfigError).message).toContain('thumbnail height cannot be null');
     }
   });
 

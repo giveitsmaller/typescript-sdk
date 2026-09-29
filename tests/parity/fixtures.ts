@@ -1343,9 +1343,6 @@ function validateLoweringOpParams(op: string, o: Record<string, unknown>, ctx: s
           throw new Error(`${ctx} thumbnail '${dim}' must be a positive integer`);
         }
       }
-      if (!('width' in o) && !('height' in o)) {
-        throw new Error(`${ctx} thumbnail requires at least one of width/height`);
-      }
       break;
     case 'compress':
       if ('optimize' in o && (typeof o.optimize !== 'string' || o.optimize === '')) {

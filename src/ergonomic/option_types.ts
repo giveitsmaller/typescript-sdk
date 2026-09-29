@@ -71,12 +71,15 @@ const CONVERT_OPTION_KEYS = [
   'color_profile', 'auto_orient', 'max_colors', 'loop', 'dither', 'bitrate', 'pages', 'dpi',
 ] as const;
 
-// ---- thumbnail (width + height REQUIRED per contract) ----
+// ---- thumbnail (width + height OPTIONAL per contract, since v2.148.0) ----
+// Omitting a dimension selects an aspect-preserving server default: only one
+// given -> the other is derived from the source aspect ratio; both omitted ->
+// longest edge 320px (thumbnail.yaml, every mime group).
 export interface ThumbnailOptions {
-  /** Target width in pixels (1-16384). REQUIRED. */
-  width: number;
-  /** Target height in pixels (1-16384). REQUIRED. */
-  height: number;
+  /** Target width in pixels (1-16384; width*height <= 16MP). Optional: omit it to derive it from the source aspect ratio. */
+  width?: number;
+  /** Target height in pixels (1-16384; width*height <= 16MP). Optional: omit it to derive it from the source aspect ratio. */
+  height?: number;
   /** Resize mode. */
   fit?: 'max' | 'crop' | 'scale';
   /** Output format for the thumbnail. */
