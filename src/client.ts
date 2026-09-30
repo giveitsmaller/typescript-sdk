@@ -691,6 +691,11 @@ export function _markAnonymousClient(client: object): void {
   ANONYMOUS_CLIENTS.add(client);
 }
 
+/** @internal True for a client built by `gisl.anonymous()` (see ANONYMOUS_CLIENTS). */
+export function _isAnonymousClient(client: object): boolean {
+  return ANONYMOUS_CLIENTS.has(client);
+}
+
 export class GislClient {
   private readonly baseUrl: string;
   /**

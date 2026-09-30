@@ -447,6 +447,10 @@ const ANONYMOUS_CLIENTS = new WeakSet();
 export function _markAnonymousClient(client) {
     ANONYMOUS_CLIENTS.add(client);
 }
+/** @internal True for a client built by `gisl.anonymous()` (see ANONYMOUS_CLIENTS). */
+export function _isAnonymousClient(client) {
+    return ANONYMOUS_CLIENTS.has(client);
+}
 export class GislClient {
     baseUrl;
     /**

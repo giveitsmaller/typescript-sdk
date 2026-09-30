@@ -6,6 +6,7 @@ import { gisl, _internalAnonymous } from '../../src/gisl.js';
 import {
   GislApiError,
   GislFeatureRequiresAuthError,
+  GislProbePendingError,
   GislMissingCredentialsError,
   GislTierRestrictedError,
 } from '../../src/errors.js';
@@ -384,7 +385,7 @@ describe('gisl.anonymous() — local refusals before any I/O', () => {
     expect(seen).toHaveLength(0);
   });
 
-  it('a probe_pending recovery meets the gate instead of probing unauthenticated', async () => {
+  it('a probe_pending recovery re-creates instead of probing (anonymous-policy 2.1.0)', async () => {
     createStatus = 422;
     createBody = {
       success: false,
@@ -397,14 +398,17 @@ describe('gisl.anonymous() — local refusals before any I/O', () => {
     const payload = { jobs: [{ source: { type: 'upload', file_id: 'f1' }, operations: [] }] } as never;
     let thrown: unknown;
     try {
+      // A 1 s budget fits no more than the first 1 s backoff: the server keeps
+      // refusing, so the original refusal comes back once the budget is spent.
       await client.createWorkflowAwaitingProbe(payload, { timeoutMs: 1000 });
     } catch (err) {
       thrown = err;
     }
-    // The refusal names job_0 -> upload f1, so recovery reaches waitForProbe,
-    // which the gate refuses: the create went out once and no probe did.
-    expect(thrown).toBeInstanceOf(GislFeatureRequiresAuthError);
-    expect((thrown as GislFeatureRequiresAuthError).operation).toBe('waitForProbe');
-    expect(seen.map((s) => `${s.method} ${new URL(s.url).pathname}`)).toEqual(['POST /api/workflows']);
+    // 5dJrOdVC: the probe endpoint is sign-in only, so a guest retries the
+    // CREATE; it never calls waitForProbe (which the gate would refuse).
+    expect(thrown).toBeInstanceOf(GislProbePendingError);
+    const paths = seen.map((s) => `${s.method} ${new URL(s.url).pathname}`);
+    expect(paths.length).toBeGreaterThanOrEqual(1);
+    expect(new Set(paths)).toEqual(new Set(['POST /api/workflows']));
   });
 });

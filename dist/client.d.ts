@@ -27,6 +27,8 @@ export interface ValidationDetail {
 }
 /** @internal Marks a client as a guest client (see ANONYMOUS_CLIENTS). */
 export declare function _markAnonymousClient(client: object): void;
+/** @internal True for a client built by `gisl.anonymous()` (see ANONYMOUS_CLIENTS). */
+export declare function _isAnonymousClient(client: object): boolean;
 export declare class GislClient {
     private readonly baseUrl;
     /**

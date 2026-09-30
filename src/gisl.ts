@@ -896,6 +896,9 @@ function wrapAnonymous(client: GislClient): GislClient {
       return override !== undefined ? override : value.bind(target);
     },
   });
+  // Every recovery path receives THIS object, not `client`, so it carries the
+  // guest marker too (5dJrOdVC: a guest re-creates instead of probing).
+  _markAnonymousClient(gated);
   return gated;
 }
 

@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { OperationBuilder } from '../../src/builder.js';
-import type { GislClient } from '../../src/client.js';
+import { _markAnonymousClient, type GislClient } from '../../src/client.js';
 import { GislAbortError, GislApiError, GislProbePendingError, GislTimeoutError } from '../../src/errors.js';
 import { Recipe, fileInput } from '../../src/file-first.js';
 import {
+  GUEST_BACKOFF_BASE_MS,
+  GUEST_MAX_CREATE_ATTEMPTS,
   PROBE_PENDING_MAX_CREATE_ATTEMPTS,
   createWorkflowAwaitingProbe,
   uploadFileIdsForJob,
@@ -271,5 +273,114 @@ describe('probe_pending recovery through run()', () => {
     await new Recipe(fileInput.path('clip.mp4'), undefined, [], undefined, undefined, m.client).compress().run({ maxWait: '30s' });
     expect(m.createWorkflow).toHaveBeenCalledTimes(2);
     expect(m.waitForProbe.mock.calls[0][0]).toBe('file_up');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5dJrOdVC — anonymous-policy 2.1.0: the probe endpoint is sign-in only, so a
+// GUEST refused with probe_pending retries the CREATE (after Retry-After, or a
+// doubling backoff) and never calls waitForProbe.
+// ---------------------------------------------------------------------------
+
+describe('createWorkflowAwaitingProbe on a guest client', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  const guest = (createImpl: (payload: unknown) => Promise<unknown>) => {
+    const d = doubles(createImpl);
+    _markAnonymousClient(d.client);
+    return d;
+  };
+
+  it('re-creates after Retry-After without waiting for the probe', async () => {
+    let calls = 0;
+    const d = guest(async () => {
+      if (++calls === 1) throw refusal('op', '2');
+      return { workflowId: 'wf' };
+    });
+    const created = createWorkflowAwaitingProbe(d.client, single);
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(d.createWorkflow).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(created).resolves.toEqual({ workflowId: 'wf' });
+    expect(d.createWorkflow).toHaveBeenCalledTimes(2);
+    expect(d.createWorkflow.mock.calls[1][0]).toBe(single);
+    expect(d.waitForProbe).not.toHaveBeenCalled();
+  });
+
+  it('waits GUEST_BACKOFF_BASE_MS before re-creating when the refusal carries no Retry-After', async () => {
+    let calls = 0;
+    const d = guest(async () => {
+      if (++calls === 1) throw refusal('op');
+      return { workflowId: 'wf' };
+    });
+    const created = createWorkflowAwaitingProbe(d.client, single);
+    await vi.advanceTimersByTimeAsync(GUEST_BACKOFF_BASE_MS - 1);
+    expect(d.createWorkflow).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(created).resolves.toEqual({ workflowId: 'wf' });
+    expect(d.waitForProbe).not.toHaveBeenCalled();
+  });
+
+  it('re-creates even when the refusal names no job with an upload (no probe to wait for)', async () => {
+    let calls = 0;
+    const d = guest(async () => {
+      if (++calls === 1) throw refusal('unknown_job');
+      return { workflowId: 'wf' };
+    });
+    const created = createWorkflowAwaitingProbe(d.client, single);
+    await vi.advanceTimersByTimeAsync(GUEST_BACKOFF_BASE_MS);
+    await expect(created).resolves.toEqual({ workflowId: 'wf' });
+  });
+
+  it('rethrows the refusal after the attempt cap, still without a probe wait', async () => {
+    const original = refusal('op', '1');
+    const d = guest(async () => {
+      throw original;
+    });
+    const created = createWorkflowAwaitingProbe(d.client, single);
+    const outcome = expect(created).rejects.toBe(original);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await outcome;
+    // anonymous-policy per_minute.workflow_create = 2: a third create would be a 429.
+    expect(GUEST_MAX_CREATE_ATTEMPTS).toBeLessThan(PROBE_PENDING_MAX_CREATE_ATTEMPTS);
+    expect(d.createWorkflow).toHaveBeenCalledTimes(GUEST_MAX_CREATE_ATTEMPTS);
+    expect(d.waitForProbe).not.toHaveBeenCalled();
+  });
+
+  it('does not re-create when the sleep overran the deadline', async () => {
+    const d = guest(async () => {
+      throw refusal('op', '2');
+    });
+    // The pre-sleep check passes (2 s fits before the deadline); the clock then
+    // jumps past it while sleeping, as a late timer would.
+    const created = createWorkflowAwaitingProbe(d.client, single, { deadline: Date.now() + 2_100 });
+    const outcome = expect(created).rejects.toBeInstanceOf(GislTimeoutError);
+    vi.setSystemTime(Date.now() + 500);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await outcome;
+    expect(d.createWorkflow).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives back the FIRST refusal, not the last, when the cap is reached', async () => {
+    const refusals = [refusal('op', '1'), refusal('op', '1'), refusal('op', '1')];
+    let calls = 0;
+    const d = guest(async () => {
+      throw refusals[calls++];
+    });
+    const created = createWorkflowAwaitingProbe(d.client, single);
+    const outcome = expect(created).rejects.toBe(refusals[0]);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await outcome;
+  });
+
+  it('a signed-in client still waits for the probe (control)', async () => {
+    let calls = 0;
+    const d = doubles(async () => {
+      if (++calls === 1) throw refusal('op');
+      return { workflowId: 'wf' };
+    });
+    await expect(createWorkflowAwaitingProbe(d.client, single)).resolves.toEqual({ workflowId: 'wf' });
+    expect(d.waitForProbe).toHaveBeenCalledWith('file_a', expect.anything());
   });
 });

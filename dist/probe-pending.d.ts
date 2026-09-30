@@ -1,8 +1,17 @@
 import type { WorkflowCreateResponse } from '@giveitsmaller/contracts/openapi';
-import type { GislClient } from './client.js';
+import { type GislClient } from './client.js';
 import type { WorkflowCreatePayload } from './types.js';
 /** A landed probe ends the gate server-side, so 3 creates is headroom, not a retry policy. */
 export declare const PROBE_PENDING_MAX_CREATE_ATTEMPTS = 3;
+/** A guest's delay before its re-create when the refusal carries no Retry-After. */
+export declare const GUEST_BACKOFF_BASE_MS = 1000;
+/**
+ * A guest's create cap: `anonymous-policy.yaml` `per_minute.workflow_create`
+ * (2). A third create inside the minute would be a 429, not a recovery, so a
+ * guest gets ONE re-create (codex 855a879d80d6). Pinned to the policy by
+ * scripts/tests/test_guest_create_cap.py.
+ */
+export declare const GUEST_MAX_CREATE_ATTEMPTS = 2;
 export interface CreateAwaitingProbeOptions {
     /**
      * ONE budget (ms) for the whole recovery - the refusal's Retry-After plus
