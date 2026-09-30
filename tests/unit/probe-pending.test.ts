@@ -342,8 +342,9 @@ describe('createWorkflowAwaitingProbe on a guest client', () => {
     const outcome = expect(created).rejects.toBe(original);
     await vi.advanceTimersByTimeAsync(10_000);
     await outcome;
-    // anonymous-policy per_minute.workflow_create = 2: a third create would be a 429.
-    expect(GUEST_MAX_CREATE_ATTEMPTS).toBeLessThan(PROBE_PENDING_MAX_CREATE_ATTEMPTS);
+    // anonymous-policy 2.1.0: a probe_pending refusal does not count against the
+    // guest create limit, so a guest gets the signed-in cap.
+    expect(GUEST_MAX_CREATE_ATTEMPTS).toBe(PROBE_PENDING_MAX_CREATE_ATTEMPTS);
     expect(d.createWorkflow).toHaveBeenCalledTimes(GUEST_MAX_CREATE_ATTEMPTS);
     expect(d.waitForProbe).not.toHaveBeenCalled();
   });

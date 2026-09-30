@@ -6,12 +6,13 @@ export declare const PROBE_PENDING_MAX_CREATE_ATTEMPTS = 3;
 /** A guest's delay before its re-create when the refusal carries no Retry-After. */
 export declare const GUEST_BACKOFF_BASE_MS = 1000;
 /**
- * A guest's create cap: `anonymous-policy.yaml` `per_minute.workflow_create`
- * (2). A third create inside the minute would be a 429, not a recovery, so a
- * guest gets ONE re-create (codex 855a879d80d6). Pinned to the policy by
+ * A guest's create cap. anonymous-policy 2.1.0 (contracts v2.219.0) says a
+ * `probe_pending` refusal does NOT count against `per_minute.workflow_create`,
+ * so a guest gets the same three creates as a signed-in caller. Under 2.0.0 it
+ * was 2, the rate limit (codex 855a879d80d6). Pinned to the policy by
  * scripts/tests/test_guest_create_cap.py.
  */
-export declare const GUEST_MAX_CREATE_ATTEMPTS = 2;
+export declare const GUEST_MAX_CREATE_ATTEMPTS = 3;
 export interface CreateAwaitingProbeOptions {
     /**
      * ONE budget (ms) for the whole recovery - the refusal's Retry-After plus
