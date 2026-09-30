@@ -138,12 +138,10 @@ export interface WatermarkOptions {
      * the flat single-overlay options above; the server rejects mixing the two as
      * `invalid_options`. image_watermark jpeg/png/webp bases only.
      *
-     * NOTE: NOT usable via `watermark()` yet — the facade composites a single
-     * overlay (the positional `overlay`, wire source src_1), so `overlays[]` would
-     * reference sources it cannot create. `watermark()` rejects it at lowering
-     * (`overlays_unsupported`); use the flat single-overlay options above instead.
-     * Kept as a valid contract wire key — multi-overlay stacking is a future
-     * feature (Vbbdq9C4).
+     * Pass the overlays to `watermark()` as an array; `overlays[i]` places the
+     * i-th, and the SDK refuses a length mismatch before uploading. The SDK does
+     * not check the flat-option exclusivity itself: set both and the request is
+     * sent as given, and the server answers `invalid_options`.
      */
     overlays?: WatermarkOverlay[];
 }

@@ -493,7 +493,11 @@ export declare class Recipe {
     /**
      * Composite an image OVERLAY onto this file (a multi-input op). `overlay` is a
      * secondary file-NODE (a {@link Recipe} — e.g. `client.file('logo.png')`),
-     * itself optionally processed first. Routes by THIS file's effective media:
+     * itself optionally processed first, or an ARRAY of 1-8 of them for the
+     * multi-overlay stack (contract `multi_overlay_stack`, jpeg/png/webp bases
+     * only): each becomes its own overlay source, in array order, and
+     * `options.overlays[i]` places `overlay[i]` (so `overlays[]`, when given, must
+     * have exactly one entry per overlay). Routes by THIS file's effective media:
      * image base → `image_watermark` (stable).
      * A VIDEO base is REFUSED: `video_watermark` was withdrawn to `planned`
      * by contracts v2.203.0, so this verb throws before any upload rather than
@@ -507,7 +511,7 @@ export declare class Recipe {
      * `compress`/`convert`/`thumbnail`, then `run`/`submit`). Distinct from
      * {@link textWatermark} (single-input text overlay).
      */
-    watermark(overlay: Recipe, options?: WatermarkOptions): WatermarkedRecipe;
+    watermark(overlay: Recipe | readonly Recipe[], options?: WatermarkOptions): WatermarkedRecipe;
     /**
      * Lower this recipe to a workflow-create payload against a resolved upload
      * id. Single-input chain → ONE job, `source: upload(fileId)`, ordered
@@ -1035,7 +1039,9 @@ export declare class ArchivedRecipe {
  * effective media). A multi-input op: base + overlay each enter via their own
  * `passthrough` source job (`src_0` base, `src_1` overlay; their own preceding
  * steps lower into those jobs), and the `watermark` job consumes them via
- * `job_output` inputs tagged `role: base` / `role: overlay`. Post-watermark
+ * `job_output` inputs tagged `role: base` / `role: overlay`. With a multi-overlay
+ * stack each overlay gets its own source job (`src_1` … `src_N`, in overlay
+ * order) and its own `role: overlay` input. Post-watermark
  * `compress`/`convert`/`thumbnail`/`transform` steps lower into a downstream
  * `post` job on the watermark output (`image_watermark` is `sole_op`). Mirrors
  * {@link MergedRecipe}. `textWatermark` is intentionally NOT a post-verb here.
@@ -1043,13 +1049,13 @@ export declare class ArchivedRecipe {
 export declare class WatermarkedRecipe {
     private readonly baseInput;
     private readonly baseSteps;
-    private readonly overlay;
     private readonly watermarkOptions;
     private readonly postSteps;
     private readonly presetDefaults?;
     private readonly scopedPresetDefaults?;
     private readonly client?;
-    constructor(baseInput: FileInput, baseSteps: readonly RecipeStep[], overlay: Recipe, watermarkOptions: WatermarkOptions, postSteps?: readonly RecipeStep[], presetDefaults?: PresetDefaults | undefined, scopedPresetDefaults?: PresetDefaults | undefined, client?: GislClient | undefined);
+    private readonly overlays;
+    constructor(baseInput: FileInput, baseSteps: readonly RecipeStep[], overlay: Recipe | readonly Recipe[], watermarkOptions: WatermarkOptions, postSteps?: readonly RecipeStep[], presetDefaults?: PresetDefaults | undefined, scopedPresetDefaults?: PresetDefaults | undefined, client?: GislClient | undefined);
     /** Reduce the watermarked output's size. See {@link Recipe.compress}. */
     compress(optimize?: OptimizeFor, options?: Record<string, unknown>): WatermarkedRecipe;
     /** Change the watermarked output's format. See {@link Recipe.convert}. Option keys validated pre-upload. */
@@ -1064,7 +1070,7 @@ export declare class WatermarkedRecipe {
      * them via `job_output` (role base/overlay). The watermark op is `sole_op`
      * (ADR-0025), so `operations[]` is exactly `[image_watermark|video_watermark]`;
      * any post-watermark ops lower into a downstream `post` job. `fileIds` is
-     * `[baseId, overlayId]` (upload order). Throws pre-lowering if the base media
+     * `[baseId, overlayId, …]` (upload order). Throws pre-lowering if the base media
      * is undetectable/unsupported (the planned-op gate).
      *
      * @internal Consumed by {@link run}/{@link submit} (after upload) + the parity harness.
@@ -1097,7 +1103,7 @@ export declare class WatermarkedRecipe {
         probeBeforeCreate?: boolean;
         probeTimeoutMs?: number;
     }): Promise<Handle>;
-    /** Base + overlay inputs, in upload/lowering order (`[base, overlay]`). */
+    /** Base + overlay inputs, in upload/lowering order (`[base, overlay, …]`). */
     private inputsInOrder;
     /**
      * Validate the watermark BEFORE any upload: the base must route to a shippable

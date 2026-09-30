@@ -323,41 +323,117 @@ describe('WatermarkedRecipe — overlay validation', () => {
   });
 });
 
-describe('WatermarkedRecipe — overlays[] gate (Vbbdq9C4)', () => {
-  // watermark() composites exactly ONE overlay (the positional overlay, src_1),
-  // so overlays[] references sources the facade can't build and is invalid wire.
-  // The gate lives at LOWERING so a post-construction mutation can't slip past.
-  it('rejects a non-empty overlays[] at lowering', () => {
-    const wr = recipe('photo.jpg').watermark(overlay(), { overlays: [{ anchor: 'center' }] });
+describe('WatermarkedRecipe — multi-overlay stack, overlays[] (tU8XJAfh)', () => {
+  // Contract image_watermark `features.multi_overlay_stack` (stable): 1-8
+  // overlay sources, `overlays[i]` places source i, jpeg/png/webp bases only.
+  const reasonOf = (fn: () => unknown): string | undefined => {
     try {
-      wr.toWorkflowPayload(['b', 'o']);
-      throw new Error('expected throw');
+      fn();
     } catch (e) {
-      expect((e as GislConfigError).reason).toBe('overlays_unsupported');
-      expect((e as GislConfigError).conflictingFields).toEqual(['overlays']);
-      expect((e as Error).message).toMatch(/overlays\[\]/);
+      return (e as GislConfigError).reason;
     }
+    return undefined;
+  };
+
+  it('lowers an overlay array to src_1..src_N + one role:overlay input each, with overlays[] on the wire', () => {
+    const placements: WatermarkOverlay[] = [
+      { anchor: 'top_left', margin_x: '10px', opacity: 0.8 },
+      { anchor: 'bottom_right', overlay_width: '20%' },
+    ];
+    const payload = recipe('photo.jpg')
+      .watermark([overlay('logo.png'), overlay('badge.png')], { overlays: placements })
+      .toWorkflowPayload(['b', 'o1', 'o2']) as unknown as {
+      jobs: { id: string; source?: { type: string; file_id?: string } }[];
+    };
+    expect(payload.jobs.map((j) => j.id)).toEqual(['src_0', 'src_1', 'src_2', 'watermark']);
+    expect(payload.jobs[2].source).toEqual({ type: 'upload', file_id: 'o2' });
+    const wm = watermarkJobOf(payload);
+    expect(wm.inputs.map((i) => [i.source.from, i.role])).toEqual([
+      ['src_0', 'base'],
+      ['src_1', 'overlay'],
+      ['src_2', 'overlay'],
+    ]);
+    expect(wm.operations[0]).toEqual({ type: 'image_watermark', options: { overlays: placements } });
   });
 
-  it('rejects an empty overlays: [] at lowering (contract minItems: 1 makes it invalid too)', () => {
-    const wr = recipe('photo.jpg').watermark(overlay(), { overlays: [] });
-    expect(() => wr.toWorkflowPayload(['b', 'o'])).toThrow(/overlays\[\]/);
+  it('accepts overlays[] with ONE entry for a single overlay (contract minItems: 1)', () => {
+    const wm = watermarkJobOf(
+      recipe('photo.png').watermark(overlay(), { overlays: [{ anchor: 'center' }] }).toWorkflowPayload(['b', 'o']),
+    );
+    expect(wm.operations[0].options).toEqual({ overlays: [{ anchor: 'center' }] });
   });
 
-  it('rejects overlays[] added by MUTATION after watermark() — the gate is at lowering', () => {
-    const opts: WatermarkOptions = { anchor: 'center' };
+  it('refuses flat placement options together with overlays[] (mutually exclusive in the contract)', () => {
+    let err: unknown;
+    try {
+      recipe('photo.jpg')
+        .watermark([overlay(), overlay('b.png')], { opacity: 0.4, overlays: [{}, { anchor: 'center' }] })
+        .toWorkflowPayload(['b', 'o1', 'o2']);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(GislConfigError);
+    expect((err as GislConfigError).reason).toBe('invalid_combination');
+    expect((err as GislConfigError).conflictingFields).toEqual(['overlays', 'opacity']);
+  });
+
+  it('refuses several overlays without overlays[] (the flat options place ONE overlay)', () => {
+    expect(reasonOf(() =>
+      recipe('photo.jpg').watermark([overlay(), overlay('b.png')]).toWorkflowPayload(['b', 'o1', 'o2']),
+    )).toBe('overlays_count_mismatch');
+    expect(reasonOf(() =>
+      recipe('photo.jpg').watermark([overlay(), overlay('b.png')], { anchor: 'center' }).toWorkflowPayload(['b', 'o1', 'o2']),
+    )).toBe('overlays_count_mismatch');
+  });
+
+  it('refuses an overlays[] whose length differs from the overlay count', () => {
+    const two = [{ anchor: 'top_left' }, { anchor: 'center' }] as WatermarkOverlay[];
+    expect(reasonOf(() => recipe('photo.jpg').watermark(overlay(), { overlays: two }).toWorkflowPayload(['b', 'o'])))
+      .toBe('overlays_count_mismatch');
+    expect(reasonOf(() => recipe('photo.jpg').watermark(overlay(), { overlays: [] }).toWorkflowPayload(['b', 'o'])))
+      .toBe('overlays_count_mismatch');
+    expect(reasonOf(() =>
+      recipe('photo.jpg')
+        .watermark(overlay(), { overlays: null as unknown as WatermarkOverlay[] })
+        .toWorkflowPayload(['b', 'o']),
+    )).toBe('overlays_count_mismatch');
+  });
+
+  it('checks overlays[] at LOWERING, so a mutation after watermark() is caught', () => {
+    const opts: WatermarkOptions = {};
     const wr = recipe('photo.jpg').watermark(overlay(), opts);
-    // A caller mutating the (by-reference) options object AFTER the verb must not
-    // slip past an eager construction-time guard — lowering re-reads the final options.
-    opts.overlays = [{ anchor: 'top_left' }];
-    expect(() => wr.toWorkflowPayload(['b', 'o'])).toThrow(/overlays\[\]/);
+    opts.overlays = [{ anchor: 'top_left' }, { anchor: 'center' }];
+    expect(reasonOf(() => wr.toWorkflowPayload(['b', 'o']))).toBe('overlays_count_mismatch');
   });
 
-  it('rejects a present overlays: null (reject-all — parity with PHP array_key_exists)', () => {
-    // `null` is off-type, but the reject-all gate keys on "present, not undefined",
-    // so it is rejected — matching the PHP array_key_exists('overlays') check.
-    const wr = recipe('photo.jpg').watermark(overlay(), { overlays: null as unknown as WatermarkOverlay[] });
-    expect(() => wr.toWorkflowPayload(['b', 'o'])).toThrow(/overlays\[\]/);
+  it('refuses overlays[] or more than one overlay on a tiff/bmp base (image group only)', () => {
+    expect(reasonOf(() =>
+      recipe('scan.tiff').watermark(overlay(), { overlays: [{ anchor: 'center' }] }).toWorkflowPayload(['b', 'o']),
+    )).toBe('overlays_unsupported_base');
+    expect(reasonOf(() =>
+      recipe('pic.bmp').watermark([overlay(), overlay('b.png')]).toWorkflowPayload(['b', 'o1', 'o2']),
+    )).toBe('overlays_unsupported_base');
+  });
+
+  it('refuses 0 or more than 8 overlays at the watermark() call', () => {
+    expect(reasonOf(() => recipe('photo.jpg').watermark([]))).toBe('invalid_overlay_count');
+    const nine = Array.from({ length: 9 }, (_, i) => overlay(`o${i}.png`));
+    expect(reasonOf(() => recipe('photo.jpg').watermark(nine))).toBe('invalid_overlay_count');
+    const eight = Array.from({ length: 8 }, (_, i) => overlay(`o${i}.png`));
+    const eightPlacements = eight.map(() => ({}));
+    expect(recipe('photo.jpg').watermark(eight, { overlays: eightPlacements }).toWorkflowPayload(['b', ...eight.map((_, i) => `o${i}`)]).jobs)
+      .toHaveLength(10);
+  });
+
+  it('refuses a non-recipe element in the overlay array as a config error', () => {
+    expect(reasonOf(() => recipe('photo.jpg').watermark([overlay(), 'logo.png' as unknown as Recipe])))
+      .toBe('invalid_overlay');
+    expect(reasonOf(() => recipe('photo.jpg').watermark([null as unknown as Recipe]))).toBe('invalid_overlay');
+  });
+
+  it('validates EVERY overlay in the array as an image', () => {
+    expect(reasonOf(() => recipe('photo.jpg').watermark([overlay(), overlay('clip.mp4')])))
+      .toBe('invalid_overlay_media');
   });
 
   it('still lowers the flat single-overlay options when no overlays key is present', () => {
@@ -540,17 +616,42 @@ describe('WatermarkedRecipe.run — happy path through the shared helper', () =>
 describe('WatermarkedRecipe.run — preflight before upload (T3ltXsou)', () => {
   it('a lowering error in the composed chain throws BEFORE any upload', async () => {
     // The shared multi-input helper now lowers with placeholder ids before
-    // uploading, so a lowering-time gate (here overlays[]) fails pre-upload —
-    // no wasted upload bytes. Mirrors the single-input 0azjb6Rg preflight.
+    // uploading, so a lowering-time gate (here an overlays[] count mismatch)
+    // fails pre-upload — no wasted upload bytes. Mirrors the single-input
+    // 0azjb6Rg preflight.
     const mock = makeMockClient();
     const err = await boundBase(mock)
-      .watermark(new Recipe(fileInput.path('logo.png')), { overlays: [{ anchor: 'center' }] })
+      .watermark(new Recipe(fileInput.path('logo.png')), { overlays: [{ anchor: 'center' }, { anchor: 'top_left' }] })
       .run({ maxWait: '30s' })
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(GislConfigError);
-    expect((err as GislConfigError).reason).toBe('overlays_unsupported');
+    expect((err as GislConfigError).reason).toBe('overlays_count_mismatch');
     expect(mock.uploadFile).not.toHaveBeenCalled();
     expect(mock.createWorkflow).not.toHaveBeenCalled();
+  });
+});
+
+describe('WatermarkedRecipe.submit — multi-overlay stack on the wire (tU8XJAfh)', () => {
+  it('uploads base + every overlay and sends overlays[] in the created workflow', async () => {
+    const mock = makeMockClient();
+    mock.uploadFile
+      .mockResolvedValueOnce({ fileId: 'base0', contentType: 'image/jpeg', sizeBytes: 1 })
+      .mockResolvedValueOnce({ fileId: 'ovl1', contentType: 'image/png', sizeBytes: 1 })
+      .mockResolvedValueOnce({ fileId: 'ovl2', contentType: 'image/png', sizeBytes: 1 });
+    const placements: WatermarkOverlay[] = [{ anchor: 'top_left' }, { anchor: 'bottom_right', opacity: 0.9 }];
+
+    await boundBase(mock)
+      .watermark([new Recipe(fileInput.path('logo.png')), new Recipe(fileInput.path('badge.png'))], {
+        overlays: placements,
+      })
+      .submit();
+
+    expect(mock.uploadFile.mock.calls.map((c) => c[0])).toEqual(['photo.jpg', 'logo.png', 'badge.png']);
+    const payload = mock.createWorkflow.mock.calls[0][0];
+    const wm = payload.jobs.find((j: { id: string }) => j.id === 'watermark');
+    expect(wm.operations[0]).toEqual({ type: 'image_watermark', options: { overlays: placements } });
+    expect(wm.inputs.map((i: { source: { from: string } }) => i.source.from)).toEqual(['src_0', 'src_1', 'src_2']);
+    expect(payload.jobs.find((j: { id: string }) => j.id === 'src_2').source).toEqual({ type: 'upload', file_id: 'ovl2' });
   });
 });
 

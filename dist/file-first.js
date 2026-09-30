@@ -835,7 +835,11 @@ export class Recipe {
     /**
      * Composite an image OVERLAY onto this file (a multi-input op). `overlay` is a
      * secondary file-NODE (a {@link Recipe} — e.g. `client.file('logo.png')`),
-     * itself optionally processed first. Routes by THIS file's effective media:
+     * itself optionally processed first, or an ARRAY of 1-8 of them for the
+     * multi-overlay stack (contract `multi_overlay_stack`, jpeg/png/webp bases
+     * only): each becomes its own overlay source, in array order, and
+     * `options.overlays[i]` places `overlay[i]` (so `overlays[]`, when given, must
+     * have exactly one entry per overlay). Routes by THIS file's effective media:
      * image base → `image_watermark` (stable).
      * A VIDEO base is REFUSED: `video_watermark` was withdrawn to `planned`
      * by contracts v2.203.0, so this verb throws before any upload rather than
@@ -858,7 +862,7 @@ export class Recipe {
         const base = _watermarkEffectiveBase(this.input, this.steps);
         if (base.media !== undefined)
             _resolveWatermarkWireOp(base);
-        _validateWatermarkOverlay(overlay);
+        _normalizeWatermarkOverlays(overlay).forEach(_validateWatermarkOverlay);
         return new WatermarkedRecipe(this.input, this.steps, overlay, options, [], this.presetDefaults, this.scopedPresetDefaults, this.client);
     }
     /**
@@ -1542,23 +1546,67 @@ function _validateWatermarkOverlay(overlay) {
             'composited onto the base — pass an image file (or a recipe whose output is an image).', { reason: 'invalid_overlay_media', conflictingFields: ['overlay'] });
     }
 }
-function _lowerWatermarkOp(wireOp, options) {
-    // `overlays[]` (the multi-overlay stack) is a live contract option but is NOT
-    // reachable through watermark(): the facade composites exactly ONE overlay —
-    // the positional `overlay` (wire source src_1) — so overlays[1..] reference
-    // sources it cannot create, any entry is invalid on a non-image base, and the
-    // contract's `minItems: 1` makes an empty array invalid too. Reject it here at
-    // lowering (mutation-safe — reads the FINAL options, catching a post-watermark()
-    // `opts.overlays = [...]`) and point callers at the single-overlay knobs.
-    // Real multi-overlay stacking is a future feature (Vbbdq9C4).
-    if (options.overlays !== undefined) {
-        throw new GislConfigError("watermark(): 'overlays[]' (multi-overlay stacking) is not supported — watermark() composites a " +
-            'single overlay (the positional overlay argument). Use the top-level anchor / opacity / margin_x / ' +
-            'margin_y / overlay_width options to place it. Multi-overlay stacking is a future feature.', { reason: 'overlays_unsupported', conflictingFields: ['overlays'] });
+const _WATERMARK_MAX_OVERLAYS = 8;
+/**
+ * The overlay argument of `watermark()` as a list: one {@link Recipe} is the
+ * single-overlay path, an array is the multi-overlay stack. The contract caps the
+ * overlay role at 1-8 sources (`per_role_cardinality.overlay`, and `overlays[]`
+ * `minItems: 1` / `maxItems: 8`), so a count outside that throws pre-upload.
+ */
+function _normalizeWatermarkOverlays(overlay) {
+    const overlays = overlay instanceof Recipe ? [overlay] : [...overlay];
+    if (overlays.length < 1 || overlays.length > _WATERMARK_MAX_OVERLAYS) {
+        throw new GislConfigError(`watermark() takes 1 to ${_WATERMARK_MAX_OVERLAYS} overlays; got ${overlays.length}.`, { reason: 'invalid_overlay_count', conflictingFields: ['overlay'] });
     }
-    // The remaining watermark options (anchor/opacity/margin_x/margin_y/
-    // overlay_width) are already wire keys; empty options omit the `options` key
-    // (byte-identical to PHP).
+    // An untyped JS caller can put anything in the array; say so as a config
+    // error, as PHP does, rather than failing on a property read (codex ddb958bbe726).
+    for (const each of overlays) {
+        if (!(each instanceof Recipe)) {
+            throw new GislConfigError(`watermark() overlays must be file-node recipes (e.g. gisl.file('logo.png')); got ${each === null ? 'null' : typeof each}.`, { reason: 'invalid_overlay', conflictingFields: ['overlay'] });
+        }
+    }
+    return overlays;
+}
+/** The flat single-overlay placement options, mutually exclusive with `overlays[]` (image_watermark contract). */
+const WATERMARK_FLAT_PLACEMENT_KEYS = ['anchor', 'margin_x', 'margin_y', 'opacity', 'overlay_width'];
+function _lowerWatermarkOp(wireOp, options, overlayCount, baseMime) {
+    // The contract declares the multi-overlay stack (`overlays[]`, and any request
+    // with more than one overlay source) on the `image` group ONLY — jpeg/png/webp.
+    // A tiff/bmp base supports the flat single-overlay options but is
+    // `invalid_options` with a second overlay. Checked at lowering (which the
+    // pre-upload preflight runs) so a post-watermark() `opts.overlays = [...]`
+    // mutation is caught too.
+    const multiOverlayMimes = WATERMARK_CAPABILITY.image_watermark.image.mimes;
+    if ((options.overlays !== undefined || overlayCount > 1) &&
+        (wireOp !== 'image_watermark' || baseMime === undefined || !multiOverlayMimes.includes(baseMime))) {
+        throw new GislConfigError(`watermark(): multiple overlays / 'overlays[]' need a ${multiOverlayMimes.join(', ')} base; ` +
+            `got ${baseMime ?? 'an undetectable'} base. Other bases take a single overlay placed with the ` +
+            'top-level anchor / opacity / margin_x / margin_y / overlay_width options.', { reason: 'overlays_unsupported_base', conflictingFields: ['overlays'] });
+    }
+    // `overlays[i]` places overlay source i, and the contract says
+    // len(overlays) MUST equal the overlay-source count (worker-enforced), so a
+    // second overlay with no `overlays[]` is invalid too: the flat options place
+    // ONE overlay (codex 5fd9cafaf7ca). Refusing here saves the uploads.
+    if (options.overlays === undefined && overlayCount > 1) {
+        throw new GislConfigError(`watermark(): ${overlayCount} overlays need 'overlays[]' with one placement per overlay, in overlay ` +
+            'order; the top-level anchor / opacity / margin_x / margin_y / overlay_width place a single overlay.', { reason: 'overlays_count_mismatch', conflictingFields: ['overlays', 'overlay'] });
+    }
+    // `overlays[]` and the flat single-overlay options are mutually exclusive
+    // (`invalid_options`, api + worker); no silent precedence (codex 7383823c9875).
+    const flatSet = WATERMARK_FLAT_PLACEMENT_KEYS.filter((key) => options[key] !== undefined);
+    if (options.overlays !== undefined && flatSet.length > 0) {
+        throw new GislConfigError(`watermark(): 'overlays[]' cannot be combined with the single-overlay option(s) ${flatSet.join(', ')}; ` +
+            "put each overlay's placement inside its 'overlays[]' entry.", { reason: 'invalid_combination', conflictingFields: ['overlays', ...flatSet] });
+    }
+    if (options.overlays !== undefined) {
+        const given = options.overlays;
+        if (!Array.isArray(given) || given.length !== overlayCount) {
+            throw new GislConfigError(`watermark(): 'overlays[]' needs exactly one entry per overlay, in overlay order — ` +
+                `${overlayCount} overlay(s), ${Array.isArray(given) ? `${given.length} entries` : 'not an array'}.`, { reason: 'overlays_count_mismatch', conflictingFields: ['overlays', 'overlay'] });
+        }
+    }
+    // Every watermark option (flat keys and `overlays[]`) is already a wire key;
+    // empty options omit the `options` key (byte-identical to PHP).
     const wire = { ...options };
     return Object.keys(wire).length === 0 ? { type: wireOp } : { type: wireOp, options: wire };
 }
@@ -2341,7 +2389,9 @@ export class ArchivedRecipe {
  * effective media). A multi-input op: base + overlay each enter via their own
  * `passthrough` source job (`src_0` base, `src_1` overlay; their own preceding
  * steps lower into those jobs), and the `watermark` job consumes them via
- * `job_output` inputs tagged `role: base` / `role: overlay`. Post-watermark
+ * `job_output` inputs tagged `role: base` / `role: overlay`. With a multi-overlay
+ * stack each overlay gets its own source job (`src_1` … `src_N`, in overlay
+ * order) and its own `role: overlay` input. Post-watermark
  * `compress`/`convert`/`thumbnail`/`transform` steps lower into a downstream
  * `post` job on the watermark output (`image_watermark` is `sole_op`). Mirrors
  * {@link MergedRecipe}. `textWatermark` is intentionally NOT a post-verb here.
@@ -2349,21 +2399,21 @@ export class ArchivedRecipe {
 export class WatermarkedRecipe {
     baseInput;
     baseSteps;
-    overlay;
     watermarkOptions;
     postSteps;
     presetDefaults;
     scopedPresetDefaults;
     client;
+    overlays;
     constructor(baseInput, baseSteps, overlay, watermarkOptions, postSteps = [], presetDefaults, scopedPresetDefaults, client) {
         this.baseInput = baseInput;
         this.baseSteps = baseSteps;
-        this.overlay = overlay;
         this.watermarkOptions = watermarkOptions;
         this.postSteps = postSteps;
         this.presetDefaults = presetDefaults;
         this.scopedPresetDefaults = scopedPresetDefaults;
         this.client = client;
+        this.overlays = _normalizeWatermarkOverlays(overlay);
     }
     /** Reduce the watermarked output's size. See {@link Recipe.compress}. */
     compress(optimize, options = {}) {
@@ -2411,30 +2461,33 @@ export class WatermarkedRecipe {
      * them via `job_output` (role base/overlay). The watermark op is `sole_op`
      * (ADR-0025), so `operations[]` is exactly `[image_watermark|video_watermark]`;
      * any post-watermark ops lower into a downstream `post` job. `fileIds` is
-     * `[baseId, overlayId]` (upload order). Throws pre-lowering if the base media
+     * `[baseId, overlayId, …]` (upload order). Throws pre-lowering if the base media
      * is undetectable/unsupported (the planned-op gate).
      *
      * @internal Consumed by {@link run}/{@link submit} (after upload) + the parity harness.
      */
     toWorkflowPayload(fileIds, callbackUrl) {
-        const wireOp = _resolveWatermarkWireOp(_watermarkEffectiveBase(this.baseInput, this.baseSteps));
+        const base = _watermarkEffectiveBase(this.baseInput, this.baseSteps);
+        const wireOp = _resolveWatermarkWireOp(base);
         const baseId = fileIds[0];
-        const overlayId = fileIds[1];
         // src_0: the base (its preceding steps, else a lossless passthrough).
         const baseOps = this.baseSteps.length > 0
             ? _nestedSingleJob(new Recipe(this.baseInput, undefined, this.baseSteps, this.presetDefaults, this.scopedPresetDefaults)
                 .toWorkflowPayload(baseId), 'watermark base').operations
             : [{ type: 'passthrough' }];
-        // src_1: the overlay recipe (its own steps, else a lossless passthrough).
-        const overlayOps = this.overlay.recipeSteps.length > 0
-            ? _nestedSingleJob(this.overlay.toWorkflowPayload(overlayId), 'watermark overlay').operations
-            : [{ type: 'passthrough' }];
+        // src_1..src_N: each overlay recipe (its own steps, else a lossless passthrough).
         // Key order (id, source, operations) matches PHP toWire() — byte-identical JSON.
+        const srcOverlays = this.overlays.map((overlay, i) => ({
+            id: `src_${i + 1}`,
+            source: uploadSource(fileIds[i + 1]),
+            operations: overlay.recipeSteps.length > 0
+                ? _nestedSingleJob(overlay.toWorkflowPayload(fileIds[i + 1]), 'watermark overlay').operations
+                : [{ type: 'passthrough' }],
+        }));
         const srcBase = { id: 'src_0', source: uploadSource(baseId), operations: baseOps };
-        const srcOverlay = { id: 'src_1', source: uploadSource(overlayId), operations: overlayOps };
         const inputs = [
             { source: jobOutputSource('src_0'), role: 'base' },
-            { source: jobOutputSource('src_1'), role: 'overlay' },
+            ...this.overlays.map((_, i) => ({ source: jobOutputSource(`src_${i + 1}`), role: 'overlay' })),
         ];
         // `image_watermark` / `video_watermark` are `sole_op` (ADR-0025): the op
         // MUST be alone in its job. Post-watermark steps lower into a DOWNSTREAM
@@ -2443,9 +2496,9 @@ export class WatermarkedRecipe {
         const watermarkJob = {
             id: 'watermark',
             inputs,
-            operations: [_lowerWatermarkOp(wireOp, this.watermarkOptions)],
+            operations: [_lowerWatermarkOp(wireOp, this.watermarkOptions, this.overlays.length, base.mime)],
         };
-        const jobs = [srcBase, srcOverlay, watermarkJob];
+        const jobs = [srcBase, ...srcOverlays, watermarkJob];
         const postOps = this.lowerPostSteps(wireOp);
         if (postOps.length > 0) {
             jobs.push({ id: _POST_STEP_JOB_REF, source: jobOutputSource('watermark'), operations: postOps });
@@ -2509,9 +2562,9 @@ export class WatermarkedRecipe {
         return new Handle(created.workflowId, created.webhookSecret != null ? created.webhookSecret : undefined, this.client, null);
     }
     // ---------------------------------------------------------------------------
-    /** Base + overlay inputs, in upload/lowering order (`[base, overlay]`). */
+    /** Base + overlay inputs, in upload/lowering order (`[base, overlay, …]`). */
     inputsInOrder() {
-        return [this.baseInput, this.overlay.recipeInput];
+        return [this.baseInput, ...this.overlays.map((overlay) => overlay.recipeInput)];
     }
     /**
      * Validate the watermark BEFORE any upload: the base must route to a shippable
@@ -2521,7 +2574,7 @@ export class WatermarkedRecipe {
      */
     validatePreUpload() {
         _resolveWatermarkWireOp(_watermarkEffectiveBase(this.baseInput, this.baseSteps));
-        _validateWatermarkOverlay(this.overlay);
+        this.overlays.forEach(_validateWatermarkOverlay);
     }
     /**
      * Upload base + overlay (verbatim for a pre-uploaded id; uploading a path /
@@ -2558,7 +2611,7 @@ export class WatermarkedRecipe {
         return recipe.toWorkflowPayload('watermarked').jobs[0].operations;
     }
     withStep(step) {
-        return new WatermarkedRecipe(this.baseInput, this.baseSteps, this.overlay, this.watermarkOptions, [...this.postSteps, step], this.presetDefaults, this.scopedPresetDefaults, this.client);
+        return new WatermarkedRecipe(this.baseInput, this.baseSteps, this.overlays, this.watermarkOptions, [...this.postSteps, step], this.presetDefaults, this.scopedPresetDefaults, this.client);
     }
 }
 /**
