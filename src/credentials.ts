@@ -475,7 +475,9 @@ async function readProfile(
   try {
     // Lazy import keeps `node:fs` out of browser bundles. webpackIgnore stops
     // webpack bundling it for browser targets; Vite externalises node: builtins
-    // itself (no @vite-ignore — that would also bypass test mocks of node:fs).
+    // itself. ⚠️ This dynamic import of a `node:` builtin is NOT interceptable
+    // by `vi.mock('node:fs/promises')` (see node-fs.ts), so the tests drive
+    // every arm below with real filesystem paths, not a mock.
     const fs = await import(/* webpackIgnore: true */ 'node:fs/promises');
     raw = await fs.readFile(path, 'utf8');
   } catch (err) {

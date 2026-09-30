@@ -169,6 +169,48 @@ describe('resolveApiKey', () => {
     }
   });
 
+  // The read-failure boundary (oHJdhC7S). Real filesystem conditions only: the
+  // `node:fs/promises` import in readProfile is dynamic, so vi.mock cannot reach
+  // it. Each trigger is independent of permissions, so it behaves the same when
+  // the suite runs as root (CI and the local container both do).
+  describe('shared credentials file read failures', () => {
+    let dir: string;
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), 'gisl-credentials-'));
+    });
+    afterEach(() => {
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    // FreeBSD's readFile returns a directory's contents instead of EISDIR (Node fs
+    // docs), so this trigger only exists elsewhere; ENOTDIR/ENOENT below cover the
+    // wrapper on every platform (codex e83de34f68c8).
+    it.skipIf(process.platform === 'freebsd')('THROWS GislConfigError naming the path and errno when the path is a directory (EISDIR)', async () => {
+      const path = join(dir, 'credentials');
+      mkdirSync(path);
+      let thrown: unknown;
+      try {
+        await resolveApiKey({ profilePath: path });
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toBeInstanceOf(GislConfigError);
+      expect((thrown as Error).message).toBe(
+        `Failed to read shared credentials file at ${path}: EISDIR`,
+      );
+    });
+
+    it('returns null when the path runs THROUGH a regular file (ENOTDIR)', async () => {
+      const file = join(dir, 'not-a-dir');
+      writeFileSync(file, '[default]\napi_key = file_key\n');
+      await expect(resolveApiKey({ profilePath: join(file, 'credentials') })).resolves.toBeNull();
+    });
+
+    it('returns null when the file does not exist (ENOENT)', async () => {
+      await expect(resolveApiKey({ profilePath: join(dir, 'absent') })).resolves.toBeNull();
+    });
+  });
+
   it('ignores blank lines and # / ; comments in the INI file', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'gisl-credentials-'));
     try {
