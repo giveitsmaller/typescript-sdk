@@ -240,6 +240,14 @@ describe('Recipe chain compress — precedence mirrors the op-first resolver', (
 //  the two surfaces can't drift.)
 // ---------------------------------------------------------------------------
 
+describe('Recipe chain compress — document quality reaches the wire (f3JiTxkK)', () => {
+  it.each(['report.docx', 'sheet.ods', 'book.epub'])('%s: compress(undefined, { quality: 40 })', (path) => {
+    expect(operations(recipe(path).compress(undefined, { quality: 40 }))).toEqual([
+      { type: 'compress', options: { quality: 40 } },
+    ]);
+  });
+});
+
 describe('Recipe chain compress — bag-supplied optimize is resolved (regression parity)', () => {
   it('compress(undefined, { optimize: Balanced }) lowers identically to compress(Balanced)', () => {
     const viaBag = operations(

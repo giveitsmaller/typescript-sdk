@@ -104,15 +104,11 @@ const CROSS_VERB_ROUTING: Readonly<Record<string, Readonly<Record<string, 'outpu
 
 /**
  * DEFERRED_EXPOSURE: expose+contract compress options reachable by NO ergonomic verb
- * today. Exposing them is new ergonomic public API (product-scope) — tracked in the
- * follow-up ticket; deferred (not exposed) here. Drift-guarded below (each must stay
- * expose+contract AND genuinely unreachable).
+ * today. Drift-guarded below (each must stay expose+contract AND genuinely
+ * unreachable). EMPTY since f3JiTxkK: document `quality` (its only former entries)
+ * is now native in KNOWN_WIRE_FIELDS. A new entry here is a deliberate deferral.
  */
-const DEFERRED_EXPOSURE: Readonly<Record<string, readonly string[]>> = {
-  document_office: ['quality'],
-  document_odf: ['quality'],
-  document_epub: ['quality'],
-};
+const DEFERRED_EXPOSURE: Readonly<Record<string, readonly string[]>> = {};
 
 /**
  * PRE_EXPOSED: keys the SDK's `KNOWN_WIRE_FIELDS` ALLOWS ahead of the contract — the
@@ -296,6 +292,12 @@ describe('code-builder compress conformance', () => {
   // misclassification: an image key wrongly placed in DEFERRED IS in the output surface
   // and fails here.
   it('deferred keys are reachable by no ergonomic surface for their media', () => {
+    // Positive control (f3JiTxkK): DEFERRED_EXPOSURE is empty, so the loop below is
+    // vacuous. Document `quality`, its former entry, IS reachable now — exactly what
+    // the loop's `reachable.has(key) === false` would reject if it were re-deferred.
+    for (const documentGroup of ['document_office', 'document_odf', 'document_epub']) {
+      expect(mediaReachableKeys(documentGroup).has('quality')).toBe(true);
+    }
     for (const [media, keys] of Object.entries(DEFERRED_EXPOSURE)) {
       // Find a representative contract group for this SDK media (documents map 1:1).
       const group = Object.keys(compress.media_groups).find((g) => sdkMediaFor(g) === media);

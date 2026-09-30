@@ -247,9 +247,9 @@ const MEDIA_FIELDS = Object.freeze({
     image: new Set(['quality', 'metadata', 'outputFormat']),
     audio: new Set(['bitrate', 'channels', 'sampleRate', 'normalize']),
     video: new Set(['codec', 'targetSize', 'crf', 'preset', 'width', 'height', 'fit', 'fps', 'faststart', 'audioCodec', 'audioBitrate']),
-    document_office: new Set(['stripMacros', 'stripHiddenData', 'stripUnusedFonts']),
-    document_odf: new Set(['stripMetadata', 'stripUnusedStyles']),
-    document_epub: new Set(['fontSubsetting', 'stripUnusedCss']),
+    document_office: new Set(['quality', 'stripMacros', 'stripHiddenData', 'stripUnusedFonts']),
+    document_odf: new Set(['quality', 'stripMetadata', 'stripUnusedStyles']),
+    document_epub: new Set(['quality', 'fontSubsetting', 'stripUnusedCss']),
 });
 const OUT = (key) => ({ verb: 'output', key });
 const CROSS_VERB_OVERRIDES = Object.freeze({
@@ -356,13 +356,18 @@ function mergeLayer(acc, layer, source) {
 // Exported so the wire-key conformance guard (tests/unit/wire-key-conformance.test.ts)
 // can pin this hand-maintained allowlist to the generated contract metadata: every
 // field the resolver may emit MUST be a real contract option key for `compress`.
+//
+// Document `quality` is the one STABLE document compress option (compress.yaml
+// document_office/odf/epub, `sdk_exposure: expose`); it was missing here, so the
+// only document knob the worker actually reads was refused as `unknown_field`
+// (f3JiTxkK). The strip_* keys beside it are `planned` — see PLANNED_COMPRESS_OPTIONS.
 export const KNOWN_WIRE_FIELDS = Object.freeze({
     image: new Set(['quality', 'metadata', 'output_format']),
     audio: new Set(['bitrate', 'channels', 'sample_rate', 'normalize', 'trim_start', 'trim_end']),
     video: new Set(['codec', 'encoding_mode', 'crf', 'target_size_bytes', 'preset', 'width', 'height', 'fit', 'fps', 'faststart', 'audio_codec', 'audio_bitrate', 'trim_start', 'trim_end']),
-    document_office: new Set(['strip_macros', 'strip_hidden_data', 'strip_unused_fonts']),
-    document_odf: new Set(['strip_metadata', 'strip_unused_styles']),
-    document_epub: new Set(['font_subsetting', 'strip_unused_css']),
+    document_office: new Set(['quality', 'strip_macros', 'strip_hidden_data', 'strip_unused_fonts']),
+    document_odf: new Set(['quality', 'strip_metadata', 'strip_unused_styles']),
+    document_epub: new Set(['quality', 'font_subsetting', 'strip_unused_css']),
 });
 /**
  * Compress options that are `availability: planned` per mime-group, mirroring the

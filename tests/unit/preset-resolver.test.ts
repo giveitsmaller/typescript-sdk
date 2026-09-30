@@ -593,6 +593,74 @@ describe('resolveCompressOptions — invalid-combo validations', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Document compress `quality` (f3JiTxkK)
+// ---------------------------------------------------------------------------
+//
+// compress.yaml gives document_office / document_odf / document_epub ONE stable
+// option, `quality` (integer 1-100, default 50, `sdk_exposure: expose`); every
+// other document option is `planned`. The resolver's allowlist carried only the
+// planned strip_* keys, so the one knob the worker reads was refused as
+// `unknown_field`.
+
+describe('resolveCompressOptions — document compress quality (f3JiTxkK)', () => {
+  const DOCUMENT_MEDIA = ['document_office', 'document_odf', 'document_epub'] as const;
+
+  it.each(DOCUMENT_MEDIA)('%s: explicit quality reaches the wire verbatim', (media) => {
+    const { wireOptions, resolvedOptions } = resolveCompressOptions({
+      media,
+      op: 'compress',
+      explicitOptions: { quality: 40 },
+    });
+    expect(wireOptions).toEqual({ quality: 40 });
+    expect(resolvedOptions.sources.explicit).toEqual(['quality']);
+  });
+
+  it.each(DOCUMENT_MEDIA)('%s: quality survives an optimize level whose planned cells are dropped', (media) => {
+    const { wireOptions } = resolveCompressOptions({
+      media,
+      op: 'compress',
+      optimize: OptimizeFor.Size,
+      explicitOptions: { quality: 25 },
+    });
+    expect(wireOptions).toEqual({ quality: 25 });
+  });
+
+  it.each(DOCUMENT_MEDIA)('%s: presetOverrides quality is accepted, not blamed on image', (media) => {
+    const { wireOptions } = resolveCompressOptions({
+      media,
+      op: 'compress',
+      presetOverrides: { quality: 30 },
+      explicitOptions: {},
+    });
+    expect(wireOptions).toEqual({ quality: 30 });
+  });
+
+  it('out-of-range quality is left to the server, exactly as image quality is', () => {
+    // The compress resolver range-checks no option (image `quality: 101` passes
+    // too); the contract's 1-100 bound is enforced by the api.
+    for (const media of ['image', ...DOCUMENT_MEDIA] as const) {
+      const { wireOptions } = resolveCompressOptions({ media, op: 'compress', explicitOptions: { quality: 101 } });
+      expect(wireOptions.quality).toBe(101);
+    }
+  });
+
+  it('a document compress still refuses a key the contract does not define for it', () => {
+    try {
+      resolveCompressOptions({
+        media: 'document_office',
+        op: 'compress',
+        explicitOptions: { quality: 40, crf: 23 },
+      });
+      throw new Error('expected throw');
+    } catch (err) {
+      const e = err as GislConfigError;
+      expect(e.reason).toBe('unknown_field');
+      expect(e.conflictingFields).toEqual(['crf']);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // presetConfigHash — present iff cell registered
 // ---------------------------------------------------------------------------
 
@@ -1116,5 +1184,49 @@ describe('resolveCompressOptions — audio lossless bitrate drop (0Vcogefw)', ()
     // Image has no bitrate concept; the flag changes nothing.
     expect(wireOptions.quality).toBe(65);
     expect('bitrate' in wireOptions).toBe(false);
+  });
+});
+
+// The TYPED preset surface (PresetDefaults.officeCompress / odfCompress /
+// epubCompress and the leaf DTOs) must carry document `quality` too, or the
+// resolver allowlist above is reachable only through raw option bags.
+describe('document compress quality through the typed preset surface (f3JiTxkK)', () => {
+  const cases = [
+    ['document_office', (q: number) => presetDefaults().officeCompress(OptimizeFor.Size, { quality: q })],
+    ['document_odf', (q: number) => presetDefaults().odfCompress(OptimizeFor.Size, { quality: q })],
+    ['document_epub', (q: number) => presetDefaults().epubCompress(OptimizeFor.Size, { quality: q })],
+  ] as const;
+
+  it.each(cases)('%s: a client default quality reaches the wire', (media, build) => {
+    const { wireOptions, resolvedOptions } = resolveCompressOptions({
+      media,
+      op: 'compress',
+      optimize: OptimizeFor.Size,
+      presetDefaults: build(35),
+      explicitOptions: {},
+    });
+    expect(wireOptions).toEqual({ quality: 35 });
+    expect(resolvedOptions.sources.clientDefault).toEqual(['quality']);
+  });
+
+  it.each(cases)('%s: explicit quality beats the client default', (media, build) => {
+    const { wireOptions } = resolveCompressOptions({
+      media,
+      op: 'compress',
+      optimize: OptimizeFor.Size,
+      presetDefaults: build(35),
+      explicitOptions: { quality: 70 },
+    });
+    expect(wireOptions).toEqual({ quality: 70 });
+  });
+
+  it('PresetDefaults.merge keeps a parent quality under a child that sets another field', () => {
+    const merged = PresetDefaults.merge(
+      presetDefaults().officeCompress(OptimizeFor.Size, { quality: 20 }),
+      presetDefaults().officeCompress(OptimizeFor.Size, { stripMacros: true }),
+    );
+    const cell = merged.cellFor('document_office', 'compress', OptimizeFor.Size);
+    expect(cell?.quality).toBe(20);
+    expect(cell?.stripMacros).toBe(true);
   });
 });
