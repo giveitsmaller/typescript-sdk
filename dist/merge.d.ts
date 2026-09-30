@@ -12,15 +12,13 @@
  * - No `.sequence(...)` => play in declared order, no transitions.
  *
  * Wire-truth boundaries (lowering.md §sequences):
- * - Video merge per-input options: `transition`, `crossfadeDuration` only.
+ * - Video merge per-input options: `transition`, `crossfadeDuration`,
+ *   `trimStart`, `trimEnd`.
  * - Audio merge per-input options: `transition`, `crossfadeDuration`,
- *   `gapDuration` only.
+ *   `gapDuration`, `trimStart`, `trimEnd`.
  * - Image merge has NO per-input options today — `clip(ref)` is reuse/order
- *   only. Per-position transitions on image merges throw locally as
+ *   only. Per-position options on image merges throw locally as
  *   `GislPerInputOptionsNotSupportedError`.
- * - No per-clip `trimStart`/`trimEnd` today (contracts ticket iZzn5QrS
- *   tracks the fix). Workaround: pre-trim each clip via a chained
- *   `compress(file, trimStart, trimEnd)`.
  *
  * Local validation runs BEFORE any upload — undeclared refs and unused
  * assets both fail fast so the caller saves bandwidth on typo'd composes.
@@ -63,6 +61,18 @@ export interface ClipOptions {
     readonly crossfadeDuration?: number;
     /** Gap duration in seconds (audio merge only). */
     readonly gapDuration?: number;
+    /**
+     * Seconds to trim from the START of this clip, applied before any
+     * transition (video/audio merge; contract `min: 0`, upper bound is the
+     * clip's own duration, enforced server-side). Wire key `trim_start`.
+     */
+    readonly trimStart?: number;
+    /**
+     * Seconds to trim from the END of this clip, applied before any
+     * transition (video/audio merge; contract `min: 0`, upper bound is the
+     * clip's own duration, enforced server-side). Wire key `trim_end`.
+     */
+    readonly trimEnd?: number;
 }
 /**
  * A sequence entry that carries per-position options. Use the `clip(...)`

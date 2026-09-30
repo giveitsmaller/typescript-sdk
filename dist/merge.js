@@ -12,15 +12,13 @@
  * - No `.sequence(...)` => play in declared order, no transitions.
  *
  * Wire-truth boundaries (lowering.md §sequences):
- * - Video merge per-input options: `transition`, `crossfadeDuration` only.
+ * - Video merge per-input options: `transition`, `crossfadeDuration`,
+ *   `trimStart`, `trimEnd`.
  * - Audio merge per-input options: `transition`, `crossfadeDuration`,
- *   `gapDuration` only.
+ *   `gapDuration`, `trimStart`, `trimEnd`.
  * - Image merge has NO per-input options today — `clip(ref)` is reuse/order
- *   only. Per-position transitions on image merges throw locally as
+ *   only. Per-position options on image merges throw locally as
  *   `GislPerInputOptionsNotSupportedError`.
- * - No per-clip `trimStart`/`trimEnd` today (contracts ticket iZzn5QrS
- *   tracks the fix). Workaround: pre-trim each clip via a chained
- *   `compress(file, trimStart, trimEnd)`.
  *
  * Local validation runs BEFORE any upload — undeclared refs and unused
  * assets both fail fast so the caller saves bandwidth on typo'd composes.
@@ -206,7 +204,9 @@ export class MergeBuilder {
                 const opts = entry.options;
                 const hasOpts = opts.transition !== undefined ||
                     opts.crossfadeDuration !== undefined ||
-                    opts.gapDuration !== undefined;
+                    opts.gapDuration !== undefined ||
+                    opts.trimStart !== undefined ||
+                    opts.trimEnd !== undefined;
                 if (hasOpts && mediaKind === 'image') {
                     throw new GislPerInputOptionsNotSupportedError('image');
                 }
@@ -607,6 +607,11 @@ function wirePerInputOptions(opts, mediaKind) {
     if (opts.gapDuration !== undefined && mediaKind === 'audio') {
         out.gap_duration = opts.gapDuration;
     }
+    // Video + audio per-input (image is excluded upstream).
+    if (opts.trimStart !== undefined)
+        out.trim_start = opts.trimStart;
+    if (opts.trimEnd !== undefined)
+        out.trim_end = opts.trimEnd;
     return out;
 }
 function parseSizeString(s) {

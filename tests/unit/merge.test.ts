@@ -423,6 +423,50 @@ describe('MergeBuilder — .sequence with reuse', () => {
     expect(videoMerge.inputs[1].per_input_options?.gap_duration).toBeUndefined();
   });
 
+  // Ua1arejD — contract merge.{video,audio}.per_input_options declare
+  // trim_start / trim_end (float seconds, min 0).
+  it('lowers clip trimStart/trimEnd to per-input trim_start/trim_end on video AND audio merges', async () => {
+    const mock = makeMockClient();
+    const v1 = asset('v1.mp4');
+    const v2 = asset('v2.mp4');
+    await new MergeBuilder(mock.client, [v1, v2], {})
+      .sequence(v1, clip(v2, { transition: 'crossfade', crossfadeDuration: 1.5, trimStart: 0.5, trimEnd: 1.25 }))
+      .run({ maxWait: '30s' });
+    const video = mergeJob(mock.createWorkflow.mock.calls[0][0]);
+    expect(video.inputs[0].per_input_options).toBeUndefined();
+    expect(video.inputs[1].per_input_options).toEqual({
+      transition: 'crossfade',
+      crossfade_duration: 1.5,
+      trim_start: 0.5,
+      trim_end: 1.25,
+    });
+    expect(video.operations[0].options).toEqual({});
+
+    const mock2 = makeMockClient();
+    const t1 = asset('t1.mp3');
+    const t2 = asset('t2.mp3');
+    await new MergeBuilder(mock2.client, [t1, t2], {})
+      .sequence(clip(t1, { trimStart: 0 }), clip(t2, { gapDuration: 0.5, trimEnd: 2 }))
+      .run({ maxWait: '30s' });
+    const audio = mergeJob(mock2.createWorkflow.mock.calls[0][0]);
+    // trimStart: 0 is a real value (contract min 0), not "unset".
+    expect(audio.inputs[0].per_input_options).toEqual({ trim_start: 0 });
+    expect(audio.inputs[1].per_input_options).toEqual({ gap_duration: 0.5, trim_end: 2 });
+  });
+
+  it('omitted trims send no trim keys', async () => {
+    const mock = makeMockClient();
+    const v1 = asset('v1.mp4');
+    const v2 = asset('v2.mp4');
+    await new MergeBuilder(mock.client, [v1, v2], {})
+      .sequence(v1, clip(v2, { transition: 'fade' }))
+      .run({ maxWait: '30s' });
+    const merge = mergeJob(mock.createWorkflow.mock.calls[0][0]);
+    expect(merge.inputs[1].per_input_options).toEqual({ transition: 'fade' });
+    expect(merge.inputs[1].per_input_options).not.toHaveProperty('trim_start');
+    expect(merge.inputs[1].per_input_options).not.toHaveProperty('trim_end');
+  });
+
   it('image merge with bare-clip reuse (no per-input opts) does NOT emit per_input_options', async () => {
     const mock = makeMockClient();
     const p1 = asset('1.jpg');
@@ -564,6 +608,20 @@ describe('MergeBuilder — local validation (BEFORE any upload)', () => {
     expect(perInput.message).toMatch(/image merge has no per-input options today/);
     expect(mock.uploadFile).not.toHaveBeenCalled();
   });
+
+  it.each([{ trimStart: 1 }, { trimEnd: 1 }])(
+    'rejects a trim-only clip on an image merge (image has no per_input_options) — %o',
+    async (opts) => {
+      const mock = makeMockClient();
+      const p1 = asset('1.jpg');
+      const p2 = asset('2.jpg');
+      const pending = new MergeBuilder(mock.client, [p1, p2], { output: 'video', videoFormat: 'mp4' })
+        .sequence(p1, clip(p2, opts))
+        .run({ maxWait: '30s' });
+      await expect(pending).rejects.toBeInstanceOf(GislPerInputOptionsNotSupportedError);
+      expect(mock.uploadFile).not.toHaveBeenCalled();
+    },
+  );
 
   it('throws GislConfigError when targetSize is an unparseable string on a VIDEO merge (before any upload)', async () => {
     // Parity with PHP test_invalid_target_size_string_raises_config_error — a
