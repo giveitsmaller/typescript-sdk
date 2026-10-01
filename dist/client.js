@@ -228,6 +228,16 @@ function cancellableSleep(ms, signal) {
         signal?.addEventListener('abort', onAbort, { once: true });
     });
 }
+// The probe endpoint's 422 `error_type` (`probe_not_ready` / `probe_not_applicable`,
+// tRVvMOvy). Both arrive as a base GislApiError whose `payload` is the raw wire
+// envelope, so the discriminator is read snake-first. undefined for any other error.
+function probe422ErrorType(err) {
+    if (!(err instanceof GislApiError) || err.statusCode !== 422)
+        return undefined;
+    const payload = err.payload;
+    const errorType = payload?.error_type ?? payload?.errorType;
+    return typeof errorType === 'string' ? errorType : undefined;
+}
 // Full-jitter exponential backoff: delay = random(0, base * 2^attemptIndex).
 // AWS SDK guidance for shared-throttling sources like S3 — keeps competing
 // clients from synchronising their retries.
@@ -2486,12 +2496,21 @@ export class GislClient {
      * calling this (or {@link waitForProbe}) before workflow-create is the
      * structural unlock for the fast video path on the multipart flow.
      *
-     * Endpoint availability is `stable`. The probe runs asynchronously after
-     * upload: until the result has landed, this returns `422`
-     * `feature_not_available` (surfaced as {@link GislFeatureNotAvailableError})
-     * — i.e. that 422 means "probe not landed yet", NOT "not implemented". Once
-     * landed it returns a `200` with any `probeStatus`. Idempotent: probing the
-     * same `fileId` twice returns the cached result. See {@link waitForProbe}
+     * Endpoint availability is `beta`. The probe runs asynchronously after
+     * upload; while no result is cached this returns a `422` discriminated on
+     * `error_type` (contracts `tRVvMOvy`):
+     * - `probe_not_ready` — not landed YET; retry (optional `Retry-After`).
+     *   Surfaced as a base {@link GislApiError} (`statusCode` 422,
+     *   `payload.error_type`).
+     * - `probe_not_applicable` — this upload's type is never probed (e.g. an
+     *   image); terminal, no result will ever exist. Base {@link GislApiError}.
+     * - `feature_not_available` (surfaced as {@link GislFeatureNotAvailableError})
+     *   — TRANSITIONAL: what the server sends today for BOTH causes above; it
+     *   does NOT mean "not implemented". The server switches to the two arms
+     *   above only after an SDK release that reads them is published.
+     *
+     * Once landed it returns a `200` with any `probeStatus`. Idempotent: probing
+     * the same `fileId` twice returns the cached result. See {@link waitForProbe}
      * for a bounded poll that turns this into a single ready/gave-up answer.
      */
     async probeUpload(fileId, options = {}) {
@@ -2506,9 +2525,17 @@ export class GislClient {
      * sees the video's codec + duration and admits the ~3× parallel split.
      *
      * Loop (per the API wire contract):
-     * - `422 feature_not_available` → probe not landed yet → keep polling
+     * - `422 probe_not_ready` → probe not landed yet → keep polling
      *   (exponential full-jitter backoff, honouring a `Retry-After` header when
      *   present, clamped to the remaining budget).
+     * - `422 probe_not_applicable` → STOP. This upload's type is never probed
+     *   (e.g. an image), so no result will ever exist: resolves
+     *   `{ landed: false, reason: 'not_applicable' }` after ONE request — no
+     *   retry, no wait.
+     * - `422 feature_not_available` → TRANSITIONAL arm the server sends today for
+     *   both causes above → polled like `probe_not_ready`. Its retry ceiling is
+     *   `timeoutMs`: a never-probed upload answered this way resolves
+     *   `{ landed: false, reason: 'timeout' }` once the budget runs out.
      * - any `200` → STOP. Resolves `{ landed: true, probe }` regardless of
      *   `probeStatus` (ok / corrupt / unsupported_codec / missing_metadata) —
      *   the server + fan-out gate decide split-vs-single from the landed
@@ -2516,8 +2543,8 @@ export class GislClient {
      * - `5xx` (prober crash) → retry a couple of times, then give up.
      * - timeout → give up.
      *
-     * **Never bounces:** on give-up (timeout / repeated 5xx / transport) it
-     * resolves `{ landed: false, reason }` rather than throwing, so the caller
+     * **Never bounces:** on give-up (timeout / repeated 5xx / transport /
+     * not applicable) it resolves `{ landed: false, reason }` rather than throwing, so the caller
      * proceeds to create the workflow anyway (the server's size heuristic routes
      * it; worst case = today's single-task behaviour). Genuine failures —
      * `404 upload_not_found`, auth errors, or caller abort — DO propagate (they
@@ -2559,9 +2586,16 @@ export class GislClient {
                 if (signal?.aborted) {
                     throw err instanceof GislAbortError ? err : new GislAbortError('waitForProbe aborted');
                 }
-                if (err instanceof GislFeatureNotAvailableError) {
-                    // Not landed yet — keep polling.
+                const probe422 = probe422ErrorType(err);
+                if (err instanceof GislFeatureNotAvailableError || probe422 === 'probe_not_ready') {
+                    // Not landed yet — keep polling. `feature_not_available` is the
+                    // transitional arm (either cause); `timeoutMs` is its ceiling.
                     retryAfterMs = parseRetryAfterMs(err.responseHeaders?.['retry-after']);
+                }
+                else if (probe422 === 'probe_not_applicable') {
+                    // Terminal: this upload's type is never probed, so polling cannot
+                    // change the answer. Never-bounce: the caller creates anyway.
+                    return { landed: false, reason: 'not_applicable' };
                 }
                 else if ((err instanceof GislApiError && err.statusCode >= 500) ||
                     err instanceof GislTimeoutError ||
@@ -2616,7 +2650,9 @@ export class GislClient {
      * naming the job. Per the contract's recovery rule this polls that job's
      * upload(s) with {@link waitForProbe} and re-creates the SAME payload once the
      * probe has landed `ok` (or `missing_metadata`, which the server then routes).
-     * It is a no-op when the server never returns `probe_pending`.
+     * An upload the server never probes (`waitForProbe` reason `not_applicable`,
+     * e.g. an image input) is skipped rather than waited on. It is a no-op when
+     * the server never returns `probe_pending`.
      *
      * On a guest client (`gisl.anonymous()`) the probe endpoint is sign-in only, so
      * it does NOT poll: it re-creates on the refusal's Retry-After, else a doubling
@@ -2643,10 +2679,11 @@ export class GislClient {
      * Probe N uploaded files in parallel and partition the results by
      * outcome. Returns `{ ok, rejected, errors }` so the caller can
      * cleanly drop bad clips before submitting a long-form merge
-     * workflow. Probe-call failures (including the
-     * `feature_not_available` 422 returned while the endpoint is
-     * `availability: planned`) land in `errors` rather than throwing,
-     * so a partially-successful batch still yields useful aggregation.
+     * workflow. Probe-call failures (including every arm of the probe's
+     * not-cached `422`: `probe_not_ready`, `probe_not_applicable` and the
+     * transitional `feature_not_available`) land in `errors` rather than
+     * throwing, so a partially-successful batch still yields useful
+     * aggregation. This does not poll; see {@link waitForProbe}.
      */
     async preflightClips(fileIds) {
         const settled = await Promise.allSettled(fileIds.map((fileId) => this.probeUpload(fileId)));

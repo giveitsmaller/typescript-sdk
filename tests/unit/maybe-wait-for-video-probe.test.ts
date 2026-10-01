@@ -131,4 +131,17 @@ describe('GislClient.maybeWaitForVideoProbe', () => {
     ).resolves.toBeUndefined();
     expect(probeWasHit(fetchSpy)).toBe(true);
   });
+
+  it('a probe_not_applicable 422 returns after ONE probe request, no throw (never-bounce, 8L4JJMx6)', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ success: false, error: 'UNPROCESSABLE_ENTITY', error_type: 'probe_not_applicable' }), {
+        status: 422,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    await expect(
+      client.maybeWaitForVideoProbe(FID, { enabled: true, isVideo: true, sizeBytes: LARGE, timeoutMs: 5000 }),
+    ).resolves.toBeUndefined();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
 });

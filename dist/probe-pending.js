@@ -28,8 +28,9 @@ const DEFAULT_RECOVERY_BUDGET_MS = 30_000;
 /**
  * `createWorkflow`, recovering from {@link GislProbePendingError}. Per the
  * contract's recovery rule it honours the refusal's Retry-After, waits for the
- * named job's upload probe(s), then re-creates the SAME payload. A no-op when
- * the server never refuses.
+ * named job's upload probe(s), then re-creates the SAME payload. An upload whose
+ * probe is `not_applicable` (never probed) is skipped, not waited on. A no-op
+ * when the server never refuses.
  *
  * Rethrows the ORIGINAL typed refusal when recovery is disabled, the budget
  * (`timeoutMs`) cannot fit the Retry-After or the probe does not land within
@@ -131,6 +132,14 @@ export async function createWorkflowAwaitingProbe(client, payload, options = {})
                 timeoutMs: Math.min(budgetLeft, deadlineLeft),
                 signal: options.signal,
             });
+            // A never-probed upload (e.g. a watermark image beside the video) has no
+            // probe to wait for, so it cannot be what the gate is holding: move on to
+            // the job's other uploads, then re-create (8L4JJMx6). A slow answer must not
+            // carry the recovery past its budget (codex ab487dee4814).
+            if (waited.reason === 'not_applicable') {
+                leftBefore(0);
+                continue;
+            }
             const status = waited.probe?.probeStatus;
             if (!waited.landed || status === 'corrupt' || status === 'unsupported_codec')
                 throw firstRefusal;

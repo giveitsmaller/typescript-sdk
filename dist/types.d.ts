@@ -411,10 +411,13 @@ export interface ProbeWaitResult {
     /**
      * Why the wait gave up WITHOUT a landed probe — present iff `!landed`.
      * `timeout` = the bound elapsed; `prober_error` = repeated 5xx from the
-     * prober. In both cases the caller should create anyway (never-bounce); the
-     * server's size heuristic routes the job (single-task worst case).
+     * prober; `not_applicable` = the server answered `422 probe_not_applicable`
+     * (this upload's type is never probed, e.g. an image), so the wait stopped
+     * after one request. In every case the caller should create anyway
+     * (never-bounce); the server's size heuristic routes the job (single-task
+     * worst case).
      */
-    reason?: 'timeout' | 'prober_error';
+    reason?: 'timeout' | 'prober_error' | 'not_applicable';
 }
 export type GislSseEvent = {
     event: typeof SseEventType.operation_progress;

@@ -38,8 +38,9 @@ export interface CreateAwaitingProbeOptions {
 /**
  * `createWorkflow`, recovering from {@link GislProbePendingError}. Per the
  * contract's recovery rule it honours the refusal's Retry-After, waits for the
- * named job's upload probe(s), then re-creates the SAME payload. A no-op when
- * the server never refuses.
+ * named job's upload probe(s), then re-creates the SAME payload. An upload whose
+ * probe is `not_applicable` (never probed) is skipped, not waited on. A no-op
+ * when the server never refuses.
  *
  * Rethrows the ORIGINAL typed refusal when recovery is disabled, the budget
  * (`timeoutMs`) cannot fit the Retry-After or the probe does not land within

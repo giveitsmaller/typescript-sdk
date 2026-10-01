@@ -131,6 +131,105 @@ describe('createWorkflowAwaitingProbe', () => {
     expect(d.createWorkflow).toHaveBeenCalledOnce();
   });
 
+  it('skips a not_applicable upload and still waits for the job\'s other upload (8L4JJMx6)', async () => {
+    // A watermark job: the video is gated, the logo image is never probed.
+    const watermark = {
+      jobs: [
+        {
+          id: 'wm',
+          inputs: [
+            { source: { type: 'upload', file_id: 'logo_png' } },
+            { source: { type: 'upload', file_id: 'clip_mp4' } },
+          ],
+          operations: [{ type: 'watermark', options: {} }],
+        },
+      ],
+    } as unknown as WorkflowCreatePayload;
+    let calls = 0;
+    const d = doubles(async () => {
+      if (++calls === 1) throw refusal('wm');
+      return { workflowId: 'wf' };
+    });
+    d.waitForProbe.mockImplementation(async (fileId: string) =>
+      fileId === 'logo_png' ? { landed: false, reason: 'not_applicable' } : landed('ok'),
+    );
+    await expect(createWorkflowAwaitingProbe(d.client, watermark)).resolves.toEqual({ workflowId: 'wf' });
+    expect(d.waitForProbe.mock.calls.map((c) => c[0])).toEqual(['logo_png', 'clip_mp4']);
+    expect(d.createWorkflow).toHaveBeenCalledTimes(2);
+  });
+
+  it('re-creates at once when the only upload is not_applicable (nothing to wait for)', async () => {
+    let calls = 0;
+    const d = doubles(async () => {
+      if (++calls === 1) throw refusal('op');
+      return { workflowId: 'wf' };
+    }, { landed: false, reason: 'not_applicable' });
+    await expect(createWorkflowAwaitingProbe(d.client, single)).resolves.toEqual({ workflowId: 'wf' });
+    expect(d.createWorkflow).toHaveBeenCalledTimes(2);
+  });
+
+  it(`a not_applicable upload the server keeps refusing still stops after ${PROBE_PENDING_MAX_CREATE_ATTEMPTS} creates`, async () => {
+    const original = refusal('op');
+    const d = doubles(async () => { throw original; }, { landed: false, reason: 'not_applicable' });
+    await expect(createWorkflowAwaitingProbe(d.client, single)).rejects.toBe(original);
+    expect(d.createWorkflow).toHaveBeenCalledTimes(PROBE_PENDING_MAX_CREATE_ATTEMPTS);
+  });
+
+  describe('a not_applicable answer that arrives late (codex ab487dee4814)', () => {
+    // The probe request itself outlives the budget / deadline: its answer must
+    // not carry the recovery into a re-create.
+    function lateNotApplicable() {
+      let clock = 1_000_000;
+      const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+      const d = doubles(async () => {
+        if (d.createWorkflow.mock.calls.length === 1) throw original;
+        return { workflowId: 'wf' };
+      });
+      const original = refusal('op');
+      d.waitForProbe.mockImplementation(async () => {
+        clock += 10_000;
+        return { landed: false, reason: 'not_applicable' };
+      });
+      return { d, original, now, at: () => clock };
+    }
+
+    it('past the recovery budget: rethrows the original refusal and does NOT re-create', async () => {
+      const { d, original, now } = lateNotApplicable();
+      try {
+        await expect(createWorkflowAwaitingProbe(d.client, single, { timeoutMs: 5_000 })).rejects.toBe(original);
+      } finally {
+        now.mockRestore();
+      }
+      expect(d.createWorkflow).toHaveBeenCalledOnce();
+      expect(d.waitForProbe).toHaveBeenCalledOnce();
+    });
+
+    it('past the run deadline: GislTimeoutError, no re-create', async () => {
+      const { d, now, at } = lateNotApplicable();
+      try {
+        await expect(
+          createWorkflowAwaitingProbe(d.client, single, { timeoutMs: 30_000, deadline: at() + 8_000 }),
+        ).rejects.toThrow(GislTimeoutError);
+      } finally {
+        now.mockRestore();
+      }
+      expect(d.createWorkflow).toHaveBeenCalledOnce();
+    });
+
+    it('past the run deadline: the timeout does not claim a probe landed', async () => {
+      // Without the check in the not_applicable branch, the post-loop deadline
+      // check still throws GislTimeoutError, but says "Probe landed", which is false.
+      const { d, now, at } = lateNotApplicable();
+      try {
+        await expect(
+          createWorkflowAwaitingProbe(d.client, single, { timeoutMs: 30_000, deadline: at() + 8_000 }),
+        ).rejects.toThrow(/while recovering from probe_pending/);
+      } finally {
+        now.mockRestore();
+      }
+    });
+  });
+
   it('rethrows when the refusal names no job in the payload', async () => {
     const original = refusal('job_7');
     const d = doubles(async () => { throw original; });
