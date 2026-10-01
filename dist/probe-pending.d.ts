@@ -3,20 +3,26 @@ import { type GislClient } from './client.js';
 import type { WorkflowCreatePayload } from './types.js';
 /** A landed probe ends the gate server-side, so 3 creates is headroom, not a retry policy. */
 export declare const PROBE_PENDING_MAX_CREATE_ATTEMPTS = 3;
-/** A guest's delay before its re-create when the refusal carries no Retry-After. */
+/** A guest's first re-create delay when the refusal carries no Retry-After; doubles per attempt. */
 export declare const GUEST_BACKOFF_BASE_MS = 1000;
+/** The longest a guest's doubling backoff grows to between re-creates. */
+export declare const GUEST_BACKOFF_MAX_MS = 30000;
 /**
- * A guest's create cap. anonymous-policy 2.1.0 (contracts v2.219.0) says a
- * `probe_pending` refusal does NOT count against `per_minute.workflow_create`,
- * so a guest gets the same three creates as a signed-in caller. Under 2.0.0 it
- * was 2, the rate limit (codex 855a879d80d6). Pinned to the policy by
+ * A guest's default recovery budget: anonymous-policy 2.2.0
+ * `video.probe_wait_bound_seconds` (900 s). Past that bound after the upload the
+ * API stops answering `probe_pending` and proceeds, so waiting longer is
+ * pointless and giving up sooner fails a run the server would accept (fNSQUeDS).
+ * A guest re-creates without a count cap: under 2.1.0 a `probe_pending` refusal
+ * does not count against `per_minute.workflow_create`. The caller's `timeoutMs`
+ * and `deadline` still win. Pinned to the policy by
  * scripts/tests/test_guest_create_cap.py.
  */
-export declare const GUEST_MAX_CREATE_ATTEMPTS = 3;
+export declare const GUEST_PROBE_WAIT_BOUND_MS = 900000;
 export interface CreateAwaitingProbeOptions {
     /**
      * ONE budget (ms) for the whole recovery - the refusal's Retry-After plus
-     * every probe wait. Default 30 s. Past it the original refusal is rethrown.
+     * every probe wait. Default 30 s; 900 s for a guest (GUEST_PROBE_WAIT_BOUND_MS). Past it
+     * the original refusal is rethrown.
      */
     timeoutMs?: number;
     /** Whole-run deadline (epoch ms): nothing starts past it (GislTimeoutError). */

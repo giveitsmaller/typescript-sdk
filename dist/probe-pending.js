@@ -3,16 +3,26 @@ import { GislAbortError, GislProbePendingError, GislTimeoutError } from './error
 import { parseRetryAfterMs } from './retry-metadata.js';
 /** A landed probe ends the gate server-side, so 3 creates is headroom, not a retry policy. */
 export const PROBE_PENDING_MAX_CREATE_ATTEMPTS = 3;
-/** A guest's delay before its re-create when the refusal carries no Retry-After. */
+/** A guest's first re-create delay when the refusal carries no Retry-After; doubles per attempt. */
 export const GUEST_BACKOFF_BASE_MS = 1_000;
+/** The longest a guest's doubling backoff grows to between re-creates. */
+export const GUEST_BACKOFF_MAX_MS = 30_000;
 /**
- * A guest's create cap. anonymous-policy 2.1.0 (contracts v2.219.0) says a
- * `probe_pending` refusal does NOT count against `per_minute.workflow_create`,
- * so a guest gets the same three creates as a signed-in caller. Under 2.0.0 it
- * was 2, the rate limit (codex 855a879d80d6). Pinned to the policy by
+ * Timer slack allowed for a guest's last create at the budget boundary: a wake-up
+ * later than this past the budget rethrows instead of creating (codex a7a76673694a).
+ */
+const GUEST_BOUNDARY_SLACK_MS = 1_000;
+/**
+ * A guest's default recovery budget: anonymous-policy 2.2.0
+ * `video.probe_wait_bound_seconds` (900 s). Past that bound after the upload the
+ * API stops answering `probe_pending` and proceeds, so waiting longer is
+ * pointless and giving up sooner fails a run the server would accept (fNSQUeDS).
+ * A guest re-creates without a count cap: under 2.1.0 a `probe_pending` refusal
+ * does not count against `per_minute.workflow_create`. The caller's `timeoutMs`
+ * and `deadline` still win. Pinned to the policy by
  * scripts/tests/test_guest_create_cap.py.
  */
-export const GUEST_MAX_CREATE_ATTEMPTS = 3;
+export const GUEST_PROBE_WAIT_BOUND_MS = 900_000;
 /** Default recovery budget when the caller gives no `timeoutMs`. */
 const DEFAULT_RECOVERY_BUDGET_MS = 30_000;
 /**
@@ -34,7 +44,9 @@ export async function createWorkflowAwaitingProbe(client, payload, options = {})
     // own refusal is read only for its Retry-After and job_ref (codex d63a045d884c).
     let original;
     const guest = _isAnonymousClient(client);
-    const maxAttempts = guest ? GUEST_MAX_CREATE_ATTEMPTS : PROBE_PENDING_MAX_CREATE_ATTEMPTS;
+    const maxAttempts = guest ? Number.POSITIVE_INFINITY : PROBE_PENDING_MAX_CREATE_ATTEMPTS;
+    // A guest's last create lands AT the budget boundary, not one backoff short of it.
+    let guestFinalCreate = false;
     for (let attempt = 1;; attempt++) {
         // Before EVERY create, the first included: a cancelled run must not create (codex ae65d4f34b8e).
         if (options.signal?.aborted)
@@ -59,7 +71,8 @@ export async function createWorkflowAwaitingProbe(client, payload, options = {})
             throw firstRefusal;
         // One budget for the WHOLE recovery, Retry-After included (codex b08a5036e468):
         // submit() has no run deadline, so without it a server delay was unbounded.
-        budgetEnd ??= Date.now() + Math.max(0, options.timeoutMs ?? DEFAULT_RECOVERY_BUDGET_MS);
+        budgetEnd ??=
+            Date.now() + Math.max(0, options.timeoutMs ?? (guest ? GUEST_PROBE_WAIT_BOUND_MS : DEFAULT_RECOVERY_BUDGET_MS));
         const until = budgetEnd;
         /** Ms left before the next step would cross the deadline (timeout) or the budget (refusal). */
         const leftBefore = (stepMs) => {
@@ -74,22 +87,42 @@ export async function createWorkflowAwaitingProbe(client, payload, options = {})
         // The contract's Retry-After is the suggested delay before the next poll/retry (codex 089af94beb8e).
         const retryAfterMs = parseRetryAfterMs(refusal.responseHeaders?.['retry-after']);
         // anonymous-policy 2.1.0 (5dJrOdVC): the probe endpoint is sign-in only, so a
-        // guest RETRIES THE CREATE after Retry-After, or a backoff when the refusal
-        // carries none, within GUEST_MAX_CREATE_ATTEMPTS and the same budget.
+        // guest RETRIES THE CREATE after Retry-After, or a doubling backoff (capped at
+        // GUEST_BACKOFF_MAX_MS) when the refusal carries none, until the budget runs out.
         const delayMs = retryAfterMs !== undefined && retryAfterMs > 0
             ? retryAfterMs
             : guest
-                ? GUEST_BACKOFF_BASE_MS
+                ? Math.min(GUEST_BACKOFF_BASE_MS * 2 ** Math.min(attempt - 1, 15), GUEST_BACKOFF_MAX_MS)
                 : 0;
+        if (guest) {
+            if (guestFinalCreate)
+                throw firstRefusal;
+            // When the next wait would cross the budget, wait only what is left and make
+            // ONE last create at the boundary: the server may start accepting exactly at
+            // the policy bound (codex 781cae520a36). The deadline still wins.
+            const now = Date.now();
+            let waitMs = delayMs;
+            if (now + waitMs >= until) {
+                waitMs = Math.max(0, until - now);
+                guestFinalCreate = true;
+            }
+            if (options.deadline !== undefined && now + waitMs >= options.deadline) {
+                throw new GislTimeoutError('maxWait elapsed while recovering from probe_pending');
+            }
+            if (waitMs > 0)
+                await abortableSleep(waitMs, options.signal);
+            // A late timer must not create past the deadline (codex 08b28b31ad2f), nor
+            // past the budget beyond a timer's slack (codex a7a76673694a).
+            if (options.deadline !== undefined && Date.now() >= options.deadline) {
+                throw new GislTimeoutError('maxWait elapsed while recovering from probe_pending');
+            }
+            if (Date.now() > until + GUEST_BOUNDARY_SLACK_MS)
+                throw firstRefusal;
+            continue;
+        }
         if (delayMs > 0) {
             leftBefore(delayMs);
             await abortableSleep(delayMs, options.signal);
-        }
-        if (guest) {
-            // After the sleep, before the re-create: a late timer must not create past
-            // the deadline or the budget (codex 08b28b31ad2f).
-            leftBefore(0);
-            continue;
         }
         for (const fileId of fileIds) {
             const budgetLeft = leftBefore(0);

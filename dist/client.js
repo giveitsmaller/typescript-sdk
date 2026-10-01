@@ -2524,14 +2524,20 @@ export class GislClient {
      * probe has landed `ok` (or `missing_metadata`, which the server then routes).
      * It is a no-op when the server never returns `probe_pending`.
      *
+     * On a guest client (`gisl.anonymous()`) the probe endpoint is sign-in only, so
+     * it does NOT poll: it re-creates on the refusal's Retry-After, else a doubling
+     * backoff from 1 s capped at 30 s, with no count cap, until the budget runs out
+     * (default 900 s, anonymous-policy `probe_wait_bound_seconds`), making one last
+     * create at the boundary (5dJrOdVC, fNSQUeDS).
+     *
      * Gives up by rethrowing the ORIGINAL typed error when:
      * - recovery is disabled (`enabled: false`), or the ONE recovery budget
-     *   `timeoutMs` (default 30 s, capped by `deadline`) - covering the refusal's
-     *   Retry-After and every probe wait - runs out;
+     *   `timeoutMs` (default 30 s, 900 s for a guest; capped by `deadline`) -
+     *   covering the refusal's Retry-After and every probe wait - runs out;
      * - the probe landed `corrupt` / `unsupported_codec` (the contract says do not
      *   retry: call {@link probeUpload} for the reason);
-     * - the error names no job whose upload the SDK can find;
-     * - three creates were all refused.
+     * - the error names no job whose upload the SDK can find (signed-in only);
+     * - three creates were all refused (signed-in only).
      *
      * `deadline` (epoch ms) is the caller's whole-run budget: a retry that would
      * start past it throws {@link GislTimeoutError} instead.

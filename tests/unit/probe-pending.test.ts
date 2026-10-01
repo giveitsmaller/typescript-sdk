@@ -6,7 +6,8 @@ import { GislAbortError, GislApiError, GislProbePendingError, GislTimeoutError }
 import { Recipe, fileInput } from '../../src/file-first.js';
 import {
   GUEST_BACKOFF_BASE_MS,
-  GUEST_MAX_CREATE_ATTEMPTS,
+  GUEST_BACKOFF_MAX_MS,
+  GUEST_PROBE_WAIT_BOUND_MS,
   PROBE_PENDING_MAX_CREATE_ATTEMPTS,
   createWorkflowAwaitingProbe,
   uploadFileIdsForJob,
@@ -333,20 +334,92 @@ describe('createWorkflowAwaitingProbe on a guest client', () => {
     await expect(created).resolves.toEqual({ workflowId: 'wf' });
   });
 
-  it('rethrows the refusal after the attempt cap, still without a probe wait', async () => {
-    const original = refusal('op', '1');
+  it('keeps re-creating past three refusals (no count cap) and completes', async () => {
+    // fNSQUeDS: anonymous-policy 2.2.0 lets a guest probe take up to 900 s, and a
+    // refusal does not count against the guest create limit (2.1.0).
+    let calls = 0;
+    const d = guest(async () => {
+      if (++calls <= 5) throw refusal('op');
+      return { workflowId: 'wf' };
+    });
+    const created = createWorkflowAwaitingProbe(d.client, single);
+    // 1 + 2 + 4 + 8 + 16 s of doubling backoff.
+    await vi.advanceTimersByTimeAsync(31_000);
+    await expect(created).resolves.toEqual({ workflowId: 'wf' });
+    expect(d.createWorkflow).toHaveBeenCalledTimes(6);
+    expect(d.waitForProbe).not.toHaveBeenCalled();
+  });
+
+  it('caps the doubling backoff at GUEST_BACKOFF_MAX_MS', async () => {
+    let calls = 0;
+    const d = guest(async () => {
+      if (++calls <= 7) throw refusal('op');
+      return { workflowId: 'wf' };
+    });
+    const created = createWorkflowAwaitingProbe(d.client, single);
+    // 1+2+4+8+16 = 31 s, then 32 s would exceed the cap: the 6th and 7th waits are 30 s each.
+    await vi.advanceTimersByTimeAsync(31_000 + GUEST_BACKOFF_MAX_MS);
+    expect(d.createWorkflow).toHaveBeenCalledTimes(7);
+    await vi.advanceTimersByTimeAsync(GUEST_BACKOFF_MAX_MS);
+    await expect(created).resolves.toEqual({ workflowId: 'wf' });
+    expect(d.createWorkflow).toHaveBeenCalledTimes(8);
+  });
+
+  it('by default gives up at the policy probe-wait bound with the first refusal', async () => {
+    const original = refusal('op', '30');
     const d = guest(async () => {
       throw original;
     });
     const created = createWorkflowAwaitingProbe(d.client, single);
     const outcome = expect(created).rejects.toBe(original);
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(GUEST_PROBE_WAIT_BOUND_MS - 60_000);
+    // Still re-creating well inside the bound.
+    const before = d.createWorkflow.mock.calls.length;
+    expect(before).toBeGreaterThan(3);
+    await vi.advanceTimersByTimeAsync(120_000);
     await outcome;
-    // anonymous-policy 2.1.0: a probe_pending refusal does not count against the
-    // guest create limit, so a guest gets the signed-in cap.
-    expect(GUEST_MAX_CREATE_ATTEMPTS).toBe(PROBE_PENDING_MAX_CREATE_ATTEMPTS);
-    expect(d.createWorkflow).toHaveBeenCalledTimes(GUEST_MAX_CREATE_ATTEMPTS);
     expect(d.waitForProbe).not.toHaveBeenCalled();
+  });
+
+  it('makes one last create AT the budget boundary, which the server may accept', async () => {
+    // Headerless refusals until exactly the bound, then accepted (codex 781cae520a36).
+    const start = Date.now();
+    const d = guest(async () => {
+      if (Date.now() - start < GUEST_PROBE_WAIT_BOUND_MS) throw refusal('op');
+      return { workflowId: 'wf' };
+    });
+    const created = createWorkflowAwaitingProbe(d.client, single);
+    await vi.advanceTimersByTimeAsync(GUEST_PROBE_WAIT_BOUND_MS + 1_000);
+    await expect(created).resolves.toEqual({ workflowId: 'wf' });
+  });
+
+  it('does not make the boundary create when the wake-up overshot the budget', async () => {
+    // codex a7a76673694a: an explicit budget is not violated by a late timer.
+    const original = refusal('op');
+    const d = guest(async () => {
+      throw original;
+    });
+    const created = createWorkflowAwaitingProbe(d.client, single, { timeoutMs: 1_500 });
+    const outcome = expect(created).rejects.toBe(original);
+    // First wait is 1 s; the next (2 s) would cross the 1.5 s budget, so the
+    // last wait is the 0.5 s left - and the clock jumps 5 s past it meanwhile.
+    await vi.advanceTimersByTimeAsync(1_000);
+    vi.setSystemTime(Date.now() + 5_000);
+    await vi.advanceTimersByTimeAsync(500);
+    await outcome;
+    expect(d.createWorkflow).toHaveBeenCalledTimes(2);
+  });
+
+  it("the caller's timeoutMs wins over the guest default", async () => {
+    const original = refusal('op', '1');
+    const d = guest(async () => {
+      throw original;
+    });
+    const created = createWorkflowAwaitingProbe(d.client, single, { timeoutMs: 5_000 });
+    const outcome = expect(created).rejects.toBe(original);
+    await vi.advanceTimersByTimeAsync(6_000);
+    await outcome;
+    expect(d.createWorkflow.mock.calls.length).toBeLessThanOrEqual(6);
   });
 
   it('does not re-create when the sleep overran the deadline', async () => {
@@ -363,16 +436,20 @@ describe('createWorkflowAwaitingProbe on a guest client', () => {
     expect(d.createWorkflow).toHaveBeenCalledTimes(1);
   });
 
-  it('gives back the FIRST refusal, not the last, when the cap is reached', async () => {
-    const refusals = [refusal('op', '1'), refusal('op', '1'), refusal('op', '1')];
+  it('gives back the FIRST refusal, not the last, when the budget runs out', async () => {
     let calls = 0;
+    const refusals: GislProbePendingError[] = [];
     const d = guest(async () => {
-      throw refusals[calls++];
+      const r = refusal('op', '1');
+      refusals.push(r);
+      calls++;
+      throw r;
     });
-    const created = createWorkflowAwaitingProbe(d.client, single);
-    const outcome = expect(created).rejects.toBe(refusals[0]);
-    await vi.advanceTimersByTimeAsync(10_000);
+    const created = createWorkflowAwaitingProbe(d.client, single, { timeoutMs: 3_500 });
+    const outcome = expect(created).rejects.toSatisfy((err: unknown) => err === refusals[0]);
+    await vi.advanceTimersByTimeAsync(5_000);
     await outcome;
+    expect(calls).toBeGreaterThan(1);
   });
 
   it('a signed-in client still waits for the probe (control)', async () => {
