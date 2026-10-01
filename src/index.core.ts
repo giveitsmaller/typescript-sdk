@@ -323,6 +323,8 @@ export type {
   AccountLimitEntry,
   // 6zgxH2JI — return shape of GislClient.getProfile() (whoami).
   AuthenticatedIdentity,
+  // QB5Lrcjo — return shape of GislClient.getHealth().
+  LivenessResponse,
   AudioWatermarkDecodeRequest,
   AudioWatermarkDecodeResponse,
   BillingCheckoutRequest,

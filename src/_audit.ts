@@ -125,6 +125,9 @@ import type {
   CreditsUsageResponse,
   CreditsUsageOptions,
 } from './index.js';
+// QB5Lrcjo — return shape of GislClient.getHealth(). Imported via `./index.js`
+// so dropping the type-only re-export breaks `tsc --noEmit` here.
+import type { LivenessResponse } from './index.js';
 // W8v4jWzx — the error-taxonomy category union surfaced by
 // `GislApiError.category`. Imported via `./index.js` so dropping the type-only
 // re-export breaks `tsc --noEmit` here.
@@ -336,6 +339,10 @@ export function _runAudit(): void {
   void _creditsSig;
   void _creditsUsageSig;
   void _limitsSig;
+  // QB5Lrcjo — getHealth() takes nothing and resolves to the contract's
+  // LivenessResponse (`{ app: boolean; build?: string }`).
+  const _healthSig: Equal<GislClient['getHealth'], () => Promise<LivenessResponse>> = true;
+  void _healthSig;
 
   // ── BQXpFV2R — the thirteen unpinned ergonomic symbols ────────────────────────
   //

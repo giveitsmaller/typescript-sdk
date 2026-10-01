@@ -91,6 +91,10 @@ export function _runAudit() {
     void _creditsSig;
     void _creditsUsageSig;
     void _limitsSig;
+    // QB5Lrcjo — getHealth() takes nothing and resolves to the contract's
+    // LivenessResponse (`{ app: boolean; build?: string }`).
+    const _healthSig = true;
+    void _healthSig;
     // ── BQXpFV2R — the thirteen unpinned ergonomic symbols ────────────────────────
     //
     // ⚠️ EXISTENCE IS NOW THE SNAPSHOT'S JOB, not this list's.

@@ -59,6 +59,7 @@ const METHOD_ENDPOINTS: Record<AllowlistedMethod, readonly string[]> = {
   streamEvents: ['GET /api/workflows/{id}/events'],
   getSchema: ['GET /api/operations/schema'],
   submitContact: ['POST /api/contact'],
+  getHealth: ['GET /healthz'],
   maybeWaitForVideoProbe: [],
 };
 
@@ -99,7 +100,6 @@ const EXCLUDED_METHODS: Record<ExcludedMethod, { endpoints: readonly string[]; p
 
 /** Non-`required` endpoints no allowlisted method reaches, and why. */
 const ENDPOINT_EXCLUSIONS: Record<string, string> = {
-  'GET /healthz': 'infrastructure probe; the SDK has no method for it',
   'GET /readyz': 'infrastructure probe; the SDK has no method for it',
   'POST /api/auth/login': 'policy exclusion: see EXCLUDED_METHODS.login',
   'POST /api/auth/register': 'account lifecycle; the SDK has no method for it',

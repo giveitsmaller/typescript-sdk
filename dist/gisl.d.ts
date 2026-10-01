@@ -47,6 +47,7 @@ import { Handle } from './handle.js';
  * | `streamEvents` | `GET /api/workflows/{id}/events` |
  * | `getSchema` | `GET /api/operations/schema` |
  * | `submitContact` | `POST /api/contact` |
+ * | `getHealth` | `GET /healthz` (`auth: anonymous`) |
  * | `maybeWaitForVideoProbe` | none — a no-op on an anonymous client, because the probe endpoint is `required` and the wait is best-effort by design |
  *
  * Multipart (initiate and complete) and `POST /api/operations/{id}/retry`
@@ -69,7 +70,7 @@ import { Handle } from './handle.js';
  *
  * @internal Not re-exported from the package entry points.
  */
-export declare const ANONYMOUS_ALLOWLIST: readonly ["uploadFile", "getMetadata", "createWorkflow", "createWorkflowAwaitingProbe", "getWorkflowStatus", "waitForWorkflow", "getWorkflowDownloads", "streamEvents", "getSchema", "submitContact", "maybeWaitForVideoProbe"];
+export declare const ANONYMOUS_ALLOWLIST: readonly ["uploadFile", "getMetadata", "createWorkflow", "createWorkflowAwaitingProbe", "getWorkflowStatus", "waitForWorkflow", "getWorkflowDownloads", "streamEvents", "getSchema", "submitContact", "getHealth", "maybeWaitForVideoProbe"];
 export interface GislCreateOptions extends ResolveCredentialsOptions, ResolveEndpointOptions, Omit<GislClientConfig, 'baseUrl' | 'apiKey' | 'useSessionCookie' | 'streamBaseUrl'> {
     /**
      * Layered ergonomic preset defaults (T4a / VhIj4S7T). Built via

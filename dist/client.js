@@ -101,6 +101,14 @@ function withWorkflowIdOnTimeout(err, workflowId) {
 // server can authorize the read. A wrong/missing cap on a null-owner workflow
 // returns 404 (no existence oracle), per contracts ticket YQt88cq2.
 const WORKFLOW_CAPABILITY_HEADER = 'X-Workflow-Capability';
+// Headers an `unauthenticated` request never carries, lowercased: whatever
+// the client was configured with (apiKey -> Authorization, or the same keys
+// passed through `headers`), the request must not identify a caller.
+const UNAUTHENTICATED_STRIPPED_HEADERS = new Set([
+    'authorization',
+    'cookie',
+    WORKFLOW_CAPABILITY_HEADER.toLowerCase(),
+]);
 // Build the capability header set for a workflow read. Empty when no token is
 // supplied (authenticated reads — the session authorizes those).
 function workflowCapabilityHeaders(capability) {
@@ -520,6 +528,12 @@ export class GislClient {
         // the server ever needs the TS version, add a non-forbidden `X-` header and
         // derive it from package.json at build time - never a literal.
         const headers = { ...this.headers, ...opts.headers };
+        if (opts.unauthenticated) {
+            for (const key of Object.keys(headers)) {
+                if (UNAUTHENTICATED_STRIPPED_HEADERS.has(key.toLowerCase()))
+                    delete headers[key];
+            }
+        }
         let body;
         if (opts.json !== false && opts.body && !(opts.body instanceof FormData)) {
             headers['Content-Type'] = 'application/json';
@@ -559,7 +573,8 @@ export class GislClient {
                 ...(this.useSessionCookie ? { credentials: 'include' } : {}),
                 // A guest client must send NO credential: a browser's default
                 // (`same-origin`) would still attach a same-origin session cookie.
-                ...(ANONYMOUS_CLIENTS.has(this) ? { credentials: 'omit' } : {}),
+                ...(ANONYMOUS_CLIENTS.has(this) || opts.unauthenticated ? { credentials: 'omit' } : {}),
+                ...(opts.redirect !== undefined ? { redirect: opts.redirect } : {}),
             });
         }
         catch (err) {
@@ -2230,6 +2245,85 @@ export class GislClient {
         return this.request('GET', '/api/v2/account/limits', {
             deserialize: AccountLimitsFromJSON,
         });
+    }
+    // -----------------------------------------------------------------------
+    // Health
+    // -----------------------------------------------------------------------
+    /**
+     * Liveness of the API and the build it is running (QB5Lrcjo).
+     * `GET /healthz`, contract `security: []`.
+     *
+     * - **Unauthenticated, always.** No `Authorization`, cookie or workflow
+     *   capability is sent, even from a client built with an `apiKey`.
+     * - The client's normal per-request timeout applies.
+     * - **Redirects are not followed**: a 3xx throws `GislError` naming it, so
+     *   the probe never reports a host it did not ask.
+     * - `build` is the release the running image was built as (e.g.
+     *   `1.17.0-rc.1`, `dev`, `unknown`); `undefined` when the API does not send
+     *   it. Opaque: compare for equality, do not parse.
+     *
+     * @throws {GislResponseContractError} a 2xx whose body is not JSON, or whose
+     *   `app` is not a boolean, or whose `build` is present but not a string.
+     * @throws {GislApiError} a non-2xx, through the shared error mapping.
+     * @throws {GislError} a 3xx.
+     * @throws {GislTimeoutError} the client timeout elapsed.
+     */
+    async getHealth() {
+        const path = '/healthz';
+        const response = await this.request('GET', path, {
+            rawResponse: true,
+            unauthenticated: true,
+            redirect: 'manual',
+        });
+        if (response.type === 'opaqueredirect') {
+            // Browser `redirect: 'manual'`: status and Location are hidden.
+            throw new GislError(`The API answered GET ${path} with a redirect. The SDK does not follow redirects; ` +
+                'point baseUrl at the final origin.');
+        }
+        if (response.status >= 300 && response.status < 400) {
+            let locationHost;
+            try {
+                const location = response.headers.get('location');
+                if (location)
+                    locationHost = new URL(location, this.baseUrl).host;
+            }
+            catch {
+                locationHost = undefined;
+            }
+            // Release the unread redirect body so undici can reuse the connection.
+            await response.body?.cancel().catch(() => undefined);
+            throw new GislError(`The API answered ${response.status} (a redirect` +
+                (locationHost ? ` to host ${locationHost}` : '') +
+                `) to GET ${path}. The SDK does not follow redirects; point baseUrl at the final origin.`);
+        }
+        if (!response.ok) {
+            // Non-2xx: the shared mapping (typed envelope dispatch, or a
+            // GislApiError for a non-JSON body). It always throws for !ok.
+            return this.handleResponse(response, path);
+        }
+        let raw;
+        try {
+            raw = await response.json();
+        }
+        catch (err) {
+            if (!(err instanceof SyntaxError))
+                throw err;
+            throw responseContractError(path, `body is not valid JSON (${err.message})`, err);
+        }
+        // The generated LivenessResponseFromJSON copies fields without checking
+        // them, so a `{"app":"yes"}` would come back typed as a boolean. Check the
+        // shape here instead.
+        if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+            throw responseContractError(path, 'expected a JSON object.');
+        }
+        const { app, build } = raw;
+        if (typeof app !== 'boolean') {
+            throw responseContractError(path, '`app` must be a boolean.');
+        }
+        if (build !== undefined && typeof build !== 'string') {
+            throw responseContractError(path, '`build`, when present, must be a string.');
+        }
+        return build === undefined ? { app } : { app, build };
     }
     // -----------------------------------------------------------------------
     // Auth

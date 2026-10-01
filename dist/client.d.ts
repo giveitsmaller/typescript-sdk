@@ -1,4 +1,4 @@
-import type { AudioWatermarkDecodeRequest, AudioWatermarkDecodeResponse, ExternalImportCreatedResponse, ExternalImportRequest, LoginUserRequest, LoginUser200ResponseData, ContactRequest, BillingCheckoutRequest, BillingCheckoutSession, AccountLimits, AuthenticatedIdentity, CreditsBalanceResponse, CreditsUsageResponse, UploadResponse, UploadProbeResponse, WorkflowCancelResponse, WorkflowArchiveResponse, WorkflowRestoreResponse, WorkflowCreateResponse, WorkflowResumeResponse, WorkflowStatusResponse, WorkflowListResponse, WorkflowSummary, WorkflowDownloadResponse, MetadataResponse, RetryResponse } from '@giveitsmaller/contracts/openapi';
+import type { AudioWatermarkDecodeRequest, AudioWatermarkDecodeResponse, ExternalImportCreatedResponse, ExternalImportRequest, LoginUserRequest, LoginUser200ResponseData, ContactRequest, BillingCheckoutRequest, BillingCheckoutSession, AccountLimits, AuthenticatedIdentity, CreditsBalanceResponse, LivenessResponse, CreditsUsageResponse, UploadResponse, UploadProbeResponse, WorkflowCancelResponse, WorkflowArchiveResponse, WorkflowRestoreResponse, WorkflowCreateResponse, WorkflowResumeResponse, WorkflowStatusResponse, WorkflowListResponse, WorkflowSummary, WorkflowDownloadResponse, MetadataResponse, RetryResponse } from '@giveitsmaller/contracts/openapi';
 import { type CreateAwaitingProbeOptions } from './probe-pending.js';
 import type { CreditsUsageOptions, ListWorkflowsOptions, GetSchemaOptions, GetSchemaResult, GislClientConfig, GislSseEvent, GislSseParseFailure, PreflightClipsResult, ProbeWaitOptions, ProbeWaitResult, ReadCapabilityOptions, UploadOptions, WaitOptions, WorkflowCreatePayload, _Sdk3HandCodedKeepaliveResult, _Sdk3HandCodedMultipartStatusResult, _Sdk3HandCodedPresignPartsResult } from './types.js';
 export declare const MULTIPART_CONCURRENCY_DEFAULT: 4;
@@ -325,6 +325,26 @@ export declare class GislClient {
      * {@link AccountLimits} model (mirrors {@link getCreditsBalance}).
      */
     getAccountLimits(): Promise<AccountLimits>;
+    /**
+     * Liveness of the API and the build it is running (QB5Lrcjo).
+     * `GET /healthz`, contract `security: []`.
+     *
+     * - **Unauthenticated, always.** No `Authorization`, cookie or workflow
+     *   capability is sent, even from a client built with an `apiKey`.
+     * - The client's normal per-request timeout applies.
+     * - **Redirects are not followed**: a 3xx throws `GislError` naming it, so
+     *   the probe never reports a host it did not ask.
+     * - `build` is the release the running image was built as (e.g.
+     *   `1.17.0-rc.1`, `dev`, `unknown`); `undefined` when the API does not send
+     *   it. Opaque: compare for equality, do not parse.
+     *
+     * @throws {GislResponseContractError} a 2xx whose body is not JSON, or whose
+     *   `app` is not a boolean, or whose `build` is present but not a string.
+     * @throws {GislApiError} a non-2xx, through the shared error mapping.
+     * @throws {GislError} a 3xx.
+     * @throws {GislTimeoutError} the client timeout elapsed.
+     */
+    getHealth(): Promise<LivenessResponse>;
     /**
      * Who am I? The identity the configured credentials resolve to
      * (6zgxH2JI). `GET /api/auth/profile`; the envelope's `data.user` is
