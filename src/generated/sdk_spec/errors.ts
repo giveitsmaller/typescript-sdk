@@ -38,6 +38,8 @@ export type ErrorCode =
   | "upload_size_exceeds_tier"
   | "upload_duration_exceeds_tier"
   | "probe_pending"
+  | "probe_not_ready"
+  | "probe_not_applicable"
   | "inputs_not_concat_uniform"
   | "requires_reencode"
   | "invalid_options"
@@ -72,7 +74,7 @@ export type ErrorCategory =
   | 'validation'
   | 'chain';
 
-export type ErrorStatus = 'wired' | 'planned';
+export type ErrorStatus = 'wired' | 'declared' | 'planned';
 
 export interface ErrorEntry {
   readonly code: ErrorCode;
@@ -541,6 +543,28 @@ export const ERROR_CODES: Readonly<Record<ErrorCode, ErrorEntry>> = Object.freez
       "jobRef": "string",
     }),
   }),
+  "probe_not_ready": Object.freeze({
+    code: "probe_not_ready",
+    category: "api" as ErrorCategory,
+    source: "error_type",
+    status: "declared" as ErrorStatus,
+    httpStatus: 422,
+    retryable: true,
+    sdkClass: "GislApiError",
+    description: "422 on upload probe — the probe has not landed yet; retry. Wire `error_type: \"probe_not_ready\"`. Never carries `job_ref` (that is `probe_pending`, workflow create).",
+    metadataSchema: Object.freeze({}),
+  }),
+  "probe_not_applicable": Object.freeze({
+    code: "probe_not_applicable",
+    category: "api" as ErrorCategory,
+    source: "error_type",
+    status: "declared" as ErrorStatus,
+    httpStatus: 422,
+    retryable: false,
+    sdkClass: "GislApiError",
+    description: "422 on upload probe — this upload's type is never probed (e.g. an image); terminal, do not retry. Wire `error_type: \"probe_not_applicable\"`.",
+    metadataSchema: Object.freeze({}),
+  }),
   "inputs_not_concat_uniform": Object.freeze({
     code: "inputs_not_concat_uniform",
     category: "validation" as ErrorCategory,
@@ -892,6 +916,8 @@ export const ERROR_CATEGORIES: Readonly<Record<ErrorCategory, readonly ErrorCode
     "upload_size_exceeds_tier",
     "upload_duration_exceeds_tier",
     "probe_pending",
+    "probe_not_ready",
+    "probe_not_applicable",
     "requires_reencode",
     "file_too_large",
     "anonymous_limit_exceeded",
