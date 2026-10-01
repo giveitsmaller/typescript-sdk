@@ -40,6 +40,49 @@ describe('parity loader matches fixture.schema.json', () => {
     );
   });
 
+  describe('Exozpn36 error-subclass fields fail at load, never silently no-op', () => {
+    const stem = 'error_422_upload_size_exceeds_tier';
+
+    it('loads the unmutated fixture with all three fields', () => {
+      const fixture = validateFixture(load(stem), pathOf(stem));
+      expect(fixture.expected_error_class).toBe('GislUploadCapExceededError');
+      expect(fixture.expected_error_kind).toBe('size_tier');
+      expect(fixture.expected_payload_fields).toMatchObject({ current_tier: 'free' });
+    });
+
+    it.each(['expected_error_class', 'expected_error_kind', 'expected_payload_fields'])(
+      'rejects %s without expects_error: true',
+      (key) => {
+        const {
+          expected_error_message: _message,
+          expected_error_class: _class,
+          expected_error_kind: _kind,
+          expected_payload_fields: _fields,
+          ...raw
+        } = load(stem);
+        const onlyThisKey = { ...raw, expects_error: false, [key]: load(stem)[key] };
+        expect(() => validateFixture(onlyThisKey, pathOf(stem))).toThrow(
+          new RegExp(`${key} requires expects_error: true`),
+        );
+      },
+    );
+
+    it('rejects a class name that is not an SDK error class', () => {
+      expect(() =>
+        validateFixture({ ...load(stem), expected_error_class: 'TierRestrictedError' }, pathOf(stem)),
+      ).toThrow(/expected_error_class must be an SDK error class name/);
+    });
+
+    it('rejects an empty or non-scalar payload-field map', () => {
+      expect(() => validateFixture({ ...load(stem), expected_payload_fields: {} }, pathOf(stem))).toThrow(
+        /expected_payload_fields must be a non-empty map/,
+      );
+      expect(() =>
+        validateFixture({ ...load(stem), expected_payload_fields: { current_tier: ['free'] } }, pathOf(stem)),
+      ).toThrow(/expected_payload_fields\.current_tier must be a scalar/);
+    });
+  });
+
   it('rejects an unknown fit', () => {
     const stem = 'ff_lowering_output_resize_format_change';
     const raw = load(stem);

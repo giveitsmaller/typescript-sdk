@@ -221,6 +221,8 @@ export type FixtureValue =
   | FixtureValue[]
   | { [key: string]: FixtureValue };
 
+export type FixtureScalar = null | boolean | number | string;
+
 export interface BytesValue {
   kind: 'bytes';
   // inline: `value` is base64. file: `value` is a path relative to the fixture.
@@ -305,6 +307,18 @@ export interface Fixture {
   // NOT `.message`: TS prefixes `.message` with `API error <status> at <path>:`
   // while PHP does not, so comparing `.message` would always diverge.
   expected_error_message?: string;
+
+  // Exozpn36 — error-subclass parity. Each is only valid with
+  // `expects_error: true` and each is independent. Before these, the runners
+  // checked only `instanceof GislApiError`, so a throw that fell back from a
+  // typed subclass to the base class (82hI8dcQ) passed both runners.
+  //   expected_error_class    EXACT short class name; the SDKs share names.
+  //   expected_error_kind     the throw's `kind` discriminant.
+  //   expected_payload_fields typed-payload fields keyed by WIRE (snake_case)
+  //                           name; TS reads the camelCase property.
+  expected_error_class?: string;
+  expected_error_kind?: string;
+  expected_payload_fields?: Readonly<Record<string, FixtureScalar>>;
 
   // F4-A (C45ogrGx) v2 fields — only valid when `fixtureSchemaVersion`
   // is '2.0.0'. Absent on v1 fixtures (the rejection set at line below
@@ -452,6 +466,9 @@ const FIXTURE_KEYS_V1 = new Set([
   'webhook',
   'expects_error',
   'expected_error_message',
+  'expected_error_class',
+  'expected_error_kind',
+  'expected_payload_fields',
   'fixtureSchemaVersion',
 ]);
 // v2 fixtures (`fixtureSchemaVersion: '2.0.0'`) accept the v1 keys plus
@@ -862,6 +879,45 @@ export function validateFixture(raw: unknown, file: string): Fixture {
     }
   }
 
+  // Exozpn36 — error-subclass parity fields. Same discipline as above: a
+  // wrong type or a missing expects_error fails at load, never no-ops.
+  for (const key of ['expected_error_class', 'expected_error_kind', 'expected_payload_fields']) {
+    if (r[key] !== undefined && r.expects_error !== true) {
+      throw new Error(`${ctx} ${key} requires expects_error: true`);
+    }
+  }
+  if (r.expected_error_class !== undefined) {
+    if (
+      typeof r.expected_error_class !== 'string' ||
+      !/^Gisl[A-Za-z0-9]*Error$/.test(r.expected_error_class)
+    ) {
+      throw new Error(
+        `${ctx} expected_error_class must be an SDK error class name matching ^Gisl[A-Za-z0-9]*Error$`,
+      );
+    }
+  }
+  if (r.expected_error_kind !== undefined && typeof r.expected_error_kind !== 'string') {
+    throw new Error(`${ctx} expected_error_kind must be a string`);
+  }
+  if (r.expected_payload_fields !== undefined) {
+    const fields = r.expected_payload_fields;
+    if (
+      fields === null ||
+      typeof fields !== 'object' ||
+      Array.isArray(fields) ||
+      Object.keys(fields).length === 0
+    ) {
+      throw new Error(`${ctx} expected_payload_fields must be a non-empty map of wire field -> scalar`);
+    }
+    for (const [field, value] of Object.entries(fields as Record<string, unknown>)) {
+      if (value !== null && !['string', 'number', 'boolean'].includes(typeof value)) {
+        throw new Error(
+          `${ctx} expected_payload_fields.${field} must be a scalar (string|number|boolean|null)`,
+        );
+      }
+    }
+  }
+
   return {
     name,
     description: r.description as string | undefined,
@@ -878,6 +934,15 @@ export function validateFixture(raw: unknown, file: string): Fixture {
     expects_error: r.expects_error === true,
     ...(r.expected_error_message !== undefined
       ? { expected_error_message: r.expected_error_message as string }
+      : {}),
+    ...(r.expected_error_class !== undefined
+      ? { expected_error_class: r.expected_error_class as string }
+      : {}),
+    ...(r.expected_error_kind !== undefined
+      ? { expected_error_kind: r.expected_error_kind as string }
+      : {}),
+    ...(r.expected_payload_fields !== undefined
+      ? { expected_payload_fields: r.expected_payload_fields as Record<string, FixtureScalar> }
       : {}),
     ...(schemaVersion !== '1.0.0' ? { fixtureSchemaVersion: schemaVersion } : {}),
     ...(resolvedOptions !== undefined ? { resolvedOptions } : {}),

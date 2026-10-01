@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, type TestContext } from 'vitest';
 import { writeFileSync, readFileSync } from 'node:fs';
 import { stringify as stringifyYaml, parse as parseYaml } from 'yaml';
 
@@ -10,6 +10,8 @@ import {
   compareResolvedOptions,
   compareOmittedFromWire,
   compareLocalValidationError,
+  compareThrownError,
+  projectThrownError,
   type CapturedResolvedOptions,
   type CapturedLocalValidationError,
 } from './comparators.js';
@@ -62,6 +64,28 @@ const KNOWN_DIVERGENCES: Record<string, string> = {
     'Same sub-minimum recommendedChunkSize as upload_multipart.',
 };
 
+// Exozpn36 — divergences the harness can SEE but this SDK has not closed.
+// Unlike KNOWN_DIVERGENCES (a skip, silent forever), each entry RUNS: it must
+// fail, and fail matching `failsWith`. The day the divergence closes the
+// fixture passes and this turns red, naming the entry to delete. A failure of
+// any other shape is not masked. PHP runs these fixtures unpinned and passes.
+const KNOWN_FAILING: Record<string, { reason: string; failsWith: RegExp }> = Object.fromEntries(
+  [
+    'error_403_tier_restriction_unknown_tier',
+    'error_422_upload_size_exceeds_tier_unknown_tier',
+    'error_422_upload_duration_exceeds_tier_unknown_tier',
+  ].map((name) => [
+    name,
+    {
+      reason:
+        '82hI8dcQ (OWNER-HELD) — TS rejects a current_tier outside its UserTier enum and throws a bare ' +
+        'GislApiError; PHP passes the string through and throws the typed subclass. Closing 82hI8dcQ ' +
+        'makes this fixture pass; delete the entry in the same change.',
+      failsWith: /expected_error_class: expected Gisl\w+Error, got GislApiError/,
+    },
+  ]),
+);
+
 const fixtures = loadFixtures();
 
 describe('cross-SDK parity', () => {
@@ -76,7 +100,7 @@ describe('cross-SDK parity', () => {
   });
 
   describe.each(fixtures)('$name', (fixture: Fixture) => {
-    it(fixture.description ?? fixture.name, async (ctx) => {
+    const runFixture = async (ctx: TestContext): Promise<void> => {
       if (fixture.name in KNOWN_DIVERGENCES) {
         ctx.skip();
       }
@@ -304,6 +328,29 @@ describe('cross-SDK parity', () => {
         }
       }
 
+      // Exozpn36 — error-subclass parity: the exact class, its `kind`, and
+      // typed-payload fields. The message check above accepts ANY GislApiError,
+      // so a typed subclass degrading to the base class passed it.
+      if (
+        fixture.expected_error_class !== undefined ||
+        fixture.expected_error_kind !== undefined ||
+        fixture.expected_payload_fields !== undefined
+      ) {
+        const diff = compareThrownError(
+          {
+            className: fixture.expected_error_class,
+            kind: fixture.expected_error_kind,
+            payloadFields: fixture.expected_payload_fields,
+          },
+          projectThrownError(thrown, Object.keys(fixture.expected_payload_fields ?? {})),
+        );
+        if (!diff.ok) {
+          throw new Error(
+            `[${fixture.name}] error-subclass parity failure:\n  - ${diff.issues.join('\n  - ')}`,
+          );
+        }
+      }
+
       // Error fixtures skip the return comparison — no return value exists.
       if (fixture.expects_error) return;
 
@@ -347,6 +394,34 @@ describe('cross-SDK parity', () => {
             `[${fixture.name}] omittedFromWire parity failure:\n  - ${diff.issues.join('\n  - ')}`,
           );
         }
+      }
+    };
+
+    it(fixture.description ?? fixture.name, async (ctx) => {
+      const pinned = KNOWN_FAILING[fixture.name];
+      if (pinned === undefined) {
+        await runFixture(ctx);
+        return;
+      }
+      // Exozpn36 — a pinned divergence must still fail, and fail the PINNED
+      // way. Passing means the divergence closed: the entry is now a lie, so
+      // this turns red and whoever closed it deletes it. Failing any OTHER way
+      // is a real failure and is rethrown unchanged.
+      let failure: unknown;
+      try {
+        await runFixture(ctx);
+      } catch (err) {
+        failure = err;
+      }
+      if (failure === undefined) {
+        throw new Error(
+          `[${fixture.name}] is pinned in KNOWN_FAILING but now PASSES. The divergence is closed — ` +
+            `delete its KNOWN_FAILING entry. Pinned reason: ${pinned.reason}`,
+        );
+      }
+      const failureMessage = failure instanceof Error ? failure.message : String(failure);
+      if (!pinned.failsWith.test(failureMessage)) {
+        throw failure;
       }
     });
   });

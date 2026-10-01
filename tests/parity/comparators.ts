@@ -713,3 +713,93 @@ export function compareLocalValidationError(
   }
   return result;
 }
+
+// ---------------------------------------------------------------------------
+// Exozpn36 — error-subclass parity. The runner projects the caught error into
+// a language-neutral shape (class short name, `kind`, typed-payload fields by
+// WIRE name); this compares it with the fixture's expected_error_* fields.
+// Every expectation is optional and independent; an absent one is not checked.
+// ---------------------------------------------------------------------------
+
+import type { FixtureScalar } from './fixtures.js';
+
+export interface ExpectedThrownError {
+  className?: string;
+  kind?: string;
+  payloadFields?: Readonly<Record<string, FixtureScalar>>;
+}
+
+export interface CapturedThrownError {
+  className: string;
+  /** `undefined` when the throw carries no `kind` at all. */
+  kind?: unknown;
+  /** Only the requested wire fields; a field the payload does not expose is ABSENT. */
+  payloadFields: Readonly<Record<string, unknown>>;
+}
+
+export function compareThrownError(
+  expected: ExpectedThrownError,
+  actual: CapturedThrownError,
+  path = 'expected_error',
+): ParityDiff {
+  const result = passing();
+  if (expected.className !== undefined && expected.className !== actual.className) {
+    merge(result, fail(`${path}_class`, `expected ${expected.className}, got ${actual.className}`));
+  }
+  if (expected.kind !== undefined && expected.kind !== actual.kind) {
+    merge(
+      result,
+      fail(
+        `${path}_kind`,
+        actual.kind === undefined
+          ? `expected ${JSON.stringify(expected.kind)}, but ${actual.className} carries no kind`
+          : `expected ${JSON.stringify(expected.kind)}, got ${JSON.stringify(actual.kind)}`,
+      ),
+    );
+  }
+  for (const [field, value] of Object.entries(expected.payloadFields ?? {})) {
+    const fieldPath = `expected_payload_fields.${field}`;
+    if (!(field in actual.payloadFields)) {
+      merge(
+        result,
+        fail(fieldPath, `expected ${JSON.stringify(value)}, but ${actual.className}'s typed payload does not expose it`),
+      );
+    } else if (actual.payloadFields[field] !== value) {
+      merge(
+        result,
+        fail(fieldPath, `expected ${JSON.stringify(value)}, got ${JSON.stringify(actual.payloadFields[field])}`),
+      );
+    }
+  }
+  return result;
+}
+
+/**
+ * Exozpn36 — project a caught error into the language-neutral shape
+ * `compareThrownError` consumes. Class by SHORT name (PHP compares the short
+ * name too; the SDKs share class names). Payload fields are requested by WIRE
+ * name and read from the TYPED payload's camelCase property, because that is
+ * what a consumer reads; a field the payload lacks stays absent.
+ */
+export function projectThrownError(thrown: unknown, wireFields: readonly string[]): CapturedThrownError {
+  if (thrown === null || typeof thrown !== 'object') {
+    return { className: typeof thrown, payloadFields: {} };
+  }
+  const err = thrown as { kind?: unknown; payload?: unknown };
+  const payload =
+    err.payload !== null && typeof err.payload === 'object'
+      ? (err.payload as Record<string, unknown>)
+      : undefined;
+  const payloadFields: Record<string, unknown> = {};
+  for (const wire of wireFields) {
+    const property = wire.replace(/_([a-z0-9])/g, (_m, c: string) => c.toUpperCase());
+    if (payload !== undefined && property in payload) {
+      payloadFields[wire] = payload[property];
+    }
+  }
+  return {
+    className: thrown.constructor.name,
+    ...('kind' in err ? { kind: err.kind } : {}),
+    payloadFields,
+  };
+}

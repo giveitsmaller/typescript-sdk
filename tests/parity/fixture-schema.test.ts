@@ -79,7 +79,7 @@ describe('parity fixtures conform to fixture.schema.json', () => {
     expect(validate({ ...lowering, lowering: { ...block, operations: [{ op: 'sharpen' }] } })).toBe(false);
   });
 
-  it.each(['cf_lowering_payload_mismatch', 'cf_run_result_mismatch'])(
+  it.each(['cf_lowering_payload_mismatch', 'cf_run_result_mismatch', 'cf_error_subclass_mismatch'])(
     'conformance fixture %s is well-formed (only its expected VALUE is wrong)',
     (stem) => {
       const file = resolve(dir, '../../parity-conformance/fixtures', `${stem}.yaml`);
