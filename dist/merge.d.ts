@@ -199,7 +199,6 @@ export declare class MergeBuilder {
     private waitForVideoProbes;
     private buildPayload;
     private opOptionsForResolved;
-    private awaitTerminal;
 }
 /**
  * Project the merge-level {@link MergeOptions} into the per-media wire

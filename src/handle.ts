@@ -37,19 +37,15 @@ import type { GislClient } from './client.js';
 import { DEFAULT_POLL_TIMEOUT_MS } from './client.js';
 import {
   GislConfigError,
-  GislNetworkError,
   GislResultNotReadyError,
   GislTimeoutError,
-  GislStreamHostNotDeclaredError,
-  SseConnectRefused,
-  SseEndedWithoutTerminal,
 } from './errors.js';
 import {
-  _consumeSseToTerminal,
-  _pollToTerminal,
+  _awaitTerminalReportingTransport,
   _retryOn429,
   _parseMaxWait,
   type ProgressEvent,
+  type RunTransport,
 } from './builder.js';
 import {
   RunResult,
@@ -199,51 +195,15 @@ export class Handle {
     const client = this.requireClient();
     const deadline = Date.now() + _parseMaxWait(maxWait);
 
-    let finalStatus;
-    try {
-      finalStatus = await _consumeSseToTerminal(client, {
-        workflowId: this.workflowId,
-        deadline,
-        signal: undefined,
-        onProgress,
-      });
-    } catch (err) {
-      // TDqmkWpX: mirror Recipe.run() — poll-fallback ONLY on a clean SSE
-      // stream-end (SseEndedWithoutTerminal) or a typed transport error
-      // (GislNetworkError). Everything else (timeout, abort, API, an onProgress
-      // callback throw, anything unexpected) MUST propagate — re-issuing the same
-      // doomed request via poll would mask the real failure.
-      if (
-        !(
-          err instanceof SseEndedWithoutTerminal ||
-          // 3OVNoRxh: the SSE CONNECT was refused with a retryable status
-          // (a 429 on the `events_stream` bucket, or a 503). The contract
-          // declares that retryable and it clears when another caller closes
-          // a stream — so it is SSE being momentarily unavailable, not a
-          // failure of the thing this caller asked for. The wrap happens at
-          // the connect site ONLY, and only for `GislApiError.retryable`, so
-          // a 401/402/404 still propagates.
-          err instanceof SseConnectRefused ||
-          err instanceof GislNetworkError ||
-          // VUozk5Bc: no stream host is DECLARED for this configuration (a
-          // configuration nothing declares; both named environments resolve as of
-          // contracts v2.195.0). That is not a failure to recover from,
-          // it is SSE being unavailable here, and polling is a working
-          // transport. Failing hard instead would strand every caller on a host
-          // nobody has declared yet. A DIRECT `streamEvents` caller still gets
-          // the hard error — they asked for the stream specifically; a `run()`
-          // caller asked for a result.
-          err instanceof GislStreamHostNotDeclaredError
-        )
-      ) {
-        throw err;
-      }
-      finalStatus = await _pollToTerminal(client, {
-        workflowId: this.workflowId,
-        deadline,
-        signal: undefined,
-      });
-    }
+    // Same SSE-first wait, same fallback rules and same once-per-client
+    // no-stream-host warning as run(): one implementation (v0JhuD8V).
+    const { status: finalStatus, transport } = await _awaitTerminalReportingTransport(client, {
+      workflowId: this.workflowId,
+      deadline,
+      signal: undefined,
+      onProgress,
+      useSSE: true,
+    });
 
     if (Date.now() >= deadline) {
       throw new GislTimeoutError(
@@ -262,7 +222,7 @@ export class Handle {
         this.workflowId,
       );
     }
-    return this.project(finalStatus, downloads.downloads);
+    return this.project(finalStatus, downloads.downloads, transport);
   }
 
   /**
@@ -282,7 +242,9 @@ export class Handle {
       throw new GislResultNotReadyError(this.workflowId, status.status);
     }
     const downloads = await client.getWorkflowDownloads(this.workflowId);
-    return this.project(status, downloads.downloads);
+    // No wait happened, so no transport is reported: `transport` describes how
+    // a WAIT observed the terminal status.
+    return this.project(status, downloads.downloads, undefined);
   }
 
   /**
@@ -308,6 +270,7 @@ export class Handle {
   private project(
     finalStatus: Parameters<typeof projectDownloadsToRunResult>[1],
     jobDownloads: Parameters<typeof projectMultiJobToRunResult>[2],
+    transport: RunTransport | undefined,
   ): RunResult {
     const downloader = this.makeDownloader();
     if (isFanoutStatus(finalStatus)) {
@@ -317,6 +280,7 @@ export class Handle {
         jobDownloads,
         new Map<string, string | null>(),
         downloader,
+        transport,
       );
     }
     // A fluent `files([...]).merge(...)` combine — project ONLY the terminal
@@ -335,6 +299,7 @@ export class Handle {
         mergeDownloads,
         null,
         downloader,
+        transport,
       );
     }
     // A fluent `files([...]).archive(...)` bundle — project ONLY the archive
@@ -348,6 +313,7 @@ export class Handle {
         archiveDownloads,
         null,
         downloader,
+        transport,
       );
     }
     // A fluent `file(...).watermark(overlay)` — project ONLY the terminal
@@ -363,6 +329,7 @@ export class Handle {
         watermarkDownloads,
         null,
         downloader,
+        transport,
       );
     }
     // A single-input `sole_op` chain — e.g. `.textWatermark('x').compress()`
@@ -379,6 +346,7 @@ export class Handle {
         soleOpDownloads,
         this.#key,
         downloader,
+        transport,
       );
     }
     return projectDownloadsToRunResult(
@@ -387,6 +355,7 @@ export class Handle {
       jobDownloads,
       this.#key,
       downloader,
+      transport,
     );
   }
 

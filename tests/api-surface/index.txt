@@ -132,6 +132,7 @@ FilesRecipe	value+type
 GetSchemaOptions	type
 GetSchemaResult	type
 gisl	value
+GISL_STREAM_HOST_NOT_DECLARED_WARNING	value
 GislAbortError	value+type
 GislAnonymousOptions	type
 GislApiError	value+type
@@ -290,6 +291,7 @@ Result	type
 RetryResponse	type
 RunOptions	type
 RunResult	value+type
+RunTransport	type
 SequenceEntry	type
 SingleInputOperationType	type
 SplitAudioMode	value

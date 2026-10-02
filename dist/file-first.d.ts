@@ -10,7 +10,7 @@
  * Mirrors `packages/php/src/FileFirst/*`.
  */
 import { GislItemFailedError } from './errors.js';
-import { type ProgressEvent } from './builder.js';
+import { type ProgressEvent, type RunTransport } from './builder.js';
 import type { GislClient } from './client.js';
 import type { OperationDownload, WorkflowStatusResponse } from '@giveitsmaller/contracts/openapi';
 import type { ConvertOptions, ThumbnailOptions, TransformOptions, TextWatermarkOptions, WatermarkOptions, OutputOptions, OutputFit } from './ergonomic/option_types.js';
@@ -145,6 +145,14 @@ export declare class RunResult {
     readonly succeeded: readonly ItemResult[];
     readonly failed: readonly ItemFailure[];
     private readonly downloader?;
+    /**
+     * How the run's wait observed the terminal status (v0JhuD8V): `'sse'`
+     * when the `/events` stream delivered it, `'polling'` when a status poll
+     * did (including after a stream fell back). Undefined when no wait
+     * happened — `Handle.result()`, or a directly-constructed result. See
+     * {@link RunTransport}.
+     */
+    readonly transport?: RunTransport | undefined;
     /** Single-output sugar: the lone artifact's URL, or undefined for 0 / >1. */
     readonly url?: string;
     /** True iff {@link failed} is empty. */
@@ -157,7 +165,15 @@ export declare class RunResult {
      * `targetSizeMet === false`.
      */
     readonly targetSizeMissed?: boolean;
-    constructor(workflowId: string, state: string, artifacts: readonly OutputFile[], succeeded: readonly ItemResult[], failed: readonly ItemFailure[], downloader?: Downloader | undefined);
+    constructor(workflowId: string, state: string, artifacts: readonly OutputFile[], succeeded: readonly ItemResult[], failed: readonly ItemFailure[], downloader?: Downloader | undefined, 
+    /**
+     * How the run's wait observed the terminal status (v0JhuD8V): `'sse'`
+     * when the `/events` stream delivered it, `'polling'` when a status poll
+     * did (including after a stream fell back). Undefined when no wait
+     * happened — `Handle.result()`, or a directly-constructed result. See
+     * {@link RunTransport}.
+     */
+    transport?: RunTransport | undefined);
     /**
      * Address a succeeded input by the `key:` given to `file()`. Duplicate keys
      * are not valid input — the producer enforces key uniqueness (a later
@@ -208,12 +224,13 @@ export declare class RunResult {
             errorMessage?: string;
             errorCode?: string;
         }[];
+        transport?: RunTransport;
     };
     private requireDownloader;
 }
 export declare function projectDownloadsToRunResult(workflowId: string, finalStatus: WorkflowStatusResponse, jobDownloads: readonly {
     files: readonly OperationDownload[];
-}[], key: string | null, downloader?: Downloader): RunResult;
+}[], key: string | null, downloader?: Downloader, transport?: RunTransport): RunResult;
 /**
  * Flatten a terminal multi-job workflow (the `client.files([...])` fan-out)
  * into a partitioned {@link RunResult}. One job per input file, keyed by the
@@ -240,7 +257,7 @@ export declare function projectDownloadsToRunResult(workflowId: string, finalSta
 export declare function projectMultiJobToRunResult(workflowId: string, finalStatus: WorkflowStatusResponse, jobDownloads: readonly {
     ref: string;
     files: readonly OperationDownload[];
-}[], keyByRef: ReadonlyMap<string, string | null>, downloader?: Downloader): RunResult;
+}[], keyByRef: ReadonlyMap<string, string | null>, downloader?: Downloader, transport?: RunTransport): RunResult;
 /**
  * True when a terminal status describes a homogeneous `files([...])` fan-out —
  * i.e. it has at least one job and EVERY job ref is `file-{i}` (the ids the

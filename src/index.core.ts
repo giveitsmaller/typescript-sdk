@@ -283,6 +283,10 @@ export {
 // `.submit({webhook})` returns a `Handle`. Progress events are the
 // SDK-synthesised `{phase:'upload'|'processing', ...}` discriminated union.
 export { OperationBuilder, MapEachBuilder } from './builder.js';
+// v0JhuD8V: the `code` of the once-per-client warning emitted when a run
+// polls because no SSE stream host is declared — filter on it in
+// `process.on('warning')`.
+export { GISL_STREAM_HOST_NOT_DECLARED_WARNING } from './builder.js';
 // dql51via: the options type of GislClient.createWorkflowAwaitingProbe.
 export type { CreateAwaitingProbeOptions } from './probe-pending.js';
 export { MergeBuilder, asset, handle, clip } from './merge.js';
@@ -305,6 +309,7 @@ export type {
   ResolvedOptionsSources,
   Result,
   RunOptions,
+  RunTransport,
   SubmitOptions,
   UploadProgressEvent,
 } from './builder.js';

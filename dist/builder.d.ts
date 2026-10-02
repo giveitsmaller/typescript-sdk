@@ -199,7 +199,28 @@ export interface Result {
      * `JSON.stringify`).
      */
     readonly resolvedOptions: ResolvedOptions;
+    /**
+     * How the terminal status was actually observed (v0JhuD8V). See
+     * {@link RunTransport}. A `.mapEach()` combined result is `'sse'` only when
+     * the parent and every child streamed to terminal.
+     */
+    readonly transport: RunTransport;
 }
+/**
+ * The transport that delivered a run's terminal status (v0JhuD8V):
+ *
+ *  - `'sse'` — the `/events` stream delivered the terminal event.
+ *  - `'polling'` — a `GET /status` poll did. That is the case for
+ *    `useSSE: false`, for a client with no declared stream host (a
+ *    `baseUrl`-only client: `baseUrl` never moves the stream), and for a run
+ *    whose stream opened and then fell back to polling (a clean stream end
+ *    without a terminal event, a network error, a refused connect).
+ *
+ * It is the FINAL transport, one value, not a history: a run that streamed
+ * progress and then fell back reports `'polling'`. The progress it did stream
+ * is visible as processing events on `onProgress`, which only SSE emits.
+ */
+export type RunTransport = 'sse' | 'polling';
 /**
  * Upload-phase progress event. The byte counter comes from
  * `UploadOptions.onProgress` — there is no `phase` field on the wire.
@@ -405,7 +426,6 @@ export declare class OperationBuilder {
      * with-webhook is a future card.
      */
     mapEach(fn: (artifact: ArtifactRef) => OperationBuilder): MapEachBuilder;
-    private awaitTerminal;
 }
 export declare class MapEachBuilder {
     private readonly parent;
@@ -436,6 +456,35 @@ export declare class MapEachBuilder {
  * @internal — not re-exported from the package barrel.
  */
 export declare function _clampPollIntervalMs(requested: number | undefined): number;
+/** `process.emitWarning` code for the no-stream-host warning (v0JhuD8V). */
+export declare const GISL_STREAM_HOST_NOT_DECLARED_WARNING = "GISL_STREAM_HOST_NOT_DECLARED";
+/**
+ * Await a workflow to a terminal status — SSE first with a poll fallback, or
+ * poll-direct when `useSSE` is false — and report which transport delivered
+ * that terminal status (v0JhuD8V). The ONE implementation behind every
+ * ergonomic wait: `OperationBuilder.run()`, `MergeBuilder.run()`, every
+ * file-first `run()` and `Handle.wait()`.
+ *
+ * `transport` is the FINAL transport: `'sse'` only when the stream itself
+ * delivered the terminal event; `'polling'` whenever a status poll did,
+ * including after SSE opened and then fell back. One value answers the
+ * question a caller has ("did this run stream?"); whether SSE delivered any
+ * events before a fallback is already visible as processing events on
+ * `onProgress`, which only the stream emits.
+ *
+ * @internal
+ */
+export declare function _awaitTerminalReportingTransport(client: GislClient, args: {
+    workflowId: string;
+    deadline: number;
+    signal: AbortSignal | undefined;
+    onProgress: ((event: ProgressEvent) => void) | undefined;
+    useSSE: boolean;
+    pollIntervalMs?: number;
+}): Promise<{
+    status: WorkflowStatusResponse;
+    transport: RunTransport;
+}>;
 /** @internal — exported for reuse by `merge.ts` (T3) and future builders. */
 export declare function _consumeSseToTerminal(client: GislClient, args: {
     workflowId: string;
@@ -462,7 +511,7 @@ export declare function _projectResult(status: WorkflowStatusResponse, jobDownlo
     ref: string;
     jobId: string;
     files: readonly OperationDownload[];
-}[], appliedOptions: Record<string, unknown>, resolvedOptionsOverride?: ResolvedOptions): Result;
+}[], appliedOptions: Record<string, unknown>, transport: RunTransport, resolvedOptionsOverride?: ResolvedOptions): Result;
 /** @internal — exported for reuse by `merge.ts` (T3) and future builders. */
 export declare function _checkAborted(signal: AbortSignal | undefined): void;
 /**

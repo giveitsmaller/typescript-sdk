@@ -242,4 +242,6 @@ export function _runAudit() {
     accept();
     // W8v4jWzx — error-taxonomy category union surfaced by GislApiError.category.
     accept();
+    // v0JhuD8V — transport a run's wait actually used.
+    accept();
 }

@@ -33,8 +33,8 @@
  * Mirrors the PHP `Gisl\Sdk\Ergonomic\Handle` + `Gisl\Sdk\Ergonomic\StatusSnapshot`.
  */
 import { DEFAULT_POLL_TIMEOUT_MS } from './client.js';
-import { GislConfigError, GislNetworkError, GislResultNotReadyError, GislTimeoutError, GislStreamHostNotDeclaredError, SseConnectRefused, SseEndedWithoutTerminal, } from './errors.js';
-import { _consumeSseToTerminal, _pollToTerminal, _retryOn429, _parseMaxWait, } from './builder.js';
+import { GislConfigError, GislResultNotReadyError, GislTimeoutError, } from './errors.js';
+import { _awaitTerminalReportingTransport, _retryOn429, _parseMaxWait, } from './builder.js';
 import { projectDownloadsToRunResult, projectMultiJobToRunResult, isFanoutStatus, isMergeStatus, isArchiveStatus, isWatermarkStatus, isSoleOpChainStatus, soleOpChainDeliverableRef, _POST_STEP_JOB_REF, } from './file-first.js';
 import { LazyHttpDownloader } from './lazy-downloader.js';
 /**
@@ -158,48 +158,15 @@ export class Handle {
     async wait(maxWait = DEFAULT_POLL_TIMEOUT_MS, onProgress) {
         const client = this.requireClient();
         const deadline = Date.now() + _parseMaxWait(maxWait);
-        let finalStatus;
-        try {
-            finalStatus = await _consumeSseToTerminal(client, {
-                workflowId: this.workflowId,
-                deadline,
-                signal: undefined,
-                onProgress,
-            });
-        }
-        catch (err) {
-            // TDqmkWpX: mirror Recipe.run() — poll-fallback ONLY on a clean SSE
-            // stream-end (SseEndedWithoutTerminal) or a typed transport error
-            // (GislNetworkError). Everything else (timeout, abort, API, an onProgress
-            // callback throw, anything unexpected) MUST propagate — re-issuing the same
-            // doomed request via poll would mask the real failure.
-            if (!(err instanceof SseEndedWithoutTerminal ||
-                // 3OVNoRxh: the SSE CONNECT was refused with a retryable status
-                // (a 429 on the `events_stream` bucket, or a 503). The contract
-                // declares that retryable and it clears when another caller closes
-                // a stream — so it is SSE being momentarily unavailable, not a
-                // failure of the thing this caller asked for. The wrap happens at
-                // the connect site ONLY, and only for `GislApiError.retryable`, so
-                // a 401/402/404 still propagates.
-                err instanceof SseConnectRefused ||
-                err instanceof GislNetworkError ||
-                // VUozk5Bc: no stream host is DECLARED for this configuration (a
-                // configuration nothing declares; both named environments resolve as of
-                // contracts v2.195.0). That is not a failure to recover from,
-                // it is SSE being unavailable here, and polling is a working
-                // transport. Failing hard instead would strand every caller on a host
-                // nobody has declared yet. A DIRECT `streamEvents` caller still gets
-                // the hard error — they asked for the stream specifically; a `run()`
-                // caller asked for a result.
-                err instanceof GislStreamHostNotDeclaredError)) {
-                throw err;
-            }
-            finalStatus = await _pollToTerminal(client, {
-                workflowId: this.workflowId,
-                deadline,
-                signal: undefined,
-            });
-        }
+        // Same SSE-first wait, same fallback rules and same once-per-client
+        // no-stream-host warning as run(): one implementation (v0JhuD8V).
+        const { status: finalStatus, transport } = await _awaitTerminalReportingTransport(client, {
+            workflowId: this.workflowId,
+            deadline,
+            signal: undefined,
+            onProgress,
+            useSSE: true,
+        });
         if (Date.now() >= deadline) {
             throw new GislTimeoutError(`Workflow ${this.workflowId} reached terminal status but maxWait elapsed before downloads could be fetched`, this.workflowId);
         }
@@ -211,7 +178,7 @@ export class Handle {
         if (Date.now() >= deadline) {
             throw new GislTimeoutError(`Workflow ${this.workflowId} downloads fetch completed after maxWait elapsed`, this.workflowId);
         }
-        return this.project(finalStatus, downloads.downloads);
+        return this.project(finalStatus, downloads.downloads, transport);
     }
     /**
      * Non-blocking result accessor. Fetches the workflow status once: if the
@@ -230,7 +197,9 @@ export class Handle {
             throw new GislResultNotReadyError(this.workflowId, status.status);
         }
         const downloads = await client.getWorkflowDownloads(this.workflowId);
-        return this.project(status, downloads.downloads);
+        // No wait happened, so no transport is reported: `transport` describes how
+        // a WAIT observed the terminal status.
+        return this.project(status, downloads.downloads, undefined);
     }
     /**
      * Project a terminal status + its per-job downloads into a {@link RunResult},
@@ -252,10 +221,10 @@ export class Handle {
      *    {@link projectDownloadsToRunResult} keyed by this handle's `#key`
      *    (the recipe key from a file-first `submit()`, or `null` on reattach).
      */
-    project(finalStatus, jobDownloads) {
+    project(finalStatus, jobDownloads, transport) {
         const downloader = this.makeDownloader();
         if (isFanoutStatus(finalStatus)) {
-            return projectMultiJobToRunResult(this.workflowId, finalStatus, jobDownloads, new Map(), downloader);
+            return projectMultiJobToRunResult(this.workflowId, finalStatus, jobDownloads, new Map(), downloader, transport);
         }
         // A fluent `files([...]).merge(...)` combine — project ONLY the terminal
         // deliverable, filtering the `src_*` passthrough plumbing (which re-exposes
@@ -267,14 +236,14 @@ export class Handle {
             // job, which is then the deliverable; otherwise the `merge` job is.
             const mergeOutputRef = terminalOutputRef(jobDownloads, 'merge');
             const mergeDownloads = jobDownloads.filter((d) => d.ref === mergeOutputRef);
-            return projectDownloadsToRunResult(this.workflowId, finalStatus, mergeDownloads, null, downloader);
+            return projectDownloadsToRunResult(this.workflowId, finalStatus, mergeDownloads, null, downloader, transport);
         }
         // A fluent `files([...]).archive(...)` bundle — project ONLY the archive
         // output, filtering the `src_*` passthrough plumbing (mirror of the merge
         // branch for archive).
         if (isArchiveStatus(finalStatus)) {
             const archiveDownloads = jobDownloads.filter((d) => d.ref === 'archive');
-            return projectDownloadsToRunResult(this.workflowId, finalStatus, archiveDownloads, null, downloader);
+            return projectDownloadsToRunResult(this.workflowId, finalStatus, archiveDownloads, null, downloader, transport);
         }
         // A fluent `file(...).watermark(overlay)` — project ONLY the terminal
         // deliverable, filtering the `src_*` (base/overlay) passthrough plumbing.
@@ -283,7 +252,7 @@ export class Handle {
         if (isWatermarkStatus(finalStatus)) {
             const watermarkOutputRef = terminalOutputRef(jobDownloads, 'watermark');
             const watermarkDownloads = jobDownloads.filter((d) => d.ref === watermarkOutputRef);
-            return projectDownloadsToRunResult(this.workflowId, finalStatus, watermarkDownloads, null, downloader);
+            return projectDownloadsToRunResult(this.workflowId, finalStatus, watermarkDownloads, null, downloader, transport);
         }
         // A single-input `sole_op` chain — e.g. `.textWatermark('x').compress()`
         // lowered to a `text_watermark` job + downstream `post` job (IQc01rj0).
@@ -293,9 +262,9 @@ export class Handle {
         if (isSoleOpChainStatus(finalStatus)) {
             const soleOpRef = soleOpChainDeliverableRef(finalStatus);
             const soleOpDownloads = jobDownloads.filter((d) => d.ref === soleOpRef);
-            return projectDownloadsToRunResult(this.workflowId, finalStatus, soleOpDownloads, this.#key, downloader);
+            return projectDownloadsToRunResult(this.workflowId, finalStatus, soleOpDownloads, this.#key, downloader, transport);
         }
-        return projectDownloadsToRunResult(this.workflowId, finalStatus, jobDownloads, this.#key, downloader);
+        return projectDownloadsToRunResult(this.workflowId, finalStatus, jobDownloads, this.#key, downloader, transport);
     }
     /**
      * Plain-object projection. Field order (`workflowId`, then `webhookSecret`

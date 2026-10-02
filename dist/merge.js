@@ -25,8 +25,8 @@
  */
 import { DEFAULT_POLL_TIMEOUT_MS } from './client.js';
 import { uploadSource, jobOutputSource } from './types.js';
-import { GislConfigError, GislNetworkError, GislPerInputOptionsNotSupportedError, GislTimeoutError, GislUndeclaredAssetError, GislUnusedAssetError, GislStreamHostNotDeclaredError, SseConnectRefused, SseEndedWithoutTerminal, } from './errors.js';
-import { _cappedProbeTimeoutMs, _checkAborted, _consumeSseToTerminal, _detectCompressMedia, _parseMaxWait, _pollToTerminal, _projectResult, _retryOn429, } from './builder.js';
+import { GislConfigError, GislPerInputOptionsNotSupportedError, GislTimeoutError, GislUndeclaredAssetError, GislUnusedAssetError, } from './errors.js';
+import { _cappedProbeTimeoutMs, _checkAborted, _awaitTerminalReportingTransport, _detectCompressMedia, _parseMaxWait, _projectResult, _retryOn429, } from './builder.js';
 import { Handle } from './handle.js';
 import { createWorkflowAwaitingProbe } from './probe-pending.js';
 /**
@@ -120,7 +120,7 @@ export class MergeBuilder {
         });
         _checkAborted(signal);
         // 4. Wait to terminal status.
-        const finalStatus = await this.awaitTerminal({
+        const { status: finalStatus, transport } = await _awaitTerminalReportingTransport(this.client, {
             workflowId: created.workflowId,
             deadline,
             signal,
@@ -148,7 +148,7 @@ export class MergeBuilder {
         // would pollute the Result with the raw inputs. The merge job's ref is
         // 'merge' (see buildPayload); the source jobs are 'src_N'.
         const mergeDownloads = downloads.downloads.filter((d) => d.ref === 'merge');
-        return _projectResult(finalStatus, mergeDownloads, this.opOptionsForResolved(plan.mediaKind));
+        return _projectResult(finalStatus, mergeDownloads, this.opOptionsForResolved(plan.mediaKind), transport);
     }
     async submit(options = {}) {
         const plan = this.planSequence();
@@ -449,40 +449,6 @@ export class MergeBuilder {
                 out.videoFormat = o.videoFormat;
         }
         return out;
-    }
-    async awaitTerminal(args) {
-        if (args.useSSE) {
-            try {
-                return await _consumeSseToTerminal(this.client, args);
-            }
-            catch (err) {
-                // TDqmkWpX: poll-fallback ONLY on a clean SSE stream-end or a typed
-                // transport error; rethrow everything else (timeout, abort, API, an
-                // onProgress callback throw, anything unexpected) so it isn't masked.
-                if (!(err instanceof SseEndedWithoutTerminal ||
-                    // 3OVNoRxh: the SSE CONNECT was refused with a retryable status
-                    // (a 429 on the `events_stream` bucket, or a 503). The contract
-                    // declares that retryable and it clears when another caller closes
-                    // a stream — so it is SSE being momentarily unavailable, not a
-                    // failure of the thing this caller asked for. The wrap happens at
-                    // the connect site ONLY, and only for `GislApiError.retryable`, so
-                    // a 401/402/404 still propagates.
-                    err instanceof SseConnectRefused ||
-                    err instanceof GislNetworkError ||
-                    // VUozk5Bc: no stream host is DECLARED for this configuration (a
-                    // configuration nothing declares; both named environments resolve as of
-                    // contracts v2.195.0). That is not a failure to recover from,
-                    // it is SSE being unavailable here, and polling is a working
-                    // transport. Failing hard instead would strand every caller on a host
-                    // nobody has declared yet. A DIRECT `streamEvents` caller still gets
-                    // the hard error — they asked for the stream specifically; a `run()`
-                    // caller asked for a result.
-                    err instanceof GislStreamHostNotDeclaredError)) {
-                    throw err;
-                }
-            }
-        }
-        return await _pollToTerminal(this.client, args);
     }
 }
 /**

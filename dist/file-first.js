@@ -10,8 +10,8 @@
  * Mirrors `packages/php/src/FileFirst/*`.
  */
 import { _refusePlannedInOperations } from './ergonomic/planned_values.js';
-import { GislConfigError, GislItemFailedError, GislNetworkError, GislNoSuchKeyError, GislSinkError, GislStreamHostNotDeclaredError, GislTimeoutError, SseConnectRefused, SseEndedWithoutTerminal } from './errors.js';
-import { _detectCompressMedia, _retryOn429, _detectAudioLossless, _consumeSseToTerminal, _pollToTerminal, _parseMaxWait, _checkAborted, _cappedProbeTimeoutMs, } from './builder.js';
+import { GislConfigError, GislItemFailedError, GislNoSuchKeyError, GislSinkError, GislTimeoutError } from './errors.js';
+import { _detectCompressMedia, _retryOn429, _detectAudioLossless, _awaitTerminalReportingTransport, _parseMaxWait, _checkAborted, _cappedProbeTimeoutMs, } from './builder.js';
 import { DEFAULT_POLL_TIMEOUT_MS } from './client.js';
 import { LazyHttpDownloader } from './lazy-downloader.js';
 import { resolveCompressOptions, } from './ergonomic/preset_resolver.js';
@@ -59,6 +59,7 @@ export class RunResult {
     succeeded;
     failed;
     downloader;
+    transport;
     /** Single-output sugar: the lone artifact's URL, or undefined for 0 / >1. */
     url;
     /** True iff {@link failed} is empty. */
@@ -71,13 +72,22 @@ export class RunResult {
      * `targetSizeMet === false`.
      */
     targetSizeMissed;
-    constructor(workflowId, state, artifacts, succeeded, failed, downloader) {
+    constructor(workflowId, state, artifacts, succeeded, failed, downloader, 
+    /**
+     * How the run's wait observed the terminal status (v0JhuD8V): `'sse'`
+     * when the `/events` stream delivered it, `'polling'` when a status poll
+     * did (including after a stream fell back). Undefined when no wait
+     * happened — `Handle.result()`, or a directly-constructed result. See
+     * {@link RunTransport}.
+     */
+    transport) {
         this.workflowId = workflowId;
         this.state = state;
         this.artifacts = artifacts;
         this.succeeded = succeeded;
         this.failed = failed;
         this.downloader = downloader;
+        this.transport = transport;
         this.url = artifacts.length === 1 ? artifacts[0].url : undefined;
         this.ok = failed.length === 0;
         this.targetSizeMissed = artifacts.every((a) => a.targetSizeMet === undefined)
@@ -200,9 +210,12 @@ export class RunResult {
         const headWithMissed = this.targetSizeMissed === undefined
             ? head
             : { ...head, targetSizeMissed: this.targetSizeMissed };
-        return this.url === undefined
+        const body = this.url === undefined
             ? { ...headWithMissed, ...rest }
             : { ...headWithMissed, url: this.url, ...rest };
+        // `transport` goes LAST and is omitted when undefined, matching the PHP
+        // toArray() (v0JhuD8V).
+        return this.transport === undefined ? body : { ...body, transport: this.transport };
     }
     requireDownloader() {
         if (this.downloader === undefined) {
@@ -222,7 +235,7 @@ function firstOpError(ops) {
     const op = ops.find((o) => o.errorMessage !== undefined || o.errorCode !== undefined);
     return { errorMessage: op?.errorMessage, errorCode: op?.errorCode };
 }
-export function projectDownloadsToRunResult(workflowId, finalStatus, jobDownloads, key, downloader) {
+export function projectDownloadsToRunResult(workflowId, finalStatus, jobDownloads, key, downloader, transport) {
     // Flatten to the lean OutputFile[] (the four file-first fields only).
     const artifacts = [];
     for (const job of jobDownloads) {
@@ -254,7 +267,7 @@ export function projectDownloadsToRunResult(workflowId, finalStatus, jobDownload
         succeeded = [];
         failed = [{ key, error: new GislItemFailedError(key, state, errorMessage, errorCode) }];
     }
-    return new RunResult(workflowId, state, artifacts, succeeded, failed, downloader);
+    return new RunResult(workflowId, state, artifacts, succeeded, failed, downloader, transport);
 }
 /**
  * Flatten a terminal multi-job workflow (the `client.files([...])` fan-out)
@@ -279,7 +292,7 @@ export function projectDownloadsToRunResult(workflowId, finalStatus, jobDownload
  * @internal Exported for the file-first `client.files([...]).run()` producer;
  *   not part of the caller-facing fluent surface.
  */
-export function projectMultiJobToRunResult(workflowId, finalStatus, jobDownloads, keyByRef, downloader) {
+export function projectMultiJobToRunResult(workflowId, finalStatus, jobDownloads, keyByRef, downloader, transport) {
     // Group downloads by job ref so a job's outputs can be flattened AFTER the
     // per-job partition is decided (grouping is unrecoverable post-flatten).
     const filesByRef = new Map();
@@ -318,7 +331,7 @@ export function projectMultiJobToRunResult(workflowId, finalStatus, jobDownloads
             });
         }
     }
-    return new RunResult(workflowId, finalStatus.status, artifacts, succeeded, failed, downloader);
+    return new RunResult(workflowId, finalStatus.status, artifacts, succeeded, failed, downloader, transport);
 }
 /** Derive the partition key `"{i}"` from a `file-{i}` job ref; the ref verbatim otherwise. */
 function jobIndexFromRef(ref) {
@@ -602,66 +615,6 @@ export const fileInput = {
         return { kind: 'uploadId', fileId };
     },
 };
-/**
- * Await a workflow to a terminal status — SSE first with a poll fallback, or
- * poll-direct when `useSSE` is false. The single shared implementation behind
- * every file-first `run()` (Recipe, FilesRecipe, MergedRecipe, ArchivedRecipe,
- * WatermarkedRecipe), mirroring the operation-first
- * `OperationBuilder.awaitTerminal` (in `builder.ts`). Callers pass
- * `useSSE: options.useSSE ?? true` so the default stays SSE-first (today's
- * behaviour); `useSSE: false` skips the SSE attempt entirely and polls —
- * useful when an intermediary proxy blocks SSE.
- *
- * @internal Not part of the caller-facing fluent surface.
- */
-async function _awaitTerminal(client, args) {
-    if (args.useSSE) {
-        try {
-            return await _consumeSseToTerminal(client, {
-                workflowId: args.workflowId,
-                deadline: args.deadline,
-                signal: args.signal,
-                onProgress: args.onProgress,
-            });
-        }
-        catch (err) {
-            // TDqmkWpX: poll-fallback ONLY on a clean SSE stream-end
-            // (SseEndedWithoutTerminal) or a typed transport error (GislNetworkError).
-            // Everything else — caller-deadline, abort, an API error from /events, an
-            // onProgress callback throw (propagates as-is, NOT wrapped), anything
-            // unexpected — MUST propagate; re-issuing the same doomed request via poll
-            // would mask it. Mirrors the PHP BuilderInternals::awaitTerminal sealed-
-            // marker discipline.
-            if (!(err instanceof SseEndedWithoutTerminal ||
-                // 3OVNoRxh: the SSE CONNECT was refused with a retryable status
-                // (a 429 on the `events_stream` bucket, or a 503). The contract
-                // declares that retryable and it clears when another caller closes
-                // a stream — so it is SSE being momentarily unavailable, not a
-                // failure of the thing this caller asked for. The wrap happens at
-                // the connect site ONLY, and only for `GislApiError.retryable`, so
-                // a 401/402/404 still propagates.
-                err instanceof SseConnectRefused ||
-                err instanceof GislNetworkError ||
-                // VUozk5Bc: no stream host is DECLARED for this configuration (a
-                // configuration nothing declares; both named environments resolve as of
-                // contracts v2.195.0). That is not a failure to recover from,
-                // it is SSE being unavailable here, and polling is a working
-                // transport. Failing hard instead would strand every caller on a host
-                // nobody has declared yet. A DIRECT `streamEvents` caller still gets
-                // the hard error — they asked for the stream specifically; a `run()`
-                // caller asked for a result.
-                err instanceof GislStreamHostNotDeclaredError)) {
-                throw err;
-            }
-        }
-    }
-    return await _pollToTerminal(client, {
-        workflowId: args.workflowId,
-        deadline: args.deadline,
-        signal: args.signal,
-        pollIntervalMs: args.pollIntervalMs,
-    });
-}
 /**
  * The file-first builder value. `client.file(path)` returns a `Recipe`;
  * single-input operations called on it (`compress`, `convert`, `thumbnail`,
@@ -951,8 +904,8 @@ export class Recipe {
         const created = await this._uploadAndCreate(undefined, deadline, onProgress, signal, options.probeBeforeCreate, options.probeTimeoutMs);
         // 3. Wait to terminal status — SSE first, poll on a genuine SSE error
         // (or poll-direct when `useSSE: false`). Caller-aborted + deadline-elapsed
-        // errors MUST propagate (not transient) — see _awaitTerminal.
-        const finalStatus = await _awaitTerminal(this.client, {
+        // errors MUST propagate (not transient) — see _awaitTerminalReportingTransport.
+        const { status: finalStatus, transport } = await _awaitTerminalReportingTransport(this.client, {
             workflowId: created.workflowId,
             deadline,
             signal,
@@ -983,7 +936,7 @@ export class Recipe {
         const runDownloads = isSoleOpChainStatus(finalStatus)
             ? downloads.downloads.filter((d) => d.ref === soleOpChainDeliverableRef(finalStatus))
             : downloads.downloads;
-        return projectDownloadsToRunResult(created.workflowId, finalStatus, runDownloads, this.recipeKey ?? null, downloader);
+        return projectDownloadsToRunResult(created.workflowId, finalStatus, runDownloads, this.recipeKey ?? null, downloader, transport);
     }
     /**
      * Fire-and-forget the recipe: upload the input (when required), create the
@@ -1858,7 +1811,7 @@ export class FilesRecipe {
         // 3. Wait to terminal status — SSE first, poll on a genuine SSE error.
         // `partially_failed` is a normal terminal state here (the helper treats it
         // as terminal); only caller-aborted / deadline / API errors propagate.
-        const finalStatus = await _awaitTerminal(this.client, {
+        const { status: finalStatus, transport } = await _awaitTerminalReportingTransport(this.client, {
             workflowId: created.workflowId,
             deadline,
             signal,
@@ -1884,7 +1837,7 @@ export class FilesRecipe {
         // the producer's signature.
         const keyByRef = new Map(this.inputs.map((_, i) => [`file-${i}`, String(i)]));
         const downloader = new LazyHttpDownloader();
-        return projectMultiJobToRunResult(created.workflowId, finalStatus, downloads.downloads, keyByRef, downloader);
+        return projectMultiJobToRunResult(created.workflowId, finalStatus, downloads.downloads, keyByRef, downloader, transport);
     }
     /**
      * Fire-and-forget the fan-out: upload every input, create ONE multi-job
@@ -2086,7 +2039,7 @@ export class MergedRecipe {
         }
         const deadline = Date.now() + _parseMaxWait(options.maxWait ?? DEFAULT_POLL_TIMEOUT_MS);
         const created = await this._uploadAllAndCreate(undefined, deadline, onProgress, signal, options.probeBeforeCreate, options.probeTimeoutMs);
-        const finalStatus = await _awaitTerminal(this.client, {
+        const { status: finalStatus, transport } = await _awaitTerminalReportingTransport(this.client, {
             workflowId: created.workflowId,
             deadline,
             signal,
@@ -2112,7 +2065,7 @@ export class MergedRecipe {
         const outputRef = this.postSteps.length > 0 ? _POST_STEP_JOB_REF : 'merge';
         const mergeDownloads = downloads.downloads.filter((d) => d.ref === outputRef);
         const downloader = new LazyHttpDownloader();
-        return projectDownloadsToRunResult(created.workflowId, finalStatus, mergeDownloads, null, downloader);
+        return projectDownloadsToRunResult(created.workflowId, finalStatus, mergeDownloads, null, downloader, transport);
     }
     /**
      * Fire-and-forget: upload + create the merge workflow (wiring `webhook` into
@@ -2301,7 +2254,7 @@ export class ArchivedRecipe {
         }
         const deadline = Date.now() + _parseMaxWait(options.maxWait ?? DEFAULT_POLL_TIMEOUT_MS);
         const created = await this._uploadAllAndCreate(undefined, deadline, onProgress, signal, options.probeBeforeCreate, options.probeTimeoutMs);
-        const finalStatus = await _awaitTerminal(this.client, {
+        const { status: finalStatus, transport } = await _awaitTerminalReportingTransport(this.client, {
             workflowId: created.workflowId,
             deadline,
             signal,
@@ -2324,7 +2277,7 @@ export class ArchivedRecipe {
         // re-expose the raw uploads, which are plumbing, not the deliverable.
         const archiveDownloads = downloads.downloads.filter((d) => d.ref === 'archive');
         const downloader = new LazyHttpDownloader();
-        return projectDownloadsToRunResult(created.workflowId, finalStatus, archiveDownloads, null, downloader);
+        return projectDownloadsToRunResult(created.workflowId, finalStatus, archiveDownloads, null, downloader, transport);
     }
     /**
      * Fire-and-forget: upload + create the archive workflow (wiring `webhook` into
@@ -2523,7 +2476,7 @@ export class WatermarkedRecipe {
         }
         const deadline = Date.now() + _parseMaxWait(options.maxWait ?? DEFAULT_POLL_TIMEOUT_MS);
         const created = await this._uploadAllAndCreate(undefined, deadline, onProgress, signal, options.probeBeforeCreate, options.probeTimeoutMs);
-        const finalStatus = await _awaitTerminal(this.client, {
+        const { status: finalStatus, transport } = await _awaitTerminalReportingTransport(this.client, {
             workflowId: created.workflowId,
             deadline,
             signal,
@@ -2547,7 +2500,7 @@ export class WatermarkedRecipe {
         const outputRef = this.postSteps.length > 0 ? _POST_STEP_JOB_REF : 'watermark';
         const watermarkDownloads = downloads.downloads.filter((d) => d.ref === outputRef);
         const downloader = new LazyHttpDownloader();
-        return projectDownloadsToRunResult(created.workflowId, finalStatus, watermarkDownloads, null, downloader);
+        return projectDownloadsToRunResult(created.workflowId, finalStatus, watermarkDownloads, null, downloader, transport);
     }
     /**
      * Fire-and-forget: upload base + overlay + create the watermark workflow
@@ -2732,8 +2685,8 @@ export class BatchRecipe {
         });
         // 3. Wait to terminal status — SSE first, poll on a genuine SSE error (or
         // poll-direct when `useSSE: false`). Caller-aborted + deadline errors
-        // propagate (not transient) — see _awaitTerminal.
-        const finalStatus = await _awaitTerminal(this.client, {
+        // propagate (not transient) — see _awaitTerminalReportingTransport.
+        const { status: finalStatus, transport } = await _awaitTerminalReportingTransport(this.client, {
             workflowId: created.workflowId,
             deadline,
             signal,
@@ -2754,7 +2707,7 @@ export class BatchRecipe {
             throw new GislTimeoutError(`Workflow ${created.workflowId} downloads fetch completed after maxWait elapsed`, created.workflowId);
         }
         const downloader = new LazyHttpDownloader();
-        return projectMultiJobToRunResult(created.workflowId, finalStatus, downloads.downloads, this.keyByRef(), downloader);
+        return projectMultiJobToRunResult(created.workflowId, finalStatus, downloads.downloads, this.keyByRef(), downloader, transport);
     }
     /**
      * Lower the batch to ONE multi-job workflow-create payload against a list of

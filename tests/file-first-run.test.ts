@@ -215,6 +215,8 @@ describe('Recipe.run — target-size projection (9u4YGZ4V)', () => {
       'artifacts',
       'succeeded',
       'failed',
+      // v0JhuD8V: how the wait observed the terminal status, always last.
+      'transport',
     ]);
   });
 

@@ -329,7 +329,29 @@ export interface Result {
    * `JSON.stringify`).
    */
   readonly resolvedOptions: ResolvedOptions;
+  /**
+   * How the terminal status was actually observed (v0JhuD8V). See
+   * {@link RunTransport}. A `.mapEach()` combined result is `'sse'` only when
+   * the parent and every child streamed to terminal.
+   */
+  readonly transport: RunTransport;
 }
+
+/**
+ * The transport that delivered a run's terminal status (v0JhuD8V):
+ *
+ *  - `'sse'` — the `/events` stream delivered the terminal event.
+ *  - `'polling'` — a `GET /status` poll did. That is the case for
+ *    `useSSE: false`, for a client with no declared stream host (a
+ *    `baseUrl`-only client: `baseUrl` never moves the stream), and for a run
+ *    whose stream opened and then fell back to polling (a clean stream end
+ *    without a terminal event, a network error, a refused connect).
+ *
+ * It is the FINAL transport, one value, not a history: a run that streamed
+ * progress and then fell back reports `'polling'`. The progress it did stream
+ * is visible as processing events on `onProgress`, which only SSE emits.
+ */
+export type RunTransport = 'sse' | 'polling';
 
 // ---------------------------------------------------------------------------
 // Progress contract — SDK-SYNTHESISED, NOT a wire field
@@ -612,7 +634,7 @@ export class OperationBuilder {
     _checkAborted(signal);
 
     // 3. Wait to terminal status.
-    const finalStatus = await this.awaitTerminal({
+    const { status: finalStatus, transport } = await _awaitTerminalReportingTransport(this.client, {
       workflowId: created.workflowId,
       deadline,
       signal,
@@ -643,7 +665,7 @@ export class OperationBuilder {
         created.workflowId,
       );
     }
-    return _projectResult(finalStatus, downloads.downloads, resolved.wireOptions, resolved.resolvedOptions);
+    return _projectResult(finalStatus, downloads.downloads, resolved.wireOptions, transport, resolved.resolvedOptions);
   }
 
   /**
@@ -729,56 +751,6 @@ export class OperationBuilder {
    */
   mapEach(fn: (artifact: ArtifactRef) => OperationBuilder): MapEachBuilder {
     return new MapEachBuilder(this, fn);
-  }
-
-  // -------------------------------------------------------------------------
-
-  private async awaitTerminal(args: {
-    workflowId: string;
-    deadline: number;
-    signal: AbortSignal | undefined;
-    onProgress: ((event: ProgressEvent) => void) | undefined;
-    useSSE: boolean;
-    pollIntervalMs?: number;
-  }): Promise<WorkflowStatusResponse> {
-    if (args.useSSE) {
-      try {
-        return await _consumeSseToTerminal(this.client, args);
-      } catch (err) {
-        // TDqmkWpX: poll-fallback ONLY on a clean SSE stream-end
-        // (SseEndedWithoutTerminal) or a typed transport error (GislNetworkError).
-        // Everything else — timeout, abort, API error, an onProgress callback
-        // throw, anything unexpected — MUST propagate; re-issuing the same doomed
-        // request via poll would mask the real failure.
-        if (
-          !(
-            err instanceof SseEndedWithoutTerminal ||
-            // 3OVNoRxh: the SSE CONNECT was refused with a retryable status
-            // (a 429 on the `events_stream` bucket, or a 503). The contract
-            // declares that retryable and it clears when another caller closes
-            // a stream — so it is SSE being momentarily unavailable, not a
-            // failure of the thing this caller asked for. The wrap happens at
-            // the connect site ONLY, and only for `GislApiError.retryable`, so
-            // a 401/402/404 still propagates.
-            err instanceof SseConnectRefused ||
-            err instanceof GislNetworkError ||
-            // VUozk5Bc: no stream host is DECLARED for this configuration (a
-            // configuration nothing declares; both named environments resolve as of
-            // contracts v2.195.0). That is not a failure to recover from,
-            // it is SSE being unavailable here, and polling is a working
-            // transport. Failing hard instead would strand every caller on a host
-            // nobody has declared yet. A DIRECT `streamEvents` caller still gets
-            // the hard error — they asked for the stream specifically; a `run()`
-            // caller asked for a result.
-            err instanceof GislStreamHostNotDeclaredError
-          )
-        ) {
-          throw err;
-        }
-        // Genuine SSE stream-end / transport error — fall through to poll fallback.
-      }
-    }
-    return await _pollToTerminal(this.client, args);
   }
 }
 
@@ -877,6 +849,10 @@ export class MapEachBuilder {
       jobs: [...parentResult.jobs, ...collectedJobs],
       ...(collectedArtifacts.length === 1 ? { url: collectedArtifacts[0].url } : {}),
       resolvedOptions: parentResult.resolvedOptions,
+      // One value for N runs: 'sse' only if every run streamed to terminal.
+      transport: [parentResult, ...collectedChildResults].every((r) => r.transport === 'sse')
+        ? 'sse'
+        : 'polling',
       childWorkflowIds,
     };
     return combined;
@@ -1039,6 +1015,136 @@ class _OnProgressThrew {
  * did not ask to wait. A DIRECT `streamEvents()` caller is untouched either way.
  */
 const sseCooldowns = new WeakMap<GislClient, { untilMs: number; refusal: GislApiError }>();
+
+/**
+ * Clients that have already been warned that no stream host is declared
+ * (v0JhuD8V). ONE warning per client, not per run: the cause is the client's
+ * configuration, so repeating it on every run is noise that teaches callers to
+ * filter it out. A WeakSet for the same reason as {@link sseCooldowns}.
+ */
+const streamHostWarnedClients = new WeakSet<GislClient>();
+
+/** `process.emitWarning` code for the no-stream-host warning (v0JhuD8V). */
+export const GISL_STREAM_HOST_NOT_DECLARED_WARNING = 'GISL_STREAM_HOST_NOT_DECLARED';
+
+/**
+ * Tell the caller, once per client, that `run()` is polling because nothing
+ * declared a stream host. Without this the fallback is correct but invisible:
+ * a `baseUrl`-only client polls GET /status for the whole run and gets no
+ * processing progress, with no signal anywhere (measured on staging, sdk
+ * 0.38.0).
+ *
+ * Node: `process.emitWarning` with a `code`, the runtime's own warning channel —
+ * printed to stderr by default, observable via `process.on('warning')`,
+ * silenced with `--no-warnings`. It never throws for a non-deprecation type.
+ * Browsers have no `process`, so `console.warn` is the equivalent channel.
+ */
+function _warnStreamHostNotDeclaredOnce(client: GislClient): void {
+  if (streamHostWarnedClients.has(client)) {
+    return;
+  }
+  streamHostWarnedClients.add(client);
+  const message =
+    'No SSE stream host is declared for this client, so run()/wait() is polling GET /status ' +
+    'instead of streaming /events, and onProgress receives no processing events. baseUrl does ' +
+    "not move the stream host. Pass {environment: 'staging' | 'prod'} or {streamBaseUrl} to " +
+    'gisl.create() (or set GISL_STREAM_BASE_URL) to stream; pass {useSSE: false} to poll ' +
+    'deliberately without this warning.';
+  const proc = (globalThis as { process?: { emitWarning?: unknown } }).process;
+  if (proc !== undefined && typeof proc.emitWarning === 'function') {
+    (proc.emitWarning as (warning: string, options: { type: string; code: string }) => void)(message, {
+      type: 'GislWarning',
+      code: GISL_STREAM_HOST_NOT_DECLARED_WARNING,
+    });
+    return;
+  }
+  if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+    console.warn(`GislWarning [${GISL_STREAM_HOST_NOT_DECLARED_WARNING}]: ${message}`);
+  }
+}
+
+/**
+ * Await a workflow to a terminal status — SSE first with a poll fallback, or
+ * poll-direct when `useSSE` is false — and report which transport delivered
+ * that terminal status (v0JhuD8V). The ONE implementation behind every
+ * ergonomic wait: `OperationBuilder.run()`, `MergeBuilder.run()`, every
+ * file-first `run()` and `Handle.wait()`.
+ *
+ * `transport` is the FINAL transport: `'sse'` only when the stream itself
+ * delivered the terminal event; `'polling'` whenever a status poll did,
+ * including after SSE opened and then fell back. One value answers the
+ * question a caller has ("did this run stream?"); whether SSE delivered any
+ * events before a fallback is already visible as processing events on
+ * `onProgress`, which only the stream emits.
+ *
+ * @internal
+ */
+export async function _awaitTerminalReportingTransport(
+  client: GislClient,
+  args: {
+    workflowId: string;
+    deadline: number;
+    signal: AbortSignal | undefined;
+    onProgress: ((event: ProgressEvent) => void) | undefined;
+    useSSE: boolean;
+    pollIntervalMs?: number;
+  },
+): Promise<{ status: WorkflowStatusResponse; transport: RunTransport }> {
+  if (args.useSSE) {
+    try {
+      const status = await _consumeSseToTerminal(client, {
+        workflowId: args.workflowId,
+        deadline: args.deadline,
+        signal: args.signal,
+        onProgress: args.onProgress,
+      });
+      return { status, transport: 'sse' };
+    } catch (err) {
+      // TDqmkWpX: poll-fallback ONLY on a clean SSE stream-end
+      // (SseEndedWithoutTerminal) or a typed transport error (GislNetworkError).
+      // Everything else — caller-deadline, abort, an API error from /events, an
+      // onProgress callback throw (propagates as-is, NOT wrapped), anything
+      // unexpected — MUST propagate; re-issuing the same doomed request via poll
+      // would mask it. Mirrors the PHP BuilderInternals::awaitTerminal sealed-
+      // marker discipline.
+      if (
+        !(
+          err instanceof SseEndedWithoutTerminal ||
+          // 3OVNoRxh: the SSE CONNECT was refused with a retryable status
+          // (a 429 on the `events_stream` bucket, or a 503). The contract
+          // declares that retryable and it clears when another caller closes
+          // a stream — so it is SSE being momentarily unavailable, not a
+          // failure of the thing this caller asked for. The wrap happens at
+          // the connect site ONLY, and only for `GislApiError.retryable`, so
+          // a 401/402/404 still propagates.
+          err instanceof SseConnectRefused ||
+          err instanceof GislNetworkError ||
+          // VUozk5Bc: no stream host is DECLARED for this configuration (a
+          // configuration nothing declares; both named environments resolve as of
+          // contracts v2.195.0). That is not a failure to recover from,
+          // it is SSE being unavailable here, and polling is a working
+          // transport. Failing hard instead would strand every caller on a host
+          // nobody has declared yet. A DIRECT `streamEvents` caller still gets
+          // the hard error — they asked for the stream specifically; a `run()`
+          // caller asked for a result.
+          err instanceof GislStreamHostNotDeclaredError
+        )
+      ) {
+        throw err;
+      }
+      if (err instanceof GislStreamHostNotDeclaredError) {
+        _warnStreamHostNotDeclaredOnce(client);
+      }
+    }
+  }
+  const status = await _pollToTerminal(client, {
+    workflowId: args.workflowId,
+    deadline: args.deadline,
+    signal: args.signal,
+    pollIntervalMs: args.pollIntervalMs,
+  });
+  return { status, transport: 'polling' };
+}
 
 /** @internal — exported for reuse by `merge.ts` (T3) and future builders. */
 export async function _consumeSseToTerminal(
@@ -1371,6 +1477,7 @@ export function _projectResult(
   status: WorkflowStatusResponse,
   jobDownloads: readonly { ref: string; jobId: string; files: readonly OperationDownload[] }[],
   appliedOptions: Record<string, unknown>,
+  transport: RunTransport,
   resolvedOptionsOverride?: ResolvedOptions,
 ): Result {
   const artifacts: Artifact[] = [];
@@ -1450,6 +1557,7 @@ export function _projectResult(
         explicit: [],
       },
     },
+    transport,
   };
   return result;
 }
