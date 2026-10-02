@@ -248,9 +248,10 @@ export interface GetSchemaOptions {
      */
     ifNoneMatch?: string;
     /**
-     * Conditional revalidation: send the previously-received `Last-Modified`
-     * value (HTTP-date) to receive a 304-not-modified sentinel when the
-     * cached response is still fresh.
+     * Sent as `If-Modified-Since`, but the API does NOT honour it: the ETag is
+     * the sole conditional validator for this endpoint and `Last-Modified` is
+     * informational only (contract `GET /api/operations/schema`). Passing only
+     * this always returns the full schema. Revalidate with `ifNoneMatch`.
      */
     ifModifiedSince?: string;
     /** Cancel an in-flight schema fetch. Surfaces as `GislAbortError`. */
