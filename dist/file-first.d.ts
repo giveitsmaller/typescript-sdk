@@ -13,7 +13,7 @@ import { GislItemFailedError } from './errors.js';
 import { type ProgressEvent, type RunTransport } from './builder.js';
 import type { GislClient } from './client.js';
 import type { OperationDownload, WorkflowStatusResponse } from '@giveitsmaller/contracts/openapi';
-import type { ConvertOptions, ThumbnailOptions, TransformOptions, TextWatermarkOptions, WatermarkOptions, OutputOptions, OutputFit } from './ergonomic/option_types.js';
+import type { CompressOptions, ConvertOptions, ThumbnailOptions, TransformOptions, TextWatermarkOptions, WatermarkOptions, OutputOptions, OutputFit } from './ergonomic/option_types.js';
 import { OptimizeFor } from './generated/sdk_spec/enums.js';
 import type { PresetDefaults } from './ergonomic/presets/index.js';
 import type { WorkflowCreatePayload } from './types.js';
@@ -446,11 +446,11 @@ export declare class Recipe {
     /**
      * Reduce file size. `optimize` selects a per-media preset (resolved to
      * concrete wire fields at lower-time, exactly as `client.compress()` does).
-     * `options` carries the full per-op options bag (mirrors
+     * `options` is the typed {@link CompressOptions} bag (the same type as
      * `client.compress(input, options)`); the explicit `optimize` param wins
      * over any `optimize` key in the bag.
      */
-    compress(optimize?: OptimizeFor, options?: Record<string, unknown>): Recipe;
+    compress(optimize?: OptimizeFor, options?: CompressOptions): Recipe;
     /**
      * Change format. The `format` shorthand lowers to the `output_format` wire
      * option (the convert op's wire key per the contract); `options` carries any
@@ -741,7 +741,7 @@ export declare class FilesRecipe {
      * preset). Reuses {@link Recipe}'s validation — a directly-constructed
      * lowering builds an internal Recipe that throws the same `GislConfigError`.
      */
-    compress(optimize?: OptimizeFor, options?: Record<string, unknown>): FilesRecipe;
+    compress(optimize?: OptimizeFor, options?: CompressOptions): FilesRecipe;
     /** Change every input's format. `format` lowers to the contract `output_format` wire key (via {@link Recipe.convert}), NOT `format`. Option keys are validated (via the base {@link Recipe}) before any upload. */
     convert(format: string, options?: ConvertOptions): FilesRecipe;
     /** Generate a preview of every input. `width` / `height` are optional (see {@link Recipe.thumbnail}); validated via the base {@link Recipe} before any upload. */
@@ -882,7 +882,7 @@ export declare class MergedRecipe {
     private readonly client?;
     constructor(inputs: readonly FileInput[], mergeOptions: MergeOptions, postSteps?: readonly RecipeStep[], presetDefaults?: PresetDefaults | undefined, scopedPresetDefaults?: PresetDefaults | undefined, client?: GislClient | undefined);
     /** Reduce the merged output's size. See {@link Recipe.compress}. */
-    compress(optimize?: OptimizeFor, options?: Record<string, unknown>): MergedRecipe;
+    compress(optimize?: OptimizeFor, options?: CompressOptions): MergedRecipe;
     /** Change the merged output's format. See {@link Recipe.convert}. Option keys validated pre-upload. */
     convert(format: string, options?: ConvertOptions): MergedRecipe;
     /** Thumbnail the merged output. `width` / `height` are optional (see {@link Recipe.thumbnail}); validated pre-upload. */
@@ -1074,7 +1074,7 @@ export declare class WatermarkedRecipe {
     private readonly overlays;
     constructor(baseInput: FileInput, baseSteps: readonly RecipeStep[], overlay: Recipe | readonly Recipe[], watermarkOptions: WatermarkOptions, postSteps?: readonly RecipeStep[], presetDefaults?: PresetDefaults | undefined, scopedPresetDefaults?: PresetDefaults | undefined, client?: GislClient | undefined);
     /** Reduce the watermarked output's size. See {@link Recipe.compress}. */
-    compress(optimize?: OptimizeFor, options?: Record<string, unknown>): WatermarkedRecipe;
+    compress(optimize?: OptimizeFor, options?: CompressOptions): WatermarkedRecipe;
     /** Change the watermarked output's format. See {@link Recipe.convert}. Option keys validated pre-upload. */
     convert(format: string, options?: ConvertOptions): WatermarkedRecipe;
     /** Thumbnail the watermarked output. `width` / `height` are optional (see {@link Recipe.thumbnail}); validated pre-upload. */

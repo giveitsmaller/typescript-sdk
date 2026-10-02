@@ -15,6 +15,26 @@
  * Mirrored by the PHP array-shape docblocks — keep in lockstep.
  */
 
+import type {
+  AudioBitrate,
+  AudioCodec,
+  AudioSampleRate,
+  ImageFormat,
+  ImageMetadataPolicy,
+  OptimizeFor,
+  VideoCodec,
+  VideoFit,
+  VideoPreset,
+} from '../generated/sdk_spec/enums.js';
+import type {
+  AudioCompressPresetOptionsInput,
+  DocumentEpubCompressPresetOptionsInput,
+  DocumentOdfCompressPresetOptionsInput,
+  DocumentOfficeCompressPresetOptionsInput,
+  ImageCompressPresetOptionsInput,
+  VideoCompressPresetOptionsInput,
+} from './presets/index.js';
+
 /** 9-grid anchor shared by text/image/video watermark. */
 export type WatermarkAnchor =
   | 'top_left'
@@ -113,6 +133,158 @@ export interface TransformOptions {
   flip?: 'none' | 'horizontal' | 'vertical' | 'both';
 }
 const TRANSFORM_OPTION_KEYS = ['rotate', 'flip'] as const;
+
+// ---- compress (YdxagJOI) ----
+/**
+ * A per-call preset override for {@link CompressOptions.presetOverrides}: one of
+ * the six per-media compress preset DTOs, as a `*CompressPresetOptions` instance
+ * (e.g. `ImageCompressPresetOptions.from({ quality: 40 })`) or a plain object of
+ * the same camelCase shape. Which one applies is decided by the input's media.
+ */
+export type CompressPresetOverrides =
+  | ImageCompressPresetOptionsInput
+  | AudioCompressPresetOptionsInput
+  | VideoCompressPresetOptionsInput
+  | DocumentOfficeCompressPresetOptionsInput
+  | DocumentOdfCompressPresetOptionsInput
+  | DocumentEpubCompressPresetOptionsInput;
+
+/**
+ * Options for `compress()` — operation-first `client.compress(input, options)` and
+ * the file-first `.compress(optimize, options)` verbs.
+ *
+ * The KEY SET is exactly what the compress preset resolver accepts on its explicit
+ * layer, unioned across media (like {@link ConvertOptions}, it is op-wide; the
+ * per-media narrowing happens at lower time, where a key the input's media does not
+ * take throws `GislConfigError` `unknown_field` before any upload). That is each
+ * media's wire keys (`KNOWN_WIRE_FIELDS`), the camelCase spelling of every wire key
+ * the resolver aliases (`sampleRate` → `sample_rate`, …), video's derived
+ * `targetSize`, and the two SDK-only keys `optimize` / `presetOverrides`.
+ * `tests/unit/compress-option-keys.test.ts` pins the tuple below to the resolver's
+ * tables, so neither side can move alone.
+ *
+ * ⚠️ It is NOT the generated wire type (`CompressImageOptions` & co.). Those carry
+ * contract keys this resolver refuses locally (image `width` / `encoding_mode`, audio
+ * `output_format`, video `speed`), and their values are TypeScript `enum`s, which
+ * would reject the plain strings (`codec: 'h264'`) these bags have always taken.
+ *
+ * Media per key: image — `quality`, `metadata`, `output_format`; audio — `bitrate`,
+ * `channels`, `sample_rate`, `normalize`, `trim_start`, `trim_end`; video —
+ * `codec`, `encoding_mode`, `crf`, `target_size_bytes`, `targetSize`, `preset`,
+ * `width`, `height`, `fit`, `fps`, `faststart`, `audio_codec`, `audio_bitrate`,
+ * `trim_start`, `trim_end`; Office / ODF / EPUB documents — `quality` plus their
+ * `strip_*` / `font_subsetting` keys.
+ *
+ * An unknown key is a compile-time error for an INLINE bag only — an aliased bag
+ * bypasses excess-property checks — so the resolver's runtime check remains the
+ * backstop (also for untyped JS callers). When the media cannot be inferred (an
+ * unnamed Blob or a pre-uploaded id) the bag is sent as given.
+ */
+export interface CompressOptions {
+  /** Preset level. On the file-first verbs prefer the first argument, which wins over this key. */
+  optimize?: OptimizeFor;
+  /** Per-call override of the preset's own values; a lower layer than the explicit keys below. */
+  presetOverrides?: CompressPresetOverrides;
+  /** Encode quality (1-100). Image, and the Office / ODF / EPUB documents. */
+  quality?: number;
+  /** Image metadata policy (`all` is a deprecated alias of `strip`). */
+  metadata?: ImageMetadataPolicy;
+  /** Image output format: `original` keeps the input's, `webp` recompresses to WebP. */
+  output_format?: ImageFormat;
+  /** camelCase spelling of `output_format`. */
+  outputFormat?: ImageFormat;
+  /** Audio bitrate in kbps (lossy output only). */
+  bitrate?: AudioBitrate;
+  /** Audio channels (1 mono, 2 stereo). */
+  channels?: number;
+  /** Audio sample rate in Hz. */
+  sample_rate?: AudioSampleRate;
+  /** camelCase spelling of `sample_rate`. */
+  sampleRate?: AudioSampleRate;
+  /** Audio loudness normalisation. */
+  normalize?: boolean;
+  /** Seconds cut from the start (audio, video). */
+  trim_start?: number;
+  /** Seconds cut from the end (audio, video). */
+  trim_end?: number;
+  /** Video codec. */
+  codec?: VideoCodec;
+  /** Video encoding mode. Usually derived: `targetSize` sets `target_size`, an explicit `crf` sets `crf`. */
+  encoding_mode?: 'crf' | 'target_size';
+  /** Video Constant Rate Factor (0 best — 51 worst). Mutually exclusive with `targetSize`. */
+  crf?: number;
+  /** Video target size in bytes (wire form of `targetSize`). */
+  target_size_bytes?: number;
+  /**
+   * Video target size: a byte count or a `'50MB'`-style string (BINARY units, 1 KB =
+   * 1024). Resolved to `target_size_bytes` + `encoding_mode: 'target_size'`; h264 only.
+   */
+  targetSize?: string | number;
+  /** Video encoder speed/compression trade-off. */
+  preset?: VideoPreset;
+  /** Video output width in px. */
+  width?: number;
+  /** Video output height in px. */
+  height?: number;
+  /** Video resize mode (when `width` or `height` is set). */
+  fit?: VideoFit;
+  /** Video output frame rate. */
+  fps?: number;
+  /** Video MP4/MOV faststart (moov atom first). */
+  faststart?: boolean;
+  /** Video audio-track codec (`copy` keeps the source stream). */
+  audio_codec?: AudioCodec;
+  /** camelCase spelling of `audio_codec`. */
+  audioCodec?: AudioCodec;
+  /** Video audio-track bitrate in kbps. */
+  audio_bitrate?: AudioBitrate;
+  /** camelCase spelling of `audio_bitrate`. */
+  audioBitrate?: AudioBitrate;
+  /** Office: strip VBA macros. Planned. */
+  strip_macros?: boolean;
+  /** camelCase spelling of `strip_macros`. */
+  stripMacros?: boolean;
+  /** Office: strip hidden data. Planned. */
+  strip_hidden_data?: boolean;
+  /** camelCase spelling of `strip_hidden_data`. */
+  stripHiddenData?: boolean;
+  /** Office: strip unused fonts. Planned. */
+  strip_unused_fonts?: boolean;
+  /** camelCase spelling of `strip_unused_fonts`. */
+  stripUnusedFonts?: boolean;
+  /** ODF: strip metadata. Planned. */
+  strip_metadata?: boolean;
+  /** camelCase spelling of `strip_metadata`. */
+  stripMetadata?: boolean;
+  /** ODF: strip unused styles. Planned. */
+  strip_unused_styles?: boolean;
+  /** camelCase spelling of `strip_unused_styles`. */
+  stripUnusedStyles?: boolean;
+  /** EPUB: subset embedded fonts. Planned. */
+  font_subsetting?: boolean;
+  /** camelCase spelling of `font_subsetting`. */
+  fontSubsetting?: boolean;
+  /** EPUB: strip unused CSS. Planned. */
+  strip_unused_css?: boolean;
+  /** camelCase spelling of `strip_unused_css`. */
+  stripUnusedCss?: boolean;
+}
+/**
+ * The {@link CompressOptions} key set as a runtime tuple, for the conformance test
+ * that ties it to the resolver's tables.
+ *
+ * @internal Not re-exported from the package entry points.
+ */
+export const COMPRESS_OPTION_KEYS = [
+  'optimize', 'presetOverrides',
+  'quality', 'metadata', 'output_format', 'outputFormat',
+  'bitrate', 'channels', 'sample_rate', 'sampleRate', 'normalize', 'trim_start', 'trim_end',
+  'codec', 'encoding_mode', 'crf', 'target_size_bytes', 'targetSize', 'preset', 'width', 'height', 'fit',
+  'fps', 'faststart', 'audio_codec', 'audioCodec', 'audio_bitrate', 'audioBitrate',
+  'strip_macros', 'stripMacros', 'strip_hidden_data', 'stripHiddenData', 'strip_unused_fonts', 'stripUnusedFonts',
+  'strip_metadata', 'stripMetadata', 'strip_unused_styles', 'stripUnusedStyles',
+  'font_subsetting', 'fontSubsetting', 'strip_unused_css', 'stripUnusedCss',
+] as const;
 
 // ---- textWatermark (text is positional-owned → excluded) ----
 export interface TextWatermarkOptions {
@@ -285,6 +457,7 @@ const _transformKeysMatch: Equal<keyof TransformOptions, (typeof TRANSFORM_OPTIO
 const _textWatermarkKeysMatch: Equal<keyof TextWatermarkOptions, (typeof TEXT_WATERMARK_OPTION_KEYS)[number]> = true;
 const _watermarkKeysMatch: Equal<keyof WatermarkOptions, (typeof WATERMARK_OPTION_KEYS)[number]> = true;
 const _outputKeysMatch: Equal<keyof OutputOptions, (typeof OUTPUT_OPTION_KEYS)[number]> = true;
+const _compressKeysMatch: Equal<keyof CompressOptions, (typeof COMPRESS_OPTION_KEYS)[number]> = true;
 // Reference the assertions so `noUnusedLocals` doesn't strip them.
 void _convertKeysMatch;
 void _thumbnailKeysMatch;
@@ -292,6 +465,7 @@ void _transformKeysMatch;
 void _textWatermarkKeysMatch;
 void _watermarkKeysMatch;
 void _outputKeysMatch;
+void _compressKeysMatch;
 
 /**
  * The user-supplyable option keys per verb (excludes positional-owned keys).

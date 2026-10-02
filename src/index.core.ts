@@ -754,8 +754,11 @@ export {
   // gate UI before submitting (the API otherwise returns feature_not_available/422). T4.
   transformMetadata,
 } from '@giveitsmaller/contracts/operations';
-// Typed per-op option interfaces for the ergonomic verbs (card Dhje3Faq).
+// Typed per-op option interfaces for the ergonomic verbs (card Dhje3Faq;
+// CompressOptions + CompressPresetOverrides from YdxagJOI).
 export type {
+  CompressOptions,
+  CompressPresetOverrides,
   ConvertOptions,
   ThumbnailOptions,
   TransformOptions,

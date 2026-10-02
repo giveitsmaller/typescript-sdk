@@ -22,6 +22,22 @@ const THUMBNAIL_OPTION_KEYS = [
     'width', 'height', 'fit', 'format', 'quality', 'background', 'timestamp', 'source', 'page',
 ];
 const TRANSFORM_OPTION_KEYS = ['rotate', 'flip'];
+/**
+ * The {@link CompressOptions} key set as a runtime tuple, for the conformance test
+ * that ties it to the resolver's tables.
+ *
+ * @internal Not re-exported from the package entry points.
+ */
+export const COMPRESS_OPTION_KEYS = [
+    'optimize', 'presetOverrides',
+    'quality', 'metadata', 'output_format', 'outputFormat',
+    'bitrate', 'channels', 'sample_rate', 'sampleRate', 'normalize', 'trim_start', 'trim_end',
+    'codec', 'encoding_mode', 'crf', 'target_size_bytes', 'targetSize', 'preset', 'width', 'height', 'fit',
+    'fps', 'faststart', 'audio_codec', 'audioCodec', 'audio_bitrate', 'audioBitrate',
+    'strip_macros', 'stripMacros', 'strip_hidden_data', 'stripHiddenData', 'strip_unused_fonts', 'stripUnusedFonts',
+    'strip_metadata', 'stripMetadata', 'strip_unused_styles', 'stripUnusedStyles',
+    'font_subsetting', 'fontSubsetting', 'strip_unused_css', 'stripUnusedCss',
+];
 const TEXT_WATERMARK_OPTION_KEYS = [
     'font_size', 'color', 'font_family', 'rotation', 'watermark_mode',
     'tile_spacing', 'anchor', 'margin_x', 'margin_y', 'opacity',
@@ -40,6 +56,7 @@ const _transformKeysMatch = true;
 const _textWatermarkKeysMatch = true;
 const _watermarkKeysMatch = true;
 const _outputKeysMatch = true;
+const _compressKeysMatch = true;
 // Reference the assertions so `noUnusedLocals` doesn't strip them.
 void _convertKeysMatch;
 void _thumbnailKeysMatch;
@@ -47,6 +64,7 @@ void _transformKeysMatch;
 void _textWatermarkKeysMatch;
 void _watermarkKeysMatch;
 void _outputKeysMatch;
+void _compressKeysMatch;
 /**
  * The user-supplyable option keys per verb (excludes positional-owned keys).
  * Exported for the wire-key conformance guard, which asserts each tuple ∪ its

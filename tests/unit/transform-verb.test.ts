@@ -118,10 +118,16 @@ describe('client transform() — exported single-op builder (gisl proxy)', () =>
 
   it('rejects an unknown option key pre-upload with GislConfigError', async () => {
     const c = await client();
+    // The factory is typed TransformOptions since YdxagJOI, so each bad bag below is
+    // ALSO a compile error; the directives keep the runtime guard (the backstop for
+    // untyped JS callers and aliased bags) under test.
+    // @ts-expect-error — unknown key rejected by TransformOptions.
     expect(() => c.transform('photo.png', { rotate: 90, bogus: 1 })).toThrow(GislConfigError);
+    // @ts-expect-error — unknown key rejected by TransformOptions.
     expect(() => c.transform('photo.png', { bogus: 1 })).toThrow(/unknown option 'bogus'/);
     // Structured-prop parity with the PHP client rejection test.
     try {
+      // @ts-expect-error — unknown key rejected by TransformOptions.
       c.transform('photo.png', { bogus: 1 });
       expect.unreachable('an unknown transform key must throw');
     } catch (err) {

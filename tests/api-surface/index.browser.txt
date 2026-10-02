@@ -69,6 +69,8 @@ CompressImageJpegOptions	type
 CompressImageOptions	type
 CompressImagePngOptions	type
 compressMetadata	value
+CompressOptions	type
+CompressPresetOverrides	type
 CompressVideoOptions	type
 connectionSource	value
 ConnectionSource	type

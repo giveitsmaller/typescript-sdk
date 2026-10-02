@@ -10,6 +10,7 @@ import { type PresetDefaults, type PresetMedia, type DetectedMedia, type PresetO
  * bump manually (yREs0srv).
  */
 export declare const PRESET_VERSION: "1.6";
+export declare const WIRE_ALIASES: Readonly<Record<string, string>>;
 /**
  * Inputs to {@link resolveCompressOptions}. `media` selects which leaf
  * DTO drives sdkDefault + clientDefault lookups + invalid-combo

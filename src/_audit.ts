@@ -197,6 +197,10 @@ import type {
   ResolvedOptionsSources,
   ResolveCompressOptionsInput,
   ResolveCompressOptionsOutput,
+  // YdxagJOI — the typed compress / transform option bags.
+  CompressOptions,
+  CompressPresetOverrides,
+  TransformOptions,
 } from './index.js';
 import { ANONYMOUS_ALLOWLIST } from './gisl.js';
 import type { GislClient } from './client.js';
@@ -439,6 +443,35 @@ export function _runAudit(): void {
   void _mergedRun; void _mergedSubmit; void _archivedRun; void _archivedSubmit;
   void _watermarkedRun; void _watermarkedSubmit; void _batchRun;
   void _opRun; void _opSubmit; void _mergeRun; void _mergeSubmit; void _mapEachRun;
+
+  // ── YdxagJOI — option-bag signatures of compress() and transform() ────────────
+  //
+  // Operation-first `compress` / `transform` and the four file-first `compress`
+  // verbs took `Record<string, unknown>`, so a misspelled key reached the server as
+  // a 422. These pin the TYPED parameter; a revert to an untyped bag fails here,
+  // naming the surface. (The misspelled-key compile errors themselves are proven by
+  // the `@ts-expect-error` guards in `tests/unit/compress-option-keys.test.ts`.)
+  // ArchivedRecipe, BatchRecipe and MapEachBuilder have no compress(), by design.
+  type FileFirstCompress<R> = (optimize?: OptimizeFor, options?: CompressOptions) => R;
+  const _opFirstCompress: Equal<
+    ErgonomicClient['compress'],
+    (input: string | Blob, options?: CompressOptions) => OperationBuilder
+  > = true;
+  const _opFirstTransform: Equal<
+    ErgonomicClient['transform'],
+    (input: string | Blob, options?: TransformOptions) => OperationBuilder
+  > = true;
+  const _recipeCompress: Equal<Recipe['compress'], FileFirstCompress<Recipe>> = true;
+  const _filesCompress: Equal<FilesRecipe['compress'], FileFirstCompress<FilesRecipe>> = true;
+  const _mergedCompress: Equal<MergedRecipe['compress'], FileFirstCompress<MergedRecipe>> = true;
+  const _watermarkedCompress: Equal<
+    WatermarkedRecipe['compress'],
+    FileFirstCompress<WatermarkedRecipe>
+  > = true;
+  void _opFirstCompress; void _opFirstTransform; void _recipeCompress; void _filesCompress;
+  void _mergedCompress; void _watermarkedCompress;
+  accept<CompressOptions>();
+  accept<CompressPresetOverrides>();
   accept<Artifact>();
   accept<Handle>();
   accept<Result>();

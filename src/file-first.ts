@@ -37,6 +37,7 @@ import {
 } from './ergonomic/preset_resolver.js';
 import { validateVerbOptions, assertThumbnailDimensions } from './ergonomic/option_validation.js';
 import type {
+  CompressOptions,
   ConvertOptions,
   ThumbnailOptions,
   TransformOptions,
@@ -917,11 +918,11 @@ export class Recipe {
   /**
    * Reduce file size. `optimize` selects a per-media preset (resolved to
    * concrete wire fields at lower-time, exactly as `client.compress()` does).
-   * `options` carries the full per-op options bag (mirrors
+   * `options` is the typed {@link CompressOptions} bag (the same type as
    * `client.compress(input, options)`); the explicit `optimize` param wins
    * over any `optimize` key in the bag.
    */
-  compress(optimize?: OptimizeFor, options: Record<string, unknown> = {}): Recipe {
+  compress(optimize?: OptimizeFor, options: CompressOptions = {}): Recipe {
     if (optimize !== undefined && !Object.values(OptimizeFor).includes(optimize)) {
       const allowed = Object.values(OptimizeFor).join(', ');
       throw new GislConfigError(
@@ -2199,7 +2200,7 @@ export class FilesRecipe {
    * preset). Reuses {@link Recipe}'s validation — a directly-constructed
    * lowering builds an internal Recipe that throws the same `GislConfigError`.
    */
-  compress(optimize?: OptimizeFor, options: Record<string, unknown> = {}): FilesRecipe {
+  compress(optimize?: OptimizeFor, options: CompressOptions = {}): FilesRecipe {
     return this.withStep(this.baseRecipe().compress(optimize, options));
   }
 
@@ -2543,7 +2544,7 @@ export class MergedRecipe {
   ) {}
 
   /** Reduce the merged output's size. See {@link Recipe.compress}. */
-  compress(optimize?: OptimizeFor, options: Record<string, unknown> = {}): MergedRecipe {
+  compress(optimize?: OptimizeFor, options: CompressOptions = {}): MergedRecipe {
     if (optimize !== undefined && !Object.values(OptimizeFor).includes(optimize)) {
       const allowed = Object.values(OptimizeFor).join(', ');
       throw new GislConfigError(
@@ -3149,7 +3150,7 @@ export class WatermarkedRecipe {
   }
 
   /** Reduce the watermarked output's size. See {@link Recipe.compress}. */
-  compress(optimize?: OptimizeFor, options: Record<string, unknown> = {}): WatermarkedRecipe {
+  compress(optimize?: OptimizeFor, options: CompressOptions = {}): WatermarkedRecipe {
     if (optimize !== undefined && !Object.values(OptimizeFor).includes(optimize)) {
       const allowed = Object.values(OptimizeFor).join(', ');
       throw new GislConfigError(

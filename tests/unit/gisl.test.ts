@@ -501,7 +501,10 @@ describe('single-op builder option validation (ExVcchMz)', () => {
   it('does NOT validate compress at the factory (preset resolver owns it) — no throw on an unknown key', async () => {
     // compress is EXCLUDED from the single-op guards; its options resolve via the
     // preset resolver at run-time, so an unknown key does not throw at the factory.
+    // (Since YdxagJOI the bag is typed CompressOptions, so this is also a compile
+    // error; the runtime behaviour for an untyped caller is what is pinned here.)
     const c = await client();
+    // @ts-expect-error — unknown key rejected by CompressOptions.
     expect(() => c.compress('photo.png', { bogus: 1 })).not.toThrow();
   });
 });

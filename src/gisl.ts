@@ -43,7 +43,7 @@ import {
   validateSingleOpConvertOptions,
   assertThumbnailDimensions,
 } from './ergonomic/option_validation.js';
-import type { ConvertOptions, ThumbnailOptions } from './ergonomic/option_types.js';
+import type { CompressOptions, ConvertOptions, ThumbnailOptions, TransformOptions } from './ergonomic/option_types.js';
 import { MergeBuilder, asset, type Asset, type MergeOptions } from './merge.js';
 import { PresetDefaults } from './ergonomic/presets/index.js';
 import { Recipe, FilesRecipe, BatchRecipe, fileInput, type FileInput } from './file-first.js';
@@ -574,7 +574,14 @@ export type ErgonomicClient = GislClient & {
    * outputs positionally or via the sinks.
    */
   workflow(id: string): Handle;
-  compress(input: string | Blob, options?: Record<string, unknown>): OperationBuilder;
+  /**
+   * Single-op compress. `options` is the typed {@link CompressOptions}: a preset via
+   * `optimize`, per-call `presetOverrides`, and the explicit keys the input's media
+   * takes. An unknown key is a compile-time error for an INLINE bag only — aliased
+   * bags bypass TS excess-property checks — so the preset resolver's `unknown_field`
+   * check at `run()` / `submit()` remains the backstop.
+   */
+  compress(input: string | Blob, options?: CompressOptions): OperationBuilder;
   /**
    * Single-op convert. The target format rides the bag as the required
    * `output_format` (the single-op builder has no positional format — that is
@@ -594,8 +601,13 @@ export type ErgonomicClient = GislClient & {
    * for untyped JS callers).
    */
   thumbnail(input: string | Blob, options?: ThumbnailOptions): OperationBuilder;
-  /** Geometric transform (rotate/flip). Passthrough; the op is `planned` (server 422s until Lambdas ship). */
-  transform(input: string | Blob, options?: Record<string, unknown>): OperationBuilder;
+  /**
+   * Geometric transform (rotate/flip), typed {@link TransformOptions} as on the
+   * file-first `transform()`. Passthrough; the op is `planned` (server 422s until
+   * Lambdas ship). An unknown key is a compile-time error for an INLINE bag; the
+   * runtime key guard remains the backstop.
+   */
+  transform(input: string | Blob, options?: TransformOptions): OperationBuilder;
   /**
    * Merge ordered-sequence factory (T3). Accepts a variadic list of assets
    * (strings/Blobs/`handle()`/`asset()`) optionally terminated by a

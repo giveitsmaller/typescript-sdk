@@ -77,7 +77,10 @@ export const PRESET_VERSION = GENERATED_PRESET_VERSION;
 // (e.g. an `outputFormat` → `output_format` rename or an acronym like
 // the former `iccProfile`); the declarative map is the only safe path.
 
-const WIRE_ALIASES: Readonly<Record<string, string>> = Object.freeze({
+// Exported for the compress option-key conformance test
+// (tests/unit/compress-option-keys.test.ts), which pins `CompressOptions` to the
+// camelCase spellings this map accepts. Not re-exported from the entry points.
+export const WIRE_ALIASES: Readonly<Record<string, string>> = Object.freeze({
   outputFormat: 'output_format',
   sampleRate: 'sample_rate',
   audioCodec: 'audio_codec',

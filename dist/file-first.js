@@ -655,7 +655,7 @@ export class Recipe {
     /**
      * Reduce file size. `optimize` selects a per-media preset (resolved to
      * concrete wire fields at lower-time, exactly as `client.compress()` does).
-     * `options` carries the full per-op options bag (mirrors
+     * `options` is the typed {@link CompressOptions} bag (the same type as
      * `client.compress(input, options)`); the explicit `optimize` param wins
      * over any `optimize` key in the bag.
      */
