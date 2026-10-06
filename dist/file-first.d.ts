@@ -85,6 +85,24 @@ export interface OutputFile {
      * undefined when no measurement was reported.
      */
     readonly qualityMetric?: string;
+    /**
+     * `true` when this file IS the original input, returned unchanged because a
+     * same-format `compress` could not make it smaller. The run still succeeds:
+     * show it as "already optimised", not as a failure or as "same size".
+     * Projected from the generated {@link OperationDownload.alreadyOptimal};
+     * undefined (omitted) when the API did not report it. Undefined and `false`
+     * mean the same thing — an ordinary output. Pairs with
+     * {@link alreadyOptimalKind}.
+     */
+    readonly alreadyOptimal?: boolean;
+    /**
+     * Only with {@link alreadyOptimal} `true`: why the original came back.
+     * `'not_smaller'` — the file was compressed and the result was not smaller.
+     * It is the only kind today; treat an undefined or unrecognised value as a
+     * plain "already optimised". Projected from the generated
+     * {@link OperationDownload.alreadyOptimalKind}; undefined when not reported.
+     */
+    readonly alreadyOptimalKind?: 'not_smaller' | (string & {});
 }
 /**
  * One succeeded entry in {@link RunResult.succeeded}: a single input's

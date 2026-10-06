@@ -593,7 +593,8 @@ type _ArtifactDriftAssertion = [
 // projection of `OperationDownload` (`url` aliases `downloadUrl`;
 // `filename`/`sizeBytes`/`operation` verbatim; the target-size outcome
 // `chosenQuality`/`targetSizeMet` projected verbatim per 9u4YGZ4V; the
-// auto_quality metrics `measuredQuality`/`qualityMetric` per pAVd5oC4). A
+// auto_quality metrics `measuredQuality`/`qualityMetric` per pAVd5oC4; the
+// compress `alreadyOptimal`/`alreadyOptimalKind` per bYOCX61m). A
 // contracts regen that renames or drops one of these breaks here at
 // `tsc --noEmit` (same gating pattern as `_ArtifactDriftAssertion` above).
 import type { OutputFile as _OutputFile } from './file-first.js';
@@ -604,7 +605,9 @@ type _OutputFileFromDownload =
   | 'chosenQuality'
   | 'targetSizeMet'
   | 'measuredQuality'
-  | 'qualityMetric';
+  | 'qualityMetric'
+  | 'alreadyOptimal'
+  | 'alreadyOptimalKind';
 type _OperationDownloadHasOutputFileFields = _AllBackedBy<_OutputFileFromDownload, _OperationDownload>;
 type _OutputFileHasUrl = 'url' extends keyof _OutputFile
   ? true

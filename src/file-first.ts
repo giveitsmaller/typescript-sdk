@@ -143,6 +143,24 @@ export interface OutputFile {
    * undefined when no measurement was reported.
    */
   readonly qualityMetric?: string;
+  /**
+   * `true` when this file IS the original input, returned unchanged because a
+   * same-format `compress` could not make it smaller. The run still succeeds:
+   * show it as "already optimised", not as a failure or as "same size".
+   * Projected from the generated {@link OperationDownload.alreadyOptimal};
+   * undefined (omitted) when the API did not report it. Undefined and `false`
+   * mean the same thing — an ordinary output. Pairs with
+   * {@link alreadyOptimalKind}.
+   */
+  readonly alreadyOptimal?: boolean;
+  /**
+   * Only with {@link alreadyOptimal} `true`: why the original came back.
+   * `'not_smaller'` — the file was compressed and the result was not smaller.
+   * It is the only kind today; treat an undefined or unrecognised value as a
+   * plain "already optimised". Projected from the generated
+   * {@link OperationDownload.alreadyOptimalKind}; undefined when not reported.
+   */
+  readonly alreadyOptimalKind?: 'not_smaller' | (string & {});
 }
 
 /**
@@ -347,8 +365,9 @@ export class RunResult {
   } {
     // Re-project each OutputFile to exactly its known fields so structurally
     // compatible inputs carrying extra properties can't leak into the JSON.
-    // The projected optional fields (chosenQuality/targetSizeMet and the
-    // auto_quality measuredQuality/qualityMetric) are OMITTED when undefined,
+    // The projected optional fields (chosenQuality/targetSizeMet, the
+    // auto_quality measuredQuality/qualityMetric and the compress
+    // alreadyOptimal/alreadyOptimalKind) are OMITTED when undefined,
     // mirroring PHP's omit-when-null so outputs lacking them stay
     // byte-identical across languages.
     const file = (o: OutputFile): OutputFile => ({
@@ -360,6 +379,8 @@ export class RunResult {
       ...(o.targetSizeMet !== undefined ? { targetSizeMet: o.targetSizeMet } : {}),
       ...(o.measuredQuality !== undefined ? { measuredQuality: o.measuredQuality } : {}),
       ...(o.qualityMetric !== undefined ? { qualityMetric: o.qualityMetric } : {}),
+      ...(o.alreadyOptimal !== undefined ? { alreadyOptimal: o.alreadyOptimal } : {}),
+      ...(o.alreadyOptimalKind !== undefined ? { alreadyOptimalKind: o.alreadyOptimalKind } : {}),
     });
     const rest = {
       artifacts: this.artifacts.map(file),
@@ -463,6 +484,8 @@ export function projectDownloadsToRunResult(
         ...(f.targetSizeMet !== undefined ? { targetSizeMet: f.targetSizeMet } : {}),
         ...(f.measuredQuality !== undefined ? { measuredQuality: f.measuredQuality } : {}),
         ...(f.qualityMetric !== undefined ? { qualityMetric: f.qualityMetric } : {}),
+        ...(f.alreadyOptimal !== undefined ? { alreadyOptimal: f.alreadyOptimal } : {}),
+        ...(f.alreadyOptimalKind !== undefined ? { alreadyOptimalKind: f.alreadyOptimalKind } : {}),
       });
     }
   }
@@ -543,6 +566,8 @@ export function projectMultiJobToRunResult(
       ...(f.targetSizeMet !== undefined ? { targetSizeMet: f.targetSizeMet } : {}),
       ...(f.measuredQuality !== undefined ? { measuredQuality: f.measuredQuality } : {}),
       ...(f.qualityMetric !== undefined ? { qualityMetric: f.qualityMetric } : {}),
+      ...(f.alreadyOptimal !== undefined ? { alreadyOptimal: f.alreadyOptimal } : {}),
+      ...(f.alreadyOptimalKind !== undefined ? { alreadyOptimalKind: f.alreadyOptimalKind } : {}),
     }));
     // The flat artifacts[] keeps every job's outputs in job order.
     artifacts.push(...outputs);

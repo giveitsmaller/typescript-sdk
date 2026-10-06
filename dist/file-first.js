@@ -172,8 +172,9 @@ export class RunResult {
     toJSON() {
         // Re-project each OutputFile to exactly its known fields so structurally
         // compatible inputs carrying extra properties can't leak into the JSON.
-        // The projected optional fields (chosenQuality/targetSizeMet and the
-        // auto_quality measuredQuality/qualityMetric) are OMITTED when undefined,
+        // The projected optional fields (chosenQuality/targetSizeMet, the
+        // auto_quality measuredQuality/qualityMetric and the compress
+        // alreadyOptimal/alreadyOptimalKind) are OMITTED when undefined,
         // mirroring PHP's omit-when-null so outputs lacking them stay
         // byte-identical across languages.
         const file = (o) => ({
@@ -185,6 +186,8 @@ export class RunResult {
             ...(o.targetSizeMet !== undefined ? { targetSizeMet: o.targetSizeMet } : {}),
             ...(o.measuredQuality !== undefined ? { measuredQuality: o.measuredQuality } : {}),
             ...(o.qualityMetric !== undefined ? { qualityMetric: o.qualityMetric } : {}),
+            ...(o.alreadyOptimal !== undefined ? { alreadyOptimal: o.alreadyOptimal } : {}),
+            ...(o.alreadyOptimalKind !== undefined ? { alreadyOptimalKind: o.alreadyOptimalKind } : {}),
         });
         const rest = {
             artifacts: this.artifacts.map(file),
@@ -251,6 +254,8 @@ export function projectDownloadsToRunResult(workflowId, finalStatus, jobDownload
                 ...(f.targetSizeMet !== undefined ? { targetSizeMet: f.targetSizeMet } : {}),
                 ...(f.measuredQuality !== undefined ? { measuredQuality: f.measuredQuality } : {}),
                 ...(f.qualityMetric !== undefined ? { qualityMetric: f.qualityMetric } : {}),
+                ...(f.alreadyOptimal !== undefined ? { alreadyOptimal: f.alreadyOptimal } : {}),
+                ...(f.alreadyOptimalKind !== undefined ? { alreadyOptimalKind: f.alreadyOptimalKind } : {}),
             });
         }
     }
@@ -316,6 +321,8 @@ export function projectMultiJobToRunResult(workflowId, finalStatus, jobDownloads
             ...(f.targetSizeMet !== undefined ? { targetSizeMet: f.targetSizeMet } : {}),
             ...(f.measuredQuality !== undefined ? { measuredQuality: f.measuredQuality } : {}),
             ...(f.qualityMetric !== undefined ? { qualityMetric: f.qualityMetric } : {}),
+            ...(f.alreadyOptimal !== undefined ? { alreadyOptimal: f.alreadyOptimal } : {}),
+            ...(f.alreadyOptimalKind !== undefined ? { alreadyOptimalKind: f.alreadyOptimalKind } : {}),
         }));
         // The flat artifacts[] keeps every job's outputs in job order.
         artifacts.push(...outputs);
