@@ -822,6 +822,13 @@ export class GislClient {
        * with status 0). The caller must then reject it.
        */
       redirect?: 'manual';
+      /**
+       * With `rawResponse`: read the body INSIDE the request timeout and the
+       * caller's abort (NRXIXye9). Without it a raw response is returned at the
+       * headers and the timeout ends there, which only `streamEvents` wants: an
+       * SSE body is open-ended by design.
+       */
+      readRaw?: (response: Response) => Promise<T>;
     } = {},
   ): Promise<T> {
     // Fast-fail on a pre-aborted user signal before building the request.
@@ -867,48 +874,62 @@ export class GislClient {
       if (firstCause === null) firstCause = 'user';
     });
 
-    let response: Response;
+    const classifyAbort = (): Error =>
+      firstCause === 'user'
+        ? new GislAbortError(`Request to ${method} ${path} aborted`)
+        : new GislTimeoutError(`Request to ${method} ${path} timed out after ${this.timeoutMs}ms`);
+
+    // NRXIXye9: the timer and the caller's abort stay live until the body has
+    // been read, not just the headers. Clearing them once `fetch` resolved left
+    // a stalled body read with no bound at all.
     try {
-      response = await fetch(url, {
-        method,
-        headers,
-        body,
-        signal: controller.signal,
-        // `credentials: 'include'` on every request when the consumer opts
-        // into cookie-based auth (Symfony session via /api/auth/login).
-        // No-op in Node (fetch ignores the field there); mandatory for
-        // cross-origin browser SPAs to send the session cookie.
-        ...(this.useSessionCookie ? { credentials: 'include' as const } : {}),
-        // A guest client must send NO credential: a browser's default
-        // (`same-origin`) would still attach a same-origin session cookie.
-        ...(ANONYMOUS_CLIENTS.has(this) || opts.unauthenticated ? { credentials: 'omit' as const } : {}),
-        ...(opts.redirect !== undefined ? { redirect: opts.redirect } : {}),
-      });
-    } catch (err: unknown) {
-      if (isAbortError(err)) {
-        if (firstCause === 'user') {
-          throw new GislAbortError(`Request to ${method} ${path} aborted`);
-        }
-        throw new GislTimeoutError(`Request to ${method} ${path} timed out after ${this.timeoutMs}ms`);
+      let response: Response;
+      try {
+        response = await fetch(url, {
+          method,
+          headers,
+          body,
+          signal: controller.signal,
+          // `credentials: 'include'` on every request when the consumer opts
+          // into cookie-based auth (Symfony session via /api/auth/login).
+          // No-op in Node (fetch ignores the field there); mandatory for
+          // cross-origin browser SPAs to send the session cookie.
+          ...(this.useSessionCookie ? { credentials: 'include' as const } : {}),
+          // A guest client must send NO credential: a browser's default
+          // (`same-origin`) would still attach a same-origin session cookie.
+          ...(ANONYMOUS_CLIENTS.has(this) || opts.unauthenticated ? { credentials: 'omit' as const } : {}),
+          ...(opts.redirect !== undefined ? { redirect: opts.redirect } : {}),
+        });
+      } catch (err: unknown) {
+        if (isAbortError(err)) throw classifyAbort();
+        throw err;
       }
-      throw err;
+
+      if (opts.rawResponse && opts.readRaw === undefined) {
+        return response as unknown as T;
+      }
+
+      try {
+        if (opts.readRaw !== undefined) {
+          return await opts.readRaw(response);
+        }
+        // 204 No Content — contracted success status for endpoints that return
+        // no body (e.g. POST /api/contact). Short-circuit before handleResponse
+        // so an empty body never trips the JSON parser.
+        if (response.status === 204) {
+          return undefined as unknown as T;
+        }
+        return await this.handleResponse(response, path, opts.deserialize);
+      } catch (err: unknown) {
+        // Only an abort WE caused (timer or caller signal) is reclassified; any
+        // other error from reading or mapping the body propagates unchanged.
+        if (isAbortError(err) && firstCause !== null) throw classifyAbort();
+        throw err;
+      }
     } finally {
       clearTimeout(timer);
       unbind();
     }
-
-    if (opts.rawResponse) {
-      return response as unknown as T;
-    }
-
-    // 204 No Content — contracted success status for endpoints that return
-    // no body (e.g. POST /api/contact). Short-circuit before handleResponse
-    // so an empty body never trips the JSON parser.
-    if (response.status === 204) {
-      return undefined as unknown as T;
-    }
-
-    return this.handleResponse(response, path, opts.deserialize);
   }
 
   private async handleResponse<T>(
@@ -962,6 +983,8 @@ export class GislClient {
     try {
       json = await response.json();
     } catch (parseError) {
+      // A body read cut off by the timeout or the caller's abort is not a parse failure.
+      if (isAbortError(parseError)) throw parseError;
       // A 2xx that claims JSON but does not parse is the body violating the
       // contract (codex r2): the exchange succeeded. A non-2xx stays an API error.
       if (response.ok) {
@@ -2921,59 +2944,64 @@ export class GislClient {
     if (options.ifNoneMatch !== undefined) headers['If-None-Match'] = options.ifNoneMatch;
     if (options.ifModifiedSince !== undefined) headers['If-Modified-Since'] = options.ifModifiedSince;
 
-    const response = await this.request<Response>('GET', path, {
+    return this.request<GetSchemaResult>('GET', path, {
       rawResponse: true,
       signal: options.signal,
       ...(Object.keys(headers).length > 0 ? { headers } : {}),
+      // NRXIXye9: the body is read INSIDE request()'s timeout and abort, not after the
+      // headers, so a stalled body still ends in GislTimeoutError / GislAbortError.
+      readRaw: async (response) => {
+        const etag = response.headers.get('etag') ?? undefined;
+        const lastModified = response.headers.get('last-modified') ?? undefined;
+
+        if (response.status === 304) {
+          return { notModified: true, etag, lastModified };
+        }
+
+        if (!response.ok) {
+          let errorCode: string | undefined;
+          // Seed with the canonical synthetic sentence (unknown_error) so the
+          // message-absent JSON branch below reuses the SAME helper as
+          // handleResponse + PHP — that message-absent JSON envelope is the
+          // U7MACpOj parity target. A non-JSON body is a rare edge that keeps
+          // this seed (it does NOT claim byte-parity with PHP's non-JSON path,
+          // which throws a distinct GislError).
+          let errorMessage = fallbackErrorMessage(response.status, undefined);
+          try {
+            const errJson = (await response.json()) as { error?: string; message?: string };
+            // Surface the machine code as errorCode too (parity with handleResponse
+            // + PHP), even when `message` supplied the human text.
+            if (typeof errJson.error === 'string') errorCode = errJson.error;
+            // Prefer the human `message`; else the canonical synthetic sentence —
+            // NOT the raw machine code (x9Lbf6uy / U7MACpOj).
+            errorMessage = errJson.message ?? fallbackErrorMessage(response.status, errorCode);
+          } catch (err: unknown) {
+            // A body read cut off by the timeout or abort propagates; request() classifies it.
+            if (isAbortError(err)) throw err;
+            // Non-JSON body — keep the generic synthetic message, no machine code.
+          }
+          // This throw is OUTSIDE handleResponse (rawResponse:true / 304 path), so
+          // build the response-header surface from the in-scope `response` here.
+          throw new GislApiError(response.status, errorMessage, path, undefined, {
+            errorCode,
+            responseHeaders: headersToRecord(response.headers),
+            contentLanguage: response.headers.get('content-language') ?? undefined,
+          });
+        }
+
+        let raw: unknown;
+        try {
+          raw = await response.json();
+        } catch (err: unknown) {
+          // Only a PARSE failure is the body's fault. Anything else (a stream
+          // dropped mid-body) keeps propagating as it did before.
+          if (!(err instanceof SyntaxError)) throw err;
+          throw responseContractError(path, `body is not valid JSON (${err.message})`, err);
+        }
+        const data = readContractBody(OperationsSchemaResponseFromJSON, raw, path);
+        return { notModified: false, data, etag, lastModified };
+      },
     });
-
-    const etag = response.headers.get('etag') ?? undefined;
-    const lastModified = response.headers.get('last-modified') ?? undefined;
-
-    if (response.status === 304) {
-      return { notModified: true, etag, lastModified };
-    }
-
-    if (!response.ok) {
-      let errorCode: string | undefined;
-      // Seed with the canonical synthetic sentence (unknown_error) so the
-      // message-absent JSON branch below reuses the SAME helper as
-      // handleResponse + PHP — that message-absent JSON envelope is the
-      // U7MACpOj parity target. A non-JSON body is a rare edge that keeps
-      // this seed (it does NOT claim byte-parity with PHP's non-JSON path,
-      // which throws a distinct GislError).
-      let errorMessage = fallbackErrorMessage(response.status, undefined);
-      try {
-        const errJson = (await response.json()) as { error?: string; message?: string };
-        // Surface the machine code as errorCode too (parity with handleResponse
-        // + PHP), even when `message` supplied the human text.
-        if (typeof errJson.error === 'string') errorCode = errJson.error;
-        // Prefer the human `message`; else the canonical synthetic sentence —
-        // NOT the raw machine code (x9Lbf6uy / U7MACpOj).
-        errorMessage = errJson.message ?? fallbackErrorMessage(response.status, errorCode);
-      } catch {
-        // Non-JSON body — keep the generic synthetic message, no machine code.
-      }
-      // This throw is OUTSIDE handleResponse (rawResponse:true / 304 path), so
-      // build the response-header surface from the in-scope `response` here.
-      throw new GislApiError(response.status, errorMessage, path, undefined, {
-        errorCode,
-        responseHeaders: headersToRecord(response.headers),
-        contentLanguage: response.headers.get('content-language') ?? undefined,
-      });
-    }
-
-    let raw: unknown;
-    try {
-      raw = await response.json();
-    } catch (err: unknown) {
-      // Only a PARSE failure is the body's fault. Anything else (a stream
-      // dropped mid-body) keeps propagating as it did before.
-      if (!(err instanceof SyntaxError)) throw err;
-      throw responseContractError(path, `body is not valid JSON (${err.message})`, err);
-    }
-    const data = readContractBody(OperationsSchemaResponseFromJSON, raw, path);
-    return { notModified: false, data, etag, lastModified };
   }
 
   /**
@@ -3149,62 +3177,65 @@ export class GislClient {
    */
   async getHealth(): Promise<LivenessResponse> {
     const path = '/healthz';
-    const response = await this.request<Response>('GET', path, {
+    return this.request<LivenessResponse>('GET', path, {
       rawResponse: true,
       unauthenticated: true,
       redirect: 'manual',
+      // NRXIXye9: the body is read INSIDE request()'s timeout and abort, not after the
+      // headers, so a stalled body still ends in GislTimeoutError / GislAbortError.
+      readRaw: async (response) => {
+        if (response.type === 'opaqueredirect') {
+          // Browser `redirect: 'manual'`: status and Location are hidden.
+          throw new GislError(
+            `The API answered GET ${path} with a redirect. The SDK does not follow redirects; ` +
+              'point baseUrl at the final origin.',
+          );
+        }
+        if (response.status >= 300 && response.status < 400) {
+          let locationHost: string | undefined;
+          try {
+            const location = response.headers.get('location');
+            if (location) locationHost = new URL(location, this.baseUrl).host;
+          } catch {
+            locationHost = undefined;
+          }
+          // Release the unread redirect body so undici can reuse the connection.
+          await response.body?.cancel().catch(() => undefined);
+          throw new GislError(
+            `The API answered ${response.status} (a redirect` +
+              (locationHost ? ` to host ${locationHost}` : '') +
+              `) to GET ${path}. The SDK does not follow redirects; point baseUrl at the final origin.`,
+          );
+        }
+        if (!response.ok) {
+          // Non-2xx: the shared mapping (typed envelope dispatch, or a
+          // GislApiError for a non-JSON body). It always throws for !ok.
+          return this.handleResponse<never>(response, path);
+        }
+
+        let raw: unknown;
+        try {
+          raw = await response.json();
+        } catch (err: unknown) {
+          if (!(err instanceof SyntaxError)) throw err;
+          throw responseContractError(path, `body is not valid JSON (${err.message})`, err);
+        }
+        // The generated LivenessResponseFromJSON copies fields without checking
+        // them, so a `{"app":"yes"}` would come back typed as a boolean. Check the
+        // shape here instead.
+        if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+          throw responseContractError(path, 'expected a JSON object.');
+        }
+        const { app, build } = raw as { app?: unknown; build?: unknown };
+        if (typeof app !== 'boolean') {
+          throw responseContractError(path, '`app` must be a boolean.');
+        }
+        if (build !== undefined && typeof build !== 'string') {
+          throw responseContractError(path, '`build`, when present, must be a string.');
+        }
+        return build === undefined ? { app } : { app, build };
+      },
     });
-
-    if (response.type === 'opaqueredirect') {
-      // Browser `redirect: 'manual'`: status and Location are hidden.
-      throw new GislError(
-        `The API answered GET ${path} with a redirect. The SDK does not follow redirects; ` +
-          'point baseUrl at the final origin.',
-      );
-    }
-    if (response.status >= 300 && response.status < 400) {
-      let locationHost: string | undefined;
-      try {
-        const location = response.headers.get('location');
-        if (location) locationHost = new URL(location, this.baseUrl).host;
-      } catch {
-        locationHost = undefined;
-      }
-      // Release the unread redirect body so undici can reuse the connection.
-      await response.body?.cancel().catch(() => undefined);
-      throw new GislError(
-        `The API answered ${response.status} (a redirect` +
-          (locationHost ? ` to host ${locationHost}` : '') +
-          `) to GET ${path}. The SDK does not follow redirects; point baseUrl at the final origin.`,
-      );
-    }
-    if (!response.ok) {
-      // Non-2xx: the shared mapping (typed envelope dispatch, or a
-      // GislApiError for a non-JSON body). It always throws for !ok.
-      return this.handleResponse<never>(response, path);
-    }
-
-    let raw: unknown;
-    try {
-      raw = await response.json();
-    } catch (err: unknown) {
-      if (!(err instanceof SyntaxError)) throw err;
-      throw responseContractError(path, `body is not valid JSON (${err.message})`, err);
-    }
-    // The generated LivenessResponseFromJSON copies fields without checking
-    // them, so a `{"app":"yes"}` would come back typed as a boolean. Check the
-    // shape here instead.
-    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-      throw responseContractError(path, 'expected a JSON object.');
-    }
-    const { app, build } = raw as { app?: unknown; build?: unknown };
-    if (typeof app !== 'boolean') {
-      throw responseContractError(path, '`app` must be a boolean.');
-    }
-    if (build !== undefined && typeof build !== 'string') {
-      throw responseContractError(path, '`build`, when present, must be a string.');
-    }
-    return build === undefined ? { app } : { app, build };
   }
 
   // -----------------------------------------------------------------------
