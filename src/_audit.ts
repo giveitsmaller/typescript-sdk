@@ -128,6 +128,8 @@ import type {
 // QB5Lrcjo — return shape of GislClient.getHealth(). Imported via `./index.js`
 // so dropping the type-only re-export breaks `tsc --noEmit` here.
 import type { LivenessResponse } from './index.js';
+// NzdriXAK — return shape of GislClient.getCheckoutSessionStatus(), same rule.
+import type { CheckoutSessionStatusResponseData } from './index.js';
 // W8v4jWzx — the error-taxonomy category union surfaced by
 // `GislApiError.category`. Imported via `./index.js` so dropping the type-only
 // re-export breaks `tsc --noEmit` here.
@@ -351,6 +353,15 @@ export function _runAudit(): void {
   // LivenessResponse (`{ app: boolean; build?: string }`).
   const _healthSig: Equal<GislClient['getHealth'], () => Promise<LivenessResponse>> = true;
   void _healthSig;
+  // NzdriXAK — getCheckoutSessionStatus(sessionId) resolves to the contract's
+  // `{ sessionId, status }`, `status` the closed `paid | pending | unknown`.
+  const _checkoutStatusSig: Equal<
+    GislClient['getCheckoutSessionStatus'],
+    (sessionId: string) => Promise<CheckoutSessionStatusResponseData>
+  > = true;
+  const _checkoutStatusEnum: Equal<CheckoutSessionStatusResponseData['status'], 'paid' | 'pending' | 'unknown'> = true;
+  void _checkoutStatusSig;
+  void _checkoutStatusEnum;
 
   // ── BQXpFV2R — the thirteen unpinned ergonomic symbols ────────────────────────
   //

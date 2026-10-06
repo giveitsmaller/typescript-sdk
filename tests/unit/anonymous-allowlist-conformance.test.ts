@@ -78,6 +78,7 @@ const EXCLUDED_METHODS: Record<ExcludedMethod, { endpoints: readonly string[]; p
   listWorkflows: { endpoints: ['GET /api/workflows'] },
   workflows: { endpoints: ['GET /api/workflows'] },
   createCheckoutSession: { endpoints: ['POST /api/billing/checkout'] },
+  getCheckoutSessionStatus: { endpoints: ['GET /api/billing/checkout/{sessionId}/status'] },
   getCreditsBalance: { endpoints: ['GET /api/v2/credits/balance'] },
   getCreditsUsage: { endpoints: ['GET /api/v2/credits/usage'] },
   getAccountLimits: { endpoints: ['GET /api/v2/account/limits'] },

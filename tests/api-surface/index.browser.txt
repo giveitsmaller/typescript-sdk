@@ -57,6 +57,7 @@ BillingCheckoutRequest	type
 BillingCheckoutSession	type
 CallbackEventType	value
 CapabilitiesSnapshot	type
+CheckoutSessionStatusResponseData	type
 clip	value
 ClipEntry	type
 ClipOptions	type

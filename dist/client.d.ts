@@ -1,4 +1,4 @@
-import type { AudioWatermarkDecodeRequest, AudioWatermarkDecodeResponse, ExternalImportCreatedResponse, ExternalImportRequest, LoginUserRequest, LoginUser200ResponseData, ContactRequest, BillingCheckoutRequest, BillingCheckoutSession, AccountLimits, AuthenticatedIdentity, CreditsBalanceResponse, LivenessResponse, CreditsUsageResponse, UploadResponse, UploadProbeResponse, WorkflowCancelResponse, WorkflowArchiveResponse, WorkflowRestoreResponse, WorkflowCreateResponse, WorkflowResumeResponse, WorkflowStatusResponse, WorkflowListResponse, WorkflowSummary, WorkflowDownloadResponse, MetadataResponse, RetryResponse } from '@giveitsmaller/contracts/openapi';
+import type { AudioWatermarkDecodeRequest, AudioWatermarkDecodeResponse, ExternalImportCreatedResponse, ExternalImportRequest, LoginUserRequest, LoginUser200ResponseData, ContactRequest, BillingCheckoutRequest, BillingCheckoutSession, CheckoutSessionStatusResponseData, AccountLimits, AuthenticatedIdentity, CreditsBalanceResponse, LivenessResponse, CreditsUsageResponse, UploadResponse, UploadProbeResponse, WorkflowCancelResponse, WorkflowArchiveResponse, WorkflowRestoreResponse, WorkflowCreateResponse, WorkflowResumeResponse, WorkflowStatusResponse, WorkflowListResponse, WorkflowSummary, WorkflowDownloadResponse, MetadataResponse, RetryResponse } from '@giveitsmaller/contracts/openapi';
 import { type CreateAwaitingProbeOptions } from './probe-pending.js';
 import type { CreditsUsageOptions, ListWorkflowsOptions, GetSchemaOptions, GetSchemaResult, GislClientConfig, GislSseEvent, GislSseParseFailure, PreflightClipsResult, ProbeWaitOptions, ProbeWaitResult, ReadCapabilityOptions, UploadOptions, WaitOptions, WorkflowCreatePayload, _Sdk3HandCodedKeepaliveResult, _Sdk3HandCodedMultipartStatusResult, _Sdk3HandCodedPresignPartsResult } from './types.js';
 export declare const MULTIPART_CONCURRENCY_DEFAULT: 4;
@@ -310,6 +310,31 @@ export declare class GislClient {
      *   server-side).
      */
     createCheckoutSession(payload: BillingCheckoutRequest): Promise<BillingCheckoutSession>;
+    /**
+     * Has the purchase behind a checkout session the caller started been applied
+     * (NzdriXAK)? `GET /api/billing/checkout/{sessionId}/status`, **beta**; auth
+     * required. Pass the `sessionId` from {@link createCheckoutSession}.
+     *
+     * - `paid`: applied to the caller's account (a pack's credits granted; a
+     *   subscription linked - linked, not necessarily in good standing).
+     * - `pending`: recorded as the caller's, not applied yet. Not a failure; poll
+     *   again. No timing is contracted.
+     * - `unknown`: **a normal answer, not an error.** The server deliberately does
+     *   not distinguish "not yours" from "never existed" (or a session created
+     *   before the endpoint shipped), so a session id you did not create reads
+     *   `unknown`, never a 403 or 404.
+     *
+     * @throws {GislError} `sessionId` is empty, before any request.
+     * @throws {GislFeatureRequiresAuthError} on a `gisl.anonymous()` client, before
+     *   any request.
+     * @throws {GislResponseContractError} any 2xx other than 200 (a 204
+     *   included), a 200 that is not a JSON body, or one whose `data` lacks a string `session_id`,
+     *   or whose `status` is not `paid` / `pending` / `unknown` (the contract
+     *   closes that enum).
+     * @throws {GislApiError} a non-2xx through the shared mapping: 401 when
+     *   unauthenticated, 404 for an id the router cannot route.
+     */
+    getCheckoutSessionStatus(sessionId: string): Promise<CheckoutSessionStatusResponseData>;
     /**
      * Get a snapshot of the caller's current credit position. The canonical
      * billing-state surface — `BalanceExhaustedResponse` (402) on workflow

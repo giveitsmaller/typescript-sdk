@@ -16,6 +16,7 @@ import {
   CreditsBalanceResponseFromJSON,
   BillingCheckoutRequestToJSON,
   BillingCheckoutSessionFromJSON,
+  CheckoutSessionStatusResponseDataStatusEnum,
   CreditsUsageResponseFromJSON,
   UploadResponseFromJSON,
   UploadProbeResponseFromJSON,
@@ -67,6 +68,7 @@ import type {
   ContactRequest,
   BillingCheckoutRequest,
   BillingCheckoutSession,
+  CheckoutSessionStatusResponseData,
   AccountLimits,
   AuthenticatedIdentity,
   CreditsBalanceResponse,
@@ -3032,6 +3034,69 @@ export class GislClient {
       body: BillingCheckoutRequestToJSON(payload) as unknown as Record<string, unknown>,
       deserialize: BillingCheckoutSessionFromJSON,
     });
+  }
+
+  /**
+   * Has the purchase behind a checkout session the caller started been applied
+   * (NzdriXAK)? `GET /api/billing/checkout/{sessionId}/status`, **beta**; auth
+   * required. Pass the `sessionId` from {@link createCheckoutSession}.
+   *
+   * - `paid`: applied to the caller's account (a pack's credits granted; a
+   *   subscription linked - linked, not necessarily in good standing).
+   * - `pending`: recorded as the caller's, not applied yet. Not a failure; poll
+   *   again. No timing is contracted.
+   * - `unknown`: **a normal answer, not an error.** The server deliberately does
+   *   not distinguish "not yours" from "never existed" (or a session created
+   *   before the endpoint shipped), so a session id you did not create reads
+   *   `unknown`, never a 403 or 404.
+   *
+   * @throws {GislError} `sessionId` is empty, before any request.
+   * @throws {GislFeatureRequiresAuthError} on a `gisl.anonymous()` client, before
+   *   any request.
+   * @throws {GislResponseContractError} any 2xx other than 200 (a 204
+   *   included), a 200 that is not a JSON body, or one whose `data` lacks a string `session_id`,
+   *   or whose `status` is not `paid` / `pending` / `unknown` (the contract
+   *   closes that enum).
+   * @throws {GislApiError} a non-2xx through the shared mapping: 401 when
+   *   unauthenticated, 404 for an id the router cannot route.
+   */
+  async getCheckoutSessionStatus(sessionId: string): Promise<CheckoutSessionStatusResponseData> {
+    if (typeof sessionId !== 'string' || sessionId === '') {
+      throw new GislError('getCheckoutSessionStatus: sessionId must be a non-empty string.');
+    }
+    const path = `/api/billing/checkout/${encodeURIComponent(sessionId)}/status`;
+    const statuses: readonly unknown[] = Object.values(CheckoutSessionStatusResponseDataStatusEnum);
+    // Raw, as in getHealth(): the shared request path resolves a 204 to
+    // `undefined` before any deserialiser runs, and the contract declares only
+    // a JSON 200 as success here, so any other 2xx is a contract violation
+    // (codex fdb108fc77ac, b7a99b89c985). Everything else - non-2xx mapping,
+    // non-JSON or unparseable 200, the envelope - is the shared handleResponse.
+    const response = await this.request<Response>('GET', path, { rawResponse: true });
+    if (response.ok && response.status !== 200) {
+      // Release the unread body so undici can reuse the connection.
+      await response.body?.cancel().catch(() => undefined);
+      throw responseContractError(path, `expected status 200, got ${response.status}.`);
+    }
+    // Hand-checked rather than the generated FromJSON, which copies `status`
+    // without checking it: a closed enum must not pass an unknown value off as
+    // one of its three members.
+    const readStatus = (raw: unknown): CheckoutSessionStatusResponseData => {
+      if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+        throw responseContractError(path, 'expected `data` to be an object.');
+      }
+      const { session_id: echoedId, status } = raw as { session_id?: unknown; status?: unknown };
+      if (typeof echoedId !== 'string') {
+        throw responseContractError(path, '`data.session_id` must be a string.');
+      }
+      if (!statuses.includes(status)) {
+        throw responseContractError(
+          path,
+          `\`data.status\` must be one of ${statuses.join(', ')}; got ${JSON.stringify(status)}.`,
+        );
+      }
+      return { sessionId: echoedId, status: status as CheckoutSessionStatusResponseData['status'] };
+    };
+    return this.handleResponse(response, path, readStatus);
   }
 
   /**

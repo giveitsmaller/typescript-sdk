@@ -95,6 +95,12 @@ export function _runAudit() {
     // LivenessResponse (`{ app: boolean; build?: string }`).
     const _healthSig = true;
     void _healthSig;
+    // NzdriXAK — getCheckoutSessionStatus(sessionId) resolves to the contract's
+    // `{ sessionId, status }`, `status` the closed `paid | pending | unknown`.
+    const _checkoutStatusSig = true;
+    const _checkoutStatusEnum = true;
+    void _checkoutStatusSig;
+    void _checkoutStatusEnum;
     // ── BQXpFV2R — the thirteen unpinned ergonomic symbols ────────────────────────
     //
     // ⚠️ EXISTENCE IS NOW THE SNAPSHOT'S JOB, not this list's.

@@ -334,6 +334,8 @@ export type {
   AudioWatermarkDecodeResponse,
   BillingCheckoutRequest,
   BillingCheckoutSession,
+  // NzdriXAK — return shape of GislClient.getCheckoutSessionStatus().
+  CheckoutSessionStatusResponseData,
   ContactRequest,
   CreditsBalanceResponse,
   CreditsUsageResponse,
