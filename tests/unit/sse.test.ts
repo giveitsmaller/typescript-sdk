@@ -1,5 +1,12 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, expectTypeOf } from 'vitest';
 import { parseSseStream } from '../../src/sse.js';
+import type { GislSseEvent } from '../../src/types.js';
+import type {
+  SseMultiOutputCompletionWire,
+  SseOperationCompletedWire,
+  SseSingleOutputCompletionWire,
+  SseWorkflowTerminalWire,
+} from '../../src/index.js';
 
 function makeResponse(text: string): Response {
   const encoder = new TextEncoder();
@@ -176,7 +183,8 @@ describe('parseSseStream', () => {
     const response = makeResponse('data: {"hello":"world"}\n\n');
     const events = await collectEvents(response);
     expect(events).toHaveLength(1);
-    expect(events[0].event).toBe('message');
+    // iOcpCt6L: a nameless frame is not a contract event -> the unknown arm.
+    expect(events[0]).toEqual({ event: 'unknown', name: 'message', data: { hello: 'world' } });
   });
 
   it('returns empty array for empty stream', async () => {
@@ -197,8 +205,7 @@ describe('parseSseStream', () => {
     const response = makeResponse('event: final\ndata: {"end":true}\n');
     const events = await collectEvents(response);
     expect(events).toHaveLength(1);
-    expect(events[0].event).toBe('final');
-    expect(events[0].data).toEqual({ end: true });
+    expect(events[0]).toEqual({ event: 'unknown', name: 'final', data: { end: true } });
   });
 
   it('handles \\r\\n line endings', async () => {
@@ -207,8 +214,7 @@ describe('parseSseStream', () => {
     );
     const events = await collectEvents(response);
     expect(events).toHaveLength(1);
-    expect(events[0].event).toBe('test');
-    expect(events[0].data).toEqual({ ok: true });
+    expect(events[0]).toEqual({ event: 'unknown', name: 'test', data: { ok: true } });
   });
 
   it('handles bare \\r line endings', async () => {
@@ -217,8 +223,7 @@ describe('parseSseStream', () => {
     );
     const events = await collectEvents(response);
     expect(events).toHaveLength(1);
-    expect(events[0].event).toBe('test');
-    expect(events[0].data).toEqual({ ok: true });
+    expect(events[0]).toEqual({ event: 'unknown', name: 'test', data: { ok: true } });
   });
 
   // MqhQwiCi: signal-driven cancellation of a quiet socket.
@@ -293,7 +298,7 @@ describe('parseSseStream', () => {
 
       const first = await gen.next();
       expect(first.done).toBe(false);
-      expect((first.value as { event: string }).event).toBe('a');
+      expect(first.value).toEqual({ event: 'unknown', name: 'a', data: { n: 1 } });
 
       ac.abort();
       await cancelled;
@@ -404,6 +409,120 @@ describe('parseSseStream', () => {
         },
       });
       await expect(gen.next()).rejects.toThrow('boom');
+    });
+  });
+
+  // iOcpCt6L: named arms carry snake_case wire types; everything else is the
+  // non-overlapping unknown arm, so checking `event` narrows `data` everywhere.
+  describe('typed arms and the unknown arm (iOcpCt6L)', () => {
+    const singleCompleted = {
+      job_ref: 'j1',
+      operation_id: '01936fb3-0000-7000-8000-0000000000aa',
+      type: 'compress',
+      status: 'completed',
+      progress: 100,
+      result: { result_kind: 'single', download_url: 'https://d/x.webp', size_bytes: 10, metrics: { compression_ratio: 0.5 } },
+    };
+    const multiCompleted = {
+      job_ref: 'j1',
+      operation_id: '01936fb3-0000-7000-8000-0000000000ab',
+      type: 'convert',
+      status: 'completed',
+      progress: 100,
+      result: {
+        result_kind: 'multi',
+        outputs: [
+          { download_url: 'https://d/p1.png', size_bytes: 3, page_index: 1 },
+          { download_url: 'https://d/p2.png', size_bytes: 4, page_index: 2 },
+        ],
+        total_output_size_bytes: 7,
+      },
+    };
+
+    function frame(name: string, data: unknown): string {
+      return `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
+    }
+
+    it('yields an unrecognised event name as { event: "unknown", name, data }', async () => {
+      const events = await collectEvents(makeResponse(frame('operation.queued', { a: 1 })));
+      expect(events).toEqual([{ event: 'unknown', name: 'operation.queued', data: { a: 1 } }]);
+    });
+
+    it('routes a server event literally named "unknown" to the unknown arm, name preserved', async () => {
+      const events = await collectEvents(makeResponse(frame('unknown', { b: 2 })));
+      expect(events).toEqual([{ event: 'unknown', name: 'unknown', data: { b: 2 } }]);
+    });
+
+    it('routes an unrecognised trailing frame (no final blank line) to the unknown arm', async () => {
+      const events = await collectEvents(makeResponse('event: later.event\ndata: {"c":3}\n'));
+      expect(events).toEqual([{ event: 'unknown', name: 'later.event', data: { c: 3 } }]);
+    });
+
+    it('keeps every contract event name on its named arm, with no `name` key and data untouched', async () => {
+      const names = [
+        'operation.progress',
+        'operation.completed',
+        'operation.failed',
+        'job.completed',
+        'job.failed',
+        'workflow.completed',
+        'workflow.failed',
+        'workflow.partially_failed',
+      ];
+      const events = await collectEvents(makeResponse(names.map((n, i) => frame(n, { i })).join('')));
+      expect(events).toEqual(names.map((n, i) => ({ event: n, data: { i } })));
+    });
+
+    it('narrows to result.result_kind arms with no cast', async () => {
+      const events = await collectEvents(
+        makeResponse(frame('operation.completed', singleCompleted) + frame('operation.completed', multiCompleted)),
+      );
+      const seen: string[] = [];
+      for (const e of events as GislSseEvent[]) {
+        if (e.event !== 'operation.completed') {
+          throw new Error(`unexpected ${e.event}`);
+        }
+        expectTypeOf(e.data).toEqualTypeOf<SseOperationCompletedWire>();
+        const result = e.data.result;
+        if (result === undefined) {
+          throw new Error('result missing');
+        }
+        if (result.result_kind === 'single') {
+          expectTypeOf(result).toEqualTypeOf<SseSingleOutputCompletionWire>();
+          seen.push(`single:${result.download_url}:${result.size_bytes}:${result.metrics?.compression_ratio}`);
+        } else {
+          expectTypeOf(result).toEqualTypeOf<SseMultiOutputCompletionWire>();
+          seen.push(`multi:${result.outputs.map((o) => o.page_index).join(',')}:${result.total_output_size_bytes}`);
+        }
+      }
+      expect(seen).toEqual(['single:https://d/x.webp:10:0.5', 'multi:1,2:7']);
+    });
+
+    it('narrows the unknown arm to { name: string; data: unknown }', async () => {
+      const [e] = (await collectEvents(makeResponse(frame('x.y', { z: 1 })))) as GislSseEvent[];
+      if (e.event !== 'unknown') {
+        throw new Error(`expected the unknown arm, got ${e.event}`);
+      }
+      expectTypeOf(e.name).toEqualTypeOf<string>();
+      expectTypeOf(e.data).toEqualTypeOf<unknown>();
+      expect(e.name).toBe('x.y');
+    });
+
+    it('checking `event` narrows a named arm\'s data (the old catch-all overlap is gone)', () => {
+      // Type-level. Under the pre-iOcpCt6L `{ event: string; data: unknown }`
+      // catch-all, `e.event === 'workflow.failed'` kept the catch-all in the
+      // narrowed union (its `event: string` admits that literal), so `e.data`
+      // collapsed to `unknown`.
+      const readFailedStatus = (e: GislSseEvent): string | undefined => {
+        if (e.event === 'workflow.failed') {
+          expectTypeOf(e.data).toEqualTypeOf<SseWorkflowTerminalWire>();
+          return e.data.status;
+        }
+        return undefined;
+      };
+      expect(
+        readFailedStatus({ event: 'workflow.failed', data: { workflow_id: 'w', status: 'failed' } }),
+      ).toBe('failed');
     });
   });
 });

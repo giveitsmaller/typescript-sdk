@@ -8,6 +8,23 @@
 // SDK classes and functions
 export { GislClient, DEFAULT_MULTIPART_FIRST_CHUNK_SIZE } from './client.js';
 export { parseSseStream } from './sse.js';
+// iOcpCt6L — snake_case wire shapes of `GislSseEvent.data` (what the stream
+// actually yields; the camelCase `Sse*Data` models below are FromJSON output).
+export type {
+  SseOperationProgressWire,
+  SseOperationCompletedWire,
+  SseOperationCompletionResultWire,
+  SseSingleOutputCompletionWire,
+  SseMultiOutputCompletionWire,
+  SseMultiOutputResultEntryWire,
+  SseOperationResultMetricsWire,
+  SseMultiOutputCompletionMetricsWire,
+  SseOperationResultMetadataWire,
+  SseOperationFailedWire,
+  SseJobCompletedWire,
+  SseJobFailedWire,
+  SseWorkflowTerminalWire,
+} from './sse-wire.js';
 
 // Note: the public-API completeness audit gate lives at
 // `./_audit.ts`. It is NOT re-exported — `tsconfig.json`'s
@@ -29,6 +46,7 @@ export type {
   ProbeWaitResult,
   GislClientConfig,
   GislSseEvent,
+  GislSseUnknownEvent,
   GislSseParseFailure,
   UploadOptions,
   WaitOptions,

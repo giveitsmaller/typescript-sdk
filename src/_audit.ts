@@ -110,6 +110,24 @@ import type { StatusSnapshot, GislResultNotReadyError } from './index.js';
 // callback on `streamEvents` / `parseSseStream`. Imported via `./index.js`
 // so dropping the re-export breaks `tsc --noEmit` here.
 import type { GislSseParseFailure } from './index.js';
+// iOcpCt6L — snake_case SSE wire shapes + the non-overlapping unknown-event
+// arm. Imported via `./index.js` so dropping a re-export breaks `tsc --noEmit`.
+import type {
+  GislSseUnknownEvent,
+  SseOperationProgressWire,
+  SseOperationCompletedWire,
+  SseOperationCompletionResultWire,
+  SseSingleOutputCompletionWire,
+  SseMultiOutputCompletionWire,
+  SseMultiOutputResultEntryWire,
+  SseOperationResultMetricsWire,
+  SseMultiOutputCompletionMetricsWire,
+  SseOperationResultMetadataWire,
+  SseOperationFailedWire,
+  SseJobCompletedWire,
+  SseJobFailedWire,
+  SseWorkflowTerminalWire,
+} from './index.js';
 // qUhxfDA5 — capabilities() projection VO + the three contract capability
 // types it exposes. All imported via `./index.js` so dropping either the VO
 // export or the contract-type re-exports breaks `tsc --noEmit` here.
@@ -573,6 +591,21 @@ export function _runAudit(): void {
   accept<GislResultNotReadyError>();
   // TYNjcjpo — SSE parse-failure diagnostic surface.
   accept<GislSseParseFailure>();
+  // iOcpCt6L — SSE wire shapes + unknown-event arm.
+  accept<GislSseUnknownEvent>();
+  accept<SseOperationProgressWire>();
+  accept<SseOperationCompletedWire>();
+  accept<SseOperationCompletionResultWire>();
+  accept<SseSingleOutputCompletionWire>();
+  accept<SseMultiOutputCompletionWire>();
+  accept<SseMultiOutputResultEntryWire>();
+  accept<SseOperationResultMetricsWire>();
+  accept<SseMultiOutputCompletionMetricsWire>();
+  accept<SseOperationResultMetadataWire>();
+  accept<SseOperationFailedWire>();
+  accept<SseJobCompletedWire>();
+  accept<SseJobFailedWire>();
+  accept<SseWorkflowTerminalWire>();
   // qUhxfDA5 — capabilities() projection surface + the three contract
   // capability types it exposes.
   accept<CapabilitiesSnapshot>();

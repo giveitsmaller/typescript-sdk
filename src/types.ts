@@ -6,18 +6,20 @@ import type {
   ImageEncodeCapabilities,
   CallbackEventType,
   SseEventType,
-  SseOperationProgressData,
-  SseOperationCompletedData,
-  SseOperationFailedData,
-  SseJobCompletedData,
-  SseJobFailedData,
-  SseWorkflowTerminalData,
   MultipartInitiateRequestMetadataHint,
   UploadProbeResponse,
   WorkflowSource,
   MultiInputSource,
 } from '@giveitsmaller/contracts/openapi';
 import type { JobInputV2RoleEnum, NotifyConfig } from '@giveitsmaller/contracts/openapi';
+import type {
+  SseOperationProgressWire,
+  SseOperationCompletedWire,
+  SseOperationFailedWire,
+  SseJobCompletedWire,
+  SseJobFailedWire,
+  SseWorkflowTerminalWire,
+} from './sse-wire.js';
 
 // ---------------------------------------------------------------------------
 // Client configuration
@@ -670,16 +672,47 @@ export interface ProbeWaitResult {
 // SSE event types (SDK-level typed discriminated union)
 // ---------------------------------------------------------------------------
 
+/**
+ * An SSE frame name the SDK does not recognise, and the frame that carried it.
+ *
+ * Every name outside `SseEventType` lands here, including a frame with no
+ * `event:` line (`name: 'message'`) and a server event literally named
+ * `unknown`. `event` is always the literal `'unknown'`, so this arm never
+ * overlaps a named one and checking `event` narrows `data` on every arm.
+ * `data` is the parsed JSON, unchecked.
+ */
+export interface GislSseUnknownEvent {
+  event: 'unknown';
+  /** The raw `event:` name from the frame (`'message'` when it had none). */
+  name: string;
+  data: unknown;
+}
+
+/**
+ * One SSE frame from `streamEvents` / `parseSseStream`, narrowed by `event`.
+ *
+ * `data` is the frame's JSON exactly as received: **snake_case keys**, typed by
+ * the `Sse*Wire` interfaces. Narrow on `event`, then on
+ * `data.result?.result_kind` for an `operation.completed` result:
+ *
+ * ```ts
+ * if (e.event === 'operation.completed' && e.data.result?.result_kind === 'multi') {
+ *   e.data.result.outputs.length;
+ * }
+ * ```
+ *
+ * The payload is not validated at runtime; the types state the contract.
+ */
 export type GislSseEvent =
-  | { event: typeof SseEventType.operation_progress; data: SseOperationProgressData }
-  | { event: typeof SseEventType.operation_completed; data: SseOperationCompletedData }
-  | { event: typeof SseEventType.operation_failed; data: SseOperationFailedData }
-  | { event: typeof SseEventType.job_completed; data: SseJobCompletedData }
-  | { event: typeof SseEventType.job_failed; data: SseJobFailedData }
-  | { event: typeof SseEventType.workflow_completed; data: SseWorkflowTerminalData }
-  | { event: typeof SseEventType.workflow_failed; data: SseWorkflowTerminalData }
-  | { event: typeof SseEventType.workflow_partially_failed; data: SseWorkflowTerminalData }
-  | { event: string; data: unknown };
+  | { event: typeof SseEventType.operation_progress; data: SseOperationProgressWire }
+  | { event: typeof SseEventType.operation_completed; data: SseOperationCompletedWire }
+  | { event: typeof SseEventType.operation_failed; data: SseOperationFailedWire }
+  | { event: typeof SseEventType.job_completed; data: SseJobCompletedWire }
+  | { event: typeof SseEventType.job_failed; data: SseJobFailedWire }
+  | { event: typeof SseEventType.workflow_completed; data: SseWorkflowTerminalWire }
+  | { event: typeof SseEventType.workflow_failed; data: SseWorkflowTerminalWire }
+  | { event: typeof SseEventType.workflow_partially_failed; data: SseWorkflowTerminalWire }
+  | GislSseUnknownEvent;
 
 /**
  * A typed, non-throwing diagnostic surfaced when an SSE frame's `data:` body fails

@@ -1,4 +1,44 @@
+import type { SseEventType } from '@giveitsmaller/contracts/openapi';
 import type { GislSseEvent, GislSseParseFailure } from './types.js';
+
+type NamedSseEventName = Exclude<GislSseEvent['event'], 'unknown'>;
+
+/**
+ * The frame names that get a named `GislSseEvent` arm. Anything else becomes
+ * `{ event: 'unknown', name, data }` (iOcpCt6L).
+ */
+const NAMED_SSE_EVENTS: ReadonlySet<string> = new Set<NamedSseEventName>([
+  'operation.progress',
+  'operation.completed',
+  'operation.failed',
+  'job.completed',
+  'job.failed',
+  'workflow.completed',
+  'workflow.failed',
+  'workflow.partially_failed',
+] satisfies readonly NamedSseEventName[]);
+
+// Compile-time: the named arms are exactly the contract's `SseEventType`. A
+// contract that adds an event fails here until it gets a wire type and an arm;
+// one that removes an event fails here until the arm goes.
+type _NamedArmsMatchContract = [NamedSseEventName] extends [SseEventType]
+  ? [SseEventType] extends [NamedSseEventName]
+    ? true
+    : ['DRIFT: SseEventType has events with no GislSseEvent arm', Exclude<SseEventType, NamedSseEventName>]
+  : ['DRIFT: GislSseEvent has arms the contract does not declare', Exclude<NamedSseEventName, SseEventType>];
+const _namedArmsMatchContract: _NamedArmsMatchContract = true;
+void _namedArmsMatchContract;
+
+/**
+ * Builds the yielded event. An unrecognised name, including a literal
+ * `unknown`, goes to the unknown arm so `event` alone always narrows `data`.
+ */
+function toGislSseEvent(frameEvent: string, data: unknown): GislSseEvent {
+  if (NAMED_SSE_EVENTS.has(frameEvent)) {
+    return { event: frameEvent, data } as GislSseEvent;
+  }
+  return { event: 'unknown', name: frameEvent, data };
+}
 
 /**
  * Parse an SSE stream from a fetch Response into an AsyncIterable of typed events.
@@ -9,6 +49,8 @@ import type { GislSseEvent, GislSseParseFailure } from './types.js';
  * - Comment lines (`:` prefix) used as keep-alives
  * - `id:` and `retry:` fields — IGNORED, and neither is surfaced on
  *   `GislSseEvent`
+ * - Event names outside `SseEventType` (and a frame with no `event:` line,
+ *   named `message`) — yielded as `{ event: 'unknown', name, data }`
  *
  * 🔴 THIS SDK DOES NOT RECONNECT. It opens ONE stream and yields frames until
  * the server ends it, the caller breaks, or the signal aborts. There is no
@@ -125,10 +167,7 @@ export async function* parseSseStream(
               dataLines = [];
               continue;
             }
-            yield {
-              event: frameEvent,
-              data: parsed,
-            } as GislSseEvent;
+            yield toGislSseEvent(frameEvent, parsed);
           }
           eventType = '';
           dataLines = [];
@@ -236,10 +275,7 @@ export async function* parseSseStream(
         });
         return;
       }
-      yield {
-        event: frameEvent,
-        data: parsed,
-      } as GislSseEvent;
+      yield toGislSseEvent(frameEvent, parsed);
     }
   } finally {
     signal?.removeEventListener('abort', onAbort);

@@ -8,6 +8,8 @@ import type { GislSseEvent, GislSseParseFailure } from './types.js';
  * - Comment lines (`:` prefix) used as keep-alives
  * - `id:` and `retry:` fields — IGNORED, and neither is surfaced on
  *   `GislSseEvent`
+ * - Event names outside `SseEventType` (and a frame with no `event:` line,
+ *   named `message`) — yielded as `{ event: 'unknown', name, data }`
  *
  * 🔴 THIS SDK DOES NOT RECONNECT. It opens ONE stream and yields frames until
  * the server ends it, the caller breaks, or the signal aborts. There is no

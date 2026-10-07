@@ -3226,27 +3226,12 @@ describe('GislClient', () => {
 
       expect(events).toHaveLength(1);
       const ev = events[0];
-      // Discriminator narrowing: TS knows ev.data is SseOperationProgressData
-      // when ev.event === 'operation.progress'.
+      // Discriminator narrowing: `ev.data` is `SseOperationProgressWire` — the
+      // raw snake_case wire shape the parser actually yields (iOcpCt6L). No
+      // cast: a regression that drops the phased fields from the wire type
+      // surfaces as a `Property X does not exist` tsc error (check:tests).
       if (ev.event === 'operation.progress') {
-        // GislSseEvent's union includes a `{event: string; data: unknown}`
-        // catch-all so discriminator narrowing alone leaves `data: unknown`.
-        // The SDK's SSE parser doesn't run wire JSON through `FromJSON`
-        // helpers, so consumers see raw snake_case wire fields — distinct
-        // from the camelCase `SseOperationProgressData` interface emitted
-        // by openapi-generator. Pin the wire shape with a local interface:
-        // a regression that drops the phased fields from the wire shape
-        // surfaces here as a `Property X does not exist` tsc error, not
-        // as a runtime undefined.
-        interface ProgressWireShape {
-          operation_id: string;
-          progress: number;
-          status: 'started' | 'downloading' | 'probing' | 'decoding'
-            | 'processing' | 'encoding' | 'uploading';
-          phase_input_index?: number;
-          phase_total_inputs?: number;
-        }
-        const data = ev.data as ProgressWireShape;
+        const data = ev.data;
         expect(data.status).toBe('decoding');
         expect(data.phase_input_index).toBe(1);
         expect(data.phase_total_inputs).toBe(3);

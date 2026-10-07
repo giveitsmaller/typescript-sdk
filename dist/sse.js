@@ -1,4 +1,30 @@
 /**
+ * The frame names that get a named `GislSseEvent` arm. Anything else becomes
+ * `{ event: 'unknown', name, data }` (iOcpCt6L).
+ */
+const NAMED_SSE_EVENTS = new Set([
+    'operation.progress',
+    'operation.completed',
+    'operation.failed',
+    'job.completed',
+    'job.failed',
+    'workflow.completed',
+    'workflow.failed',
+    'workflow.partially_failed',
+]);
+const _namedArmsMatchContract = true;
+void _namedArmsMatchContract;
+/**
+ * Builds the yielded event. An unrecognised name, including a literal
+ * `unknown`, goes to the unknown arm so `event` alone always narrows `data`.
+ */
+function toGislSseEvent(frameEvent, data) {
+    if (NAMED_SSE_EVENTS.has(frameEvent)) {
+        return { event: frameEvent, data };
+    }
+    return { event: 'unknown', name: frameEvent, data };
+}
+/**
  * Parse an SSE stream from a fetch Response into an AsyncIterable of typed events.
  *
  * Handles:
@@ -7,6 +33,8 @@
  * - Comment lines (`:` prefix) used as keep-alives
  * - `id:` and `retry:` fields — IGNORED, and neither is surfaced on
  *   `GislSseEvent`
+ * - Event names outside `SseEventType` (and a frame with no `event:` line,
+ *   named `message`) — yielded as `{ event: 'unknown', name, data }`
  *
  * 🔴 THIS SDK DOES NOT RECONNECT. It opens ONE stream and yields frames until
  * the server ends it, the caller breaks, or the signal aborts. There is no
@@ -117,10 +145,7 @@ export async function* parseSseStream(response, opts = {}) {
                             dataLines = [];
                             continue;
                         }
-                        yield {
-                            event: frameEvent,
-                            data: parsed,
-                        };
+                        yield toGislSseEvent(frameEvent, parsed);
                     }
                     eventType = '';
                     dataLines = [];
@@ -224,10 +249,7 @@ export async function* parseSseStream(response, opts = {}) {
                 });
                 return;
             }
-            yield {
-                event: frameEvent,
-                data: parsed,
-            };
+            yield toGislSseEvent(frameEvent, parsed);
         }
     }
     finally {
