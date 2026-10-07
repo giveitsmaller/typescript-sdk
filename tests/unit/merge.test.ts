@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { MergeBuilder, asset, clip, handle } from '../../src/merge.js';
+import { _parseTargetSize } from '../../src/ergonomic/preset_resolver.js';
 import {
   GislConfigError,
   GislError,
@@ -201,9 +202,35 @@ describe('MergeBuilder — simple concat (no .sequence)', () => {
       codec: 'h264',
     }).run({ maxWait: '30s' });
     const opts = mergeOptions(mock.createWorkflow.mock.calls[0][0]);
-    expect(opts.target_size_bytes).toBe(100_000_000);
+    expect(opts.target_size_bytes).toBe(104_857_600); // YOCz0i74: binary, 100 * 2^20
     expect(opts.encoding_mode).toBe('target_size');
     expect(opts.codec).toBe('h264');
+  });
+
+  // YOCz0i74 — merge and compress must turn the SAME string into the SAME
+  // bytes. Merge parsed decimal until 2026-10 (so '1MB' fell under the 1 MiB
+  // contract floor). Asserting against _parseTargetSize, not a literal, keeps the
+  // two verbs locked together whatever the parser does next.
+  it.each(['1MB', '50MB', '1.5GB', '1TB', '2048', '512KB'])(
+    'merge targetSize %s emits the same bytes as compress (shared binary parser)',
+    async (size) => {
+      const mock = makeMockClient();
+      await new MergeBuilder(mock.client, [asset('a.mp4'), asset('b.mp4')], {
+        targetSize: size,
+        codec: 'h264',
+      }).run({ maxWait: '30s' });
+      const opts = mergeOptions(mock.createWorkflow.mock.calls[0][0]);
+      expect(opts.target_size_bytes).toBe(_parseTargetSize(size));
+    },
+  );
+
+  it("merge targetSize '1MB' is exactly the contract floor (1 MiB), not under it", async () => {
+    const mock = makeMockClient();
+    await new MergeBuilder(mock.client, [asset('a.mp4'), asset('b.mp4')], {
+      targetSize: '1MB',
+      codec: 'h264',
+    }).run({ maxWait: '30s' });
+    expect(mergeOptions(mock.createWorkflow.mock.calls[0][0]).target_size_bytes).toBe(1_048_576);
   });
 
   it('honours reEncodeMode + targetResolution on a video merge (9u5aS8tU)', async () => {

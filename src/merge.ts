@@ -54,6 +54,7 @@ import {
   _retryOn429,
 } from './builder.js';
 import { Handle } from './handle.js';
+import { _parseTargetSize } from './ergonomic/preset_resolver.js';
 import { createWorkflowAwaitingProbe } from './probe-pending.js';
 
 // ---------------------------------------------------------------------------
@@ -166,15 +167,9 @@ export interface MergeOptions {
    * `target_size_bytes`, and the SDK also sets `encoding_mode: 'target_size'` alongside
    * it. Video merge only.
    *
-   * **UNITS ARE DECIMAL HERE (1 KB = 1000), UNLIKE `compress`.** `compress`'s
-   * `targetSize` parses the same strings as BINARY (1 KB = 1024), so `'50MB'` means
-   * 50,000,000 bytes on a merge and 52,428,800 bytes on a compress. That divergence is
-   * NOT deliberate — it contradicts the pinned convention that every human-readable
-   * size string in this SDK is binary — and it has a sharp edge: the contract floor for
-   * `target_size_bytes` is 1 MiB (1,048,576), so `'1MB'` here resolves to 1,000,000 and
-   * is rejected as below the minimum. Prefer an explicit byte count until this is
-   * reconciled. Tracked by `YOCz0i74`; changing it moves bytes for existing callers, so
-   * it is a deliberate decision rather than a silent correction.
+   * Units are BINARY (1 KB = 1024; `B`/`KB`/`MB`/`GB`/`TB`), exactly as `compress`'s
+   * `targetSize` — one shared parser, so `'50MB'` is 52,428,800 bytes on both and
+   * `'1MB'` is the contract floor (1 MiB). Merge parsed decimal before `YOCz0i74`.
    *
    * **NOT AVAILABLE FOR LONG INPUTS.** Merges whose summed input duration routes to
    * the long-form Fargate path reject both keys — that path is single-pass-CRF by
@@ -444,7 +439,7 @@ export class MergeBuilder {
         parseSizeString(this.opOptions.targetSize);
       } catch {
         throw new GislConfigError(
-          `Invalid targetSize string '${this.opOptions.targetSize}' — expected '<num>[B|KB|MB|GB]'.`,
+          `Invalid targetSize string '${this.opOptions.targetSize}' — expected '<num>[B|KB|MB|GB|TB]' (binary units).`,
         );
       }
     }
@@ -792,17 +787,10 @@ function wirePerInputOptions(opts: ClipOptions, mediaKind: MergeMediaKind): Reco
   return out;
 }
 
+// YOCz0i74 — merge shares compress's parser, so a size string means the same
+// bytes on both verbs: BINARY units (1 KB = 1024, the 2026-05-28 pin) and TB.
+// Merge used DECIMAL until 2026-10, which put '1MB' (1,000,000) under the
+// contract's 1 MiB floor and made every other value ~4.9% smaller than asked.
 function parseSizeString(s: string): number {
-  const m = /^(\d+(?:\.\d+)?)\s*(KB|MB|GB|B)?$/i.exec(s.trim());
-  if (m === null) throw new TypeError(`Invalid targetSize string '${s}'`);
-  const n = Number(m[1]);
-  const unit = (m[2] ?? 'B').toUpperCase();
-  switch (unit) {
-    case 'B': return Math.round(n);
-    case 'KB': return Math.round(n * 1_000);
-    case 'MB': return Math.round(n * 1_000_000);
-    case 'GB': return Math.round(n * 1_000_000_000);
-    /* istanbul ignore next */
-    default: throw new TypeError(`Unknown size unit '${unit}'`);
-  }
+  return _parseTargetSize(s);
 }

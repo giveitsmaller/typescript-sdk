@@ -28,6 +28,7 @@ import { uploadSource, jobOutputSource } from './types.js';
 import { GislConfigError, GislPerInputOptionsNotSupportedError, GislTimeoutError, GislUndeclaredAssetError, GislUnusedAssetError, } from './errors.js';
 import { _cappedProbeTimeoutMs, _checkAborted, _awaitTerminalReportingTransport, _detectCompressMedia, _parseMaxWait, _projectResult, _retryOn429, } from './builder.js';
 import { Handle } from './handle.js';
+import { _parseTargetSize } from './ergonomic/preset_resolver.js';
 import { createWorkflowAwaitingProbe } from './probe-pending.js';
 /**
  * Construct a path-asset. Bare-string arguments to `merge(...)` are
@@ -252,7 +253,7 @@ export class MergeBuilder {
                 parseSizeString(this.opOptions.targetSize);
             }
             catch {
-                throw new GislConfigError(`Invalid targetSize string '${this.opOptions.targetSize}' — expected '<num>[B|KB|MB|GB]'.`);
+                throw new GislConfigError(`Invalid targetSize string '${this.opOptions.targetSize}' — expected '<num>[B|KB|MB|GB|TB]' (binary units).`);
             }
         }
         // Image merges require an `output_type` (the generated merge schema marks
@@ -580,18 +581,10 @@ function wirePerInputOptions(opts, mediaKind) {
         out.trim_end = opts.trimEnd;
     return out;
 }
+// YOCz0i74 — merge shares compress's parser, so a size string means the same
+// bytes on both verbs: BINARY units (1 KB = 1024, the 2026-05-28 pin) and TB.
+// Merge used DECIMAL until 2026-10, which put '1MB' (1,000,000) under the
+// contract's 1 MiB floor and made every other value ~4.9% smaller than asked.
 function parseSizeString(s) {
-    const m = /^(\d+(?:\.\d+)?)\s*(KB|MB|GB|B)?$/i.exec(s.trim());
-    if (m === null)
-        throw new TypeError(`Invalid targetSize string '${s}'`);
-    const n = Number(m[1]);
-    const unit = (m[2] ?? 'B').toUpperCase();
-    switch (unit) {
-        case 'B': return Math.round(n);
-        case 'KB': return Math.round(n * 1_000);
-        case 'MB': return Math.round(n * 1_000_000);
-        case 'GB': return Math.round(n * 1_000_000_000);
-        /* istanbul ignore next */
-        default: throw new TypeError(`Unknown size unit '${unit}'`);
-    }
+    return _parseTargetSize(s);
 }
