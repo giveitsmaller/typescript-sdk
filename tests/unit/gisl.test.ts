@@ -570,6 +570,47 @@ describe('capabilities() (qUhxfDA5)', () => {
     expect(cap?.soleOp).toBe(false);
   });
 
+  it('capabilities(opType) keeps `in` leaves (output_container rules), produces and input roles (F9UUicuO)', async () => {
+    const client = await create({ apiKey: 'k', baseUrl: 'https://api.example.com' });
+    fetchSpy.mockResolvedValueOnce(
+      schemaResponse({
+        ...fullSchema,
+        capabilities: {
+          compress: {
+            produces: { same_as_input: true },
+            option_conflicts: [
+              {
+                constraint_id: 'compress.video.codec_container.webm',
+                message: 'm',
+                wire_code: 'invalid_options',
+                when: {
+                  all: [
+                    { field: 'output_container', in: ['webm'] },
+                    { field: 'compress.codec', isSet: true },
+                    { field: 'compress.codec', in: ['h265'] },
+                  ],
+                },
+              },
+            ],
+          },
+          image_watermark: { input: { model: 'multi', min: 2, max: 9, roles: ['base', 'overlay'] } },
+        },
+      }),
+    );
+
+    const snapshot = await client.capabilities();
+    const compress = snapshot.operations.compress;
+    expect(compress.produces).toEqual({ sameAsInput: true });
+    expect(compress.optionConflicts?.[0]?.when).toEqual({
+      all: [
+        { field: 'output_container', _in: ['webm'] },
+        { field: 'compress.codec', isSet: true },
+        { field: 'compress.codec', _in: ['h265'] },
+      ],
+    });
+    expect(snapshot.operations.image_watermark.input?.roles).toEqual(['base', 'overlay']);
+  });
+
   it('capabilities(opType) returns undefined for an op absent from the matrix', async () => {
     const client = await create({ apiKey: 'k', baseUrl: 'https://api.example.com' });
     fetchSpy.mockResolvedValueOnce(schemaResponse(fullSchema));
