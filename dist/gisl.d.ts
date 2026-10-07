@@ -240,17 +240,15 @@ export type ErgonomicClient = GislClient & {
      */
     compress(input: string | Blob, options?: CompressOptions): OperationBuilder;
     /**
-     * Single-op convert. The target format rides the bag as the required
-     * `output_format` (the single-op builder has no positional format — that is
-     * the file-first `Recipe.convert(format, …)` surface). Extra keys are the
-     * typed {@link ConvertOptions}. A missing `output_format` is a compile-time
-     * error (uFbM31dC); an unknown key is a compile-time error for an INLINE bag
-     * only — aliased bags bypass TS excess-property checks — so the runtime guard
-     * remains the backstop (also for untyped JS callers).
+     * Single-op convert to the target format `to` (e.g. `'webp'`, `'mp4'`, `'pdf'`),
+     * the same shape as the file-first `Recipe.convert(format, options)`. Extra keys
+     * are the typed {@link ConvertOptions}; `output_format` / `format` in the bag are
+     * rejected (the target is the second argument). An unknown key is a compile-time
+     * error for an INLINE bag only — aliased bags bypass TS excess-property checks —
+     * so the runtime guard remains the backstop (also for untyped JS callers).
+     * BREAKING in 2IvqIS7B: was `convert(input, { output_format, ...options })`.
      */
-    convert(input: string | Blob, options: ConvertOptions & {
-        output_format: string;
-    }): OperationBuilder;
+    convert(input: string | Blob, to: string, options?: ConvertOptions): OperationBuilder;
     /**
      * Single-op thumbnail. {@link ThumbnailOptions} makes `width` and `height`
      * optional, as the contract does: give one and the server derives the other

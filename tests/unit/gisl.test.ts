@@ -416,42 +416,42 @@ describe('single-op builder option validation (ExVcchMz)', () => {
     });
   });
 
-  describe('convert', () => {
-    it('rejects a missing output_format (empty bag) pre-upload, no fetch', async () => {
+  describe('convert (2IvqIS7B: target is the second positional argument)', () => {
+    it('rejects a missing target (no second argument) pre-upload, no fetch', async () => {
       const c = await client();
-      expect(() => c.convert('photo.png', {} as never)).toThrow(/output_format/);
+      expect(() => (c.convert as (i: string) => unknown)('photo.png')).toThrow(/target format/);
       expect(fetchSpy).not.toHaveBeenCalled();
     });
 
-    it('rejects a bag with options but no output_format pre-upload, no fetch', async () => {
+    it('rejects an empty-string target pre-upload, no fetch', async () => {
       const c = await client();
-      expect(() => c.convert('photo.png', { quality: 80 } as never)).toThrow(/output_format/);
+      expect(() => c.convert('photo.png', '')).toThrow(/target format/);
       expect(fetchSpy).not.toHaveBeenCalled();
     });
 
-    it('rejects a null output_format pre-upload, no fetch', async () => {
+    it('rejects the OLD bag form (options object as the second argument) pre-upload, no fetch', async () => {
       const c = await client();
-      expect(() => c.convert('photo.png', { output_format: null } as never)).toThrow(/output_format/);
+      expect(() => c.convert('photo.png', { output_format: 'webp' } as never)).toThrow(/target format/);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('rejects output_format / format in the bag as positional-owned, no fetch', async () => {
+      const c = await client();
+      expect(() => c.convert('photo.png', 'webp', { output_format: 'png' } as never)).toThrow(/remove 'output_format'/);
+      expect(() => c.convert('photo.png', 'webp', { format: 'png' } as never)).toThrow(/remove 'format'/);
       expect(fetchSpy).not.toHaveBeenCalled();
     });
 
     it('rejects an unknown option key pre-upload, no fetch', async () => {
       const c = await client();
-      expect(() => c.convert('photo.png', { output_format: 'webp', bogus: 1 } as never)).toThrow(
-        /unknown option 'bogus'/,
-      );
+      expect(() => c.convert('photo.png', 'webp', { bogus: 1 } as never)).toThrow(/unknown option 'bogus'/);
       expect(fetchSpy).not.toHaveBeenCalled();
     });
 
-    it('rejects the SDK alias `format` (single-op needs the wire key output_format) pre-upload, no fetch', async () => {
+    it('accepts a target with and without a bag (no throw)', async () => {
       const c = await client();
-      expect(() => c.convert('photo.png', { format: 'webp' } as never)).toThrow(/unknown option 'format'/);
-      expect(fetchSpy).not.toHaveBeenCalled();
-    });
-
-    it('accepts a valid bag (output_format present) at the factory (no throw)', async () => {
-      const c = await client();
-      expect(() => c.convert('photo.png', { output_format: 'webp', quality: 80 })).not.toThrow();
+      expect(() => c.convert('photo.png', 'webp')).not.toThrow();
+      expect(() => c.convert('photo.png', 'webp', { quality: 80 })).not.toThrow();
     });
   });
 
@@ -466,20 +466,20 @@ describe('single-op builder option validation (ExVcchMz)', () => {
   // and these guards were inert (04qIcrNk).
   it('rejects single-op convert/thumbnail bad bags at compile time (uFbM31dC)', async () => {
     const c = await client();
-    // @ts-expect-error — single-op convert requires `output_format` in the bag.
+    // @ts-expect-error — the target is the second argument; a bag there is the OLD form (2IvqIS7B).
     const badConvertEmpty = (): unknown => c.convert('a.png', {});
-    // @ts-expect-error — `output_format` is required even alongside other options.
-    const badConvertNoFormat = (): unknown => c.convert('a.png', { quality: 80 });
+    // @ts-expect-error — the old bag form, with the target inside, no longer compiles.
+    const badConvertNoFormat = (): unknown => c.convert('a.png', { output_format: 'webp', quality: 80 });
     // @ts-expect-error — unknown key rejected by ConvertOptions.
-    const badConvertUnknown = (): unknown => c.convert('a.png', { output_format: 'webp', bogus: 1 });
-    // @ts-expect-error — `format` is the file-first alias, not the single-op wire key.
-    const badConvertAlias = (): unknown => c.convert('a.png', { format: 'webp' });
+    const badConvertUnknown = (): unknown => c.convert('a.png', 'webp', { bogus: 1 });
+    // @ts-expect-error — `output_format` belongs to the positional target, not the bag.
+    const badConvertAlias = (): unknown => c.convert('a.png', 'webp', { output_format: 'png' });
     // @ts-expect-error — unknown key rejected by ThumbnailOptions.
     const badThumbUnknown = (): unknown => c.thumbnail('a.png', { width: 1, height: 1, bogus: 1 });
 
     // Positive controls — these MUST compile; a regression that breaks them would
     // surface as a plain tsc error here (not an unused-`@ts-expect-error`).
-    const okConvert = (): unknown => c.convert('a.png', { output_format: 'webp', quality: 80 });
+    const okConvert = (): unknown => c.convert('a.png', 'webp', { quality: 80 });
     const okThumb = (): unknown => c.thumbnail('a.png', { width: 320, height: 240, fit: 'crop' });
     // gkxZIIuw — one or neither dimension must compile (both optional in the contract).
     const okThumbWidthOnly = (): unknown => c.thumbnail('a.png', { width: 320 });

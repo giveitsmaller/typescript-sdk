@@ -19,7 +19,7 @@ import { GislConfigError, GislFeatureRequiresAuthError, GislMissingCredentialsEr
 import { resolveApiKey, resolveEndpoint, resolveStreamEndpoint, } from './credentials.js';
 import { UploadThresholdsSingleShotMaxBytesEnum, } from '@giveitsmaller/contracts/openapi';
 import { OperationBuilder } from './builder.js';
-import { validateVerbOptions, validateSingleOpConvertOptions, assertThumbnailDimensions, } from './ergonomic/option_validation.js';
+import { validateVerbOptions, assertThumbnailDimensions, } from './ergonomic/option_validation.js';
 import { MergeBuilder, asset } from './merge.js';
 import { PresetDefaults } from './ergonomic/presets/index.js';
 import { Recipe, FilesRecipe, BatchRecipe, fileInput } from './file-first.js';
@@ -236,20 +236,30 @@ function wrapErgonomic(client, presetDefaults, scopedPresetDefaults) {
                 // its RunResult is therefore keyless (succeeded[].key === null).
                 return (id) => new Handle(id, undefined, target);
             }
-            if (prop === 'compress' || prop === 'convert' || prop === 'thumbnail' || prop === 'transform') {
+            if (prop === 'convert') {
+                // 2IvqIS7B — the target format is the second POSITIONAL argument, as on the
+                // file-first `Recipe.convert(format, options)`; it lowers to the wire key
+                // `output_format`. The bag is then validated by the SAME guard as the
+                // file-first convert, so `output_format` / `format` in the bag are rejected
+                // as positional-owned instead of silently winning or losing.
+                return (input, to, options = {}) => {
+                    if (typeof to !== 'string' || to === '') {
+                        throw new GislConfigError("convert(input, to, options?) requires the target format as its second argument; " +
+                            "e.g. gisl().convert(input, 'webp').", { reason: 'missing_required_field', conflictingFields: ['output_format'] });
+                    }
+                    validateVerbOptions('convert', options);
+                    return new OperationBuilder(target, prop, input, { ...options, output_format: to }, presetDefaults, scopedPresetDefaults);
+                };
+            }
+            if (prop === 'compress' || prop === 'thumbnail' || prop === 'transform') {
                 return (input, options = {}) => {
                     // ExVcchMz — validate the option bag pre-upload for the exported
                     // single-op builder so a bad bag (unknown key / null thumbnail dim /
                     // missing convert target) fails locally instead of as a server 422.
                     // `compress` is EXCLUDED: it validates through the preset resolver
                     // (resolveCompressOptions / KNOWN_WIRE_FIELDS), not these guards.
-                    // `convert` uses a SINGLE-OP-specific guard (NOT validateVerbOptions):
-                    // the single-op builder has no positional format, so its target rides
-                    // the bag as `output_format` — which the file-first convert guard would
-                    // reject as positional-owned. `thumbnail` reuses the file-first guards
-                    // (it has no positional-owned keys).
-                    if (prop === 'convert')
-                        validateSingleOpConvertOptions(options);
+                    // `convert` has its own branch above (positional target). `thumbnail`
+                    // reuses the file-first guards (it has no positional-owned keys).
                     if (prop === 'thumbnail') {
                         // Shape first: a string/array bag would otherwise surface as a bogus unknown_field.
                         assertThumbnailDimensions(options);

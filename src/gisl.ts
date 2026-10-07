@@ -40,7 +40,6 @@ import {
 import { OperationBuilder } from './builder.js';
 import {
   validateVerbOptions,
-  validateSingleOpConvertOptions,
   assertThumbnailDimensions,
 } from './ergonomic/option_validation.js';
 import type { CompressOptions, ConvertOptions, ThumbnailOptions, TransformOptions } from './ergonomic/option_types.js';
@@ -328,19 +327,40 @@ function wrapErgonomic(
         // its RunResult is therefore keyless (succeeded[].key === null).
         return (id: string): Handle => new Handle(id, undefined, target);
       }
-      if (prop === 'compress' || prop === 'convert' || prop === 'thumbnail' || prop === 'transform') {
+      if (prop === 'convert') {
+        // 2IvqIS7B — the target format is the second POSITIONAL argument, as on the
+        // file-first `Recipe.convert(format, options)`; it lowers to the wire key
+        // `output_format`. The bag is then validated by the SAME guard as the
+        // file-first convert, so `output_format` / `format` in the bag are rejected
+        // as positional-owned instead of silently winning or losing.
+        return (input: string | Blob, to: unknown, options: Record<string, unknown> = {}): OperationBuilder => {
+          if (typeof to !== 'string' || to === '') {
+            throw new GislConfigError(
+              "convert(input, to, options?) requires the target format as its second argument; " +
+                "e.g. gisl().convert(input, 'webp').",
+              { reason: 'missing_required_field', conflictingFields: ['output_format'] },
+            );
+          }
+          validateVerbOptions('convert', options);
+          return new OperationBuilder(
+            target,
+            prop,
+            input,
+            { ...options, output_format: to },
+            presetDefaults,
+            scopedPresetDefaults,
+          );
+        };
+      }
+      if (prop === 'compress' || prop === 'thumbnail' || prop === 'transform') {
         return (input: string | Blob, options: Record<string, unknown> = {}): OperationBuilder => {
           // ExVcchMz — validate the option bag pre-upload for the exported
           // single-op builder so a bad bag (unknown key / null thumbnail dim /
           // missing convert target) fails locally instead of as a server 422.
           // `compress` is EXCLUDED: it validates through the preset resolver
           // (resolveCompressOptions / KNOWN_WIRE_FIELDS), not these guards.
-          // `convert` uses a SINGLE-OP-specific guard (NOT validateVerbOptions):
-          // the single-op builder has no positional format, so its target rides
-          // the bag as `output_format` — which the file-first convert guard would
-          // reject as positional-owned. `thumbnail` reuses the file-first guards
-          // (it has no positional-owned keys).
-          if (prop === 'convert') validateSingleOpConvertOptions(options);
+          // `convert` has its own branch above (positional target). `thumbnail`
+          // reuses the file-first guards (it has no positional-owned keys).
           if (prop === 'thumbnail') {
             // Shape first: a string/array bag would otherwise surface as a bogus unknown_field.
             assertThumbnailDimensions(options);
@@ -583,15 +603,15 @@ export type ErgonomicClient = GislClient & {
    */
   compress(input: string | Blob, options?: CompressOptions): OperationBuilder;
   /**
-   * Single-op convert. The target format rides the bag as the required
-   * `output_format` (the single-op builder has no positional format — that is
-   * the file-first `Recipe.convert(format, …)` surface). Extra keys are the
-   * typed {@link ConvertOptions}. A missing `output_format` is a compile-time
-   * error (uFbM31dC); an unknown key is a compile-time error for an INLINE bag
-   * only — aliased bags bypass TS excess-property checks — so the runtime guard
-   * remains the backstop (also for untyped JS callers).
+   * Single-op convert to the target format `to` (e.g. `'webp'`, `'mp4'`, `'pdf'`),
+   * the same shape as the file-first `Recipe.convert(format, options)`. Extra keys
+   * are the typed {@link ConvertOptions}; `output_format` / `format` in the bag are
+   * rejected (the target is the second argument). An unknown key is a compile-time
+   * error for an INLINE bag only — aliased bags bypass TS excess-property checks —
+   * so the runtime guard remains the backstop (also for untyped JS callers).
+   * BREAKING in 2IvqIS7B: was `convert(input, { output_format, ...options })`.
    */
-  convert(input: string | Blob, options: ConvertOptions & { output_format: string }): OperationBuilder;
+  convert(input: string | Blob, to: string, options?: ConvertOptions): OperationBuilder;
   /**
    * Single-op thumbnail. {@link ThumbnailOptions} makes `width` and `height`
    * optional, as the contract does: give one and the server derives the other

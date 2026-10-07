@@ -513,7 +513,7 @@ describe('output() — eager key validation', () => {
 
   it('rejects a bag-supplied output_format (owned by the positional arg)', () => {
     expect(() => new Recipe(fileInput.path('a.jpg')).output('jpeg', { output_format: 'webp' } as never)).toThrow(
-      /output format via its first argument|output_format/,
+      /output format as an argument|output_format/,
     );
   });
 });
