@@ -542,7 +542,15 @@ describe('streaming upload (string-path branch)', () => {
       expect((err as GislApiError).statusCode).toBe(422);
     });
 
-    it('422 upload_duration_exceeds_tier with non-enum current_tier -> base GislApiError', async () => {
+    // 82hI8dcQ — REVERSED. This used to assert the opposite (an unknown tier fell
+    // through to a bare GislApiError) under the "malformed envelope" rationale
+    // above. An unknown tier is not malformed: the envelope is complete and
+    // interpretable, it names a tier this SDK version does not know yet (the
+    // free -> basic rename showed the window is real). Dropping the typed error
+    // there made dispatch differ from PHP, silently. A MISSING field still falls
+    // through (the test above, unchanged). The sentinel is permanently unknown,
+    // so this test cannot start passing by accident after a re-vendor.
+    it('422 upload_duration_exceeds_tier with an unknown current_tier keeps the typed error and the raw tier', async () => {
       installFakeFile(2 * 1024 * 1024, 16 * 1024 * 1024);
       fetchSpy.mockResolvedValueOnce(
         jsonResponse(
@@ -550,8 +558,54 @@ describe('streaming upload (string-path branch)', () => {
             success: false,
             error: 'Too long',
             error_type: 'upload_duration_exceeds_tier',
-            current_tier: 'not_a_real_tier', // fails the UserTier enum check
+            current_tier: 'not_a_real_tier',
             max_duration_seconds: 300,
+          },
+          422,
+        ),
+      );
+
+      const err = await client
+        .uploadFile('/tmp/x.bin')
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(GislUploadCapExceededError);
+      expect((err as GislUploadCapExceededError).kind).toBe('duration_tier');
+      expect((err as GislUploadCapExceededError).payload?.currentTier).toBe('not_a_real_tier');
+    });
+
+    it('422 upload_size_exceeds_tier with an unknown current_tier keeps the typed error and the raw tier', async () => {
+      installFakeFile(2 * 1024 * 1024, 16 * 1024 * 1024);
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'Too big',
+            error_type: 'upload_size_exceeds_tier',
+            current_tier: 'not_a_real_tier',
+            max_size_bytes: 1048576,
+          },
+          422,
+        ),
+      );
+
+      const err = await client
+        .uploadFile('/tmp/x.bin')
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(GislUploadCapExceededError);
+      expect((err as GislUploadCapExceededError).kind).toBe('size_tier');
+      expect((err as GislUploadCapExceededError).payload?.currentTier).toBe('not_a_real_tier');
+    });
+
+    it('422 upload_size_exceeds_tier with a NON-STRING current_tier still falls through to base GislApiError', async () => {
+      installFakeFile(2 * 1024 * 1024, 16 * 1024 * 1024);
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'Too big',
+            error_type: 'upload_size_exceeds_tier',
+            current_tier: 42,
+            max_size_bytes: 1048576,
           },
           422,
         ),

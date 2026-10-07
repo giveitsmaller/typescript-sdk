@@ -10,6 +10,7 @@ import type {
   TierRestrictionResponse,
   UploadDurationExceedsTierResponse,
   UploadSizeExceedsTierResponse,
+  UserTier,
   WorkflowExpiredResponse,
 } from '@giveitsmaller/contracts/openapi';
 // W8v4jWzx — the generated error-taxonomy registry stays INTERNAL to this
@@ -322,13 +323,27 @@ export class GislLongFormConcurrencyError extends GislApiError {
   }
 }
 
+/**
+ * A tier as the server sent it: a {@link UserTier} this SDK knows, or a tier it
+ * does not know yet (a rename or a new tier, before this SDK re-vendors). The
+ * typed tier errors keep the raw value instead of dropping to a bare
+ * `GislApiError` (82hI8dcQ). Compare against `UserTier` members; treat any other
+ * string as "a tier this SDK version does not recognise".
+ */
+export type GislTierValue = UserTier | (string & {});
+
+/** A generated tier envelope whose `currentTier` may be a tier this SDK does not know yet. */
+export type WithOpenTier<T extends { currentTier: UserTier }> = Omit<T, 'currentTier'> & {
+  currentTier: GislTierValue;
+};
+
 export class GislTierRestrictedError extends GislApiError {
-  declare readonly payload: TierRestrictionResponse;
+  declare readonly payload: WithOpenTier<TierRestrictionResponse>;
 
   constructor(
     statusCode: number,
     errorMessage: string,
-    payload: TierRestrictionResponse,
+    payload: WithOpenTier<TierRestrictionResponse>,
     path?: string,
     extra?: Omit<GislApiErrorOptions, 'payload'>,
   ) {
@@ -516,8 +531,8 @@ export type GislUploadCapKind =
 export class GislUploadCapExceededError extends GislApiError {
   readonly kind: GislUploadCapKind;
   declare readonly payload:
-    | UploadSizeExceedsTierResponse
-    | UploadDurationExceedsTierResponse
+    | WithOpenTier<UploadSizeExceedsTierResponse>
+    | WithOpenTier<UploadDurationExceedsTierResponse>
     | undefined;
 
   constructor(
@@ -525,8 +540,8 @@ export class GislUploadCapExceededError extends GislApiError {
     errorMessage: string,
     kind: GislUploadCapKind,
     payload:
-      | UploadSizeExceedsTierResponse
-      | UploadDurationExceedsTierResponse
+      | WithOpenTier<UploadSizeExceedsTierResponse>
+      | WithOpenTier<UploadDurationExceedsTierResponse>
       | undefined,
     path?: string,
     extra?: Omit<GislApiErrorOptions, 'payload'>,

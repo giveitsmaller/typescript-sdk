@@ -69,7 +69,7 @@ export {
 } from './types.js';
 
 // T4b — typed error metadata interface for GislConfigError.
-export type { GislConfigErrorMetadata } from './errors.js';
+export type { GislConfigErrorMetadata, GislTierValue, WithOpenTier } from './errors.js';
 
 // Errors
 export {

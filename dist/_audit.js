@@ -230,6 +230,8 @@ export function _runAudit() {
     accept();
     accept();
     accept();
+    accept();
+    accept();
     // FF1 / 3BIxEnfR — file-first result surface + sink errors.
     accept();
     accept();

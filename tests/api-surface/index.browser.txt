@@ -176,6 +176,7 @@ GislSseEvent	type
 GislSseParseFailure	type
 GislStreamHostNotDeclaredError	value+type
 GislTierRestrictedError	value+type
+GislTierValue	type
 GislTimeoutError	value+type
 GislTransportError	value+type
 GislUndeclaredAssetError	value+type
@@ -372,6 +373,7 @@ WatermarkOverlay	type
 WatermarkWireOp	type
 WebhookOperationContext	type
 WebhookPayload	type
+WithOpenTier	type
 WorkflowArchiveResponse	type
 WorkflowCancelBillingEffect	value
 WorkflowCancelResponse	type

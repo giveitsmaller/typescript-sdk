@@ -4,7 +4,7 @@
 // blobByteSource, which never touches these). Kept as a STATIC import (not a
 // dynamic one) so `vi.mock('node:fs/promises')` still intercepts it in tests.
 import { open, stat, basename } from './node-fs.js';
-import { AudioWatermarkDecodeRequestToJSON, AudioWatermarkDecodeResponseFromJSON, ExternalImportCreatedResponseFromJSON, ExternalImportRequestToJSON, LoginUser200ResponseDataFromJSON, AccountLimitsFromJSON, GetProfile200ResponseDataFromJSON, CreditsBalanceResponseFromJSON, BillingCheckoutRequestToJSON, BillingCheckoutSessionFromJSON, CheckoutSessionStatusResponseDataStatusEnum, CreditsUsageResponseFromJSON, UploadResponseFromJSON, UploadProbeResponseFromJSON, MultipartInitiateResponseFromJSON, MultipartInitiateRequestMetadataHintToJSON, MultipartCompleteResponseFromJSON, MultipartCompleteRequestToJSON, WorkflowCancelResponseFromJSON, WorkflowArchiveResponseFromJSON, WorkflowRestoreResponseFromJSON, WorkflowCreateResponseFromJSON, WorkflowResumeResponseFromJSON, WorkflowStatusResponseFromJSON, WorkflowListResponseFromJSON, WorkflowDownloadResponseFromJSON, MetadataResponseFromJSON, OperationsSchemaResponseFromJSON, RetryResponseFromJSON, WorkflowStatus, AuthErrorResponseFromJSON, AuthErrorType, AuthRejectionEnvelopeFromJSON, AuthRejectionEnvelopeErrorTypeEnum, BalanceExhaustedResponseFromJSON, BalanceExhaustedResponseRequiredActionEnum, FeatureNotAvailableResponseFromJSON, FeatureTierRestrictedResponseFromJSON, LongFormConcurrencyLimitResponseFromJSON, TierRestrictionKind, TierRestrictionResponseFromJSON, UserTier, WorkflowExpiredResponseFromJSON, ProbePendingResponseFromJSON, UploadSizeExceedsTierResponseFromJSON, UploadDurationExceedsTierResponseFromJSON, UploadConstraintsAppliedProcessingClassPreAssignmentEnum, UploadThresholdsSingleShotMaxBytesEnum, UploadThresholdsMultipartChunkSizeEnum, UploadThresholdsMultipartConcurrencyDefaultEnum, } from '@giveitsmaller/contracts/openapi';
+import { AudioWatermarkDecodeRequestToJSON, AudioWatermarkDecodeResponseFromJSON, ExternalImportCreatedResponseFromJSON, ExternalImportRequestToJSON, LoginUser200ResponseDataFromJSON, AccountLimitsFromJSON, GetProfile200ResponseDataFromJSON, CreditsBalanceResponseFromJSON, BillingCheckoutRequestToJSON, BillingCheckoutSessionFromJSON, CheckoutSessionStatusResponseDataStatusEnum, CreditsUsageResponseFromJSON, UploadResponseFromJSON, UploadProbeResponseFromJSON, MultipartInitiateResponseFromJSON, MultipartInitiateRequestMetadataHintToJSON, MultipartCompleteResponseFromJSON, MultipartCompleteRequestToJSON, WorkflowCancelResponseFromJSON, WorkflowArchiveResponseFromJSON, WorkflowRestoreResponseFromJSON, WorkflowCreateResponseFromJSON, WorkflowResumeResponseFromJSON, WorkflowStatusResponseFromJSON, WorkflowListResponseFromJSON, WorkflowDownloadResponseFromJSON, MetadataResponseFromJSON, OperationsSchemaResponseFromJSON, RetryResponseFromJSON, WorkflowStatus, AuthErrorResponseFromJSON, AuthErrorType, AuthRejectionEnvelopeFromJSON, AuthRejectionEnvelopeErrorTypeEnum, BalanceExhaustedResponseFromJSON, BalanceExhaustedResponseRequiredActionEnum, FeatureNotAvailableResponseFromJSON, FeatureTierRestrictedResponseFromJSON, LongFormConcurrencyLimitResponseFromJSON, TierRestrictionKind, TierRestrictionResponseFromJSON, WorkflowExpiredResponseFromJSON, ProbePendingResponseFromJSON, UploadSizeExceedsTierResponseFromJSON, UploadDurationExceedsTierResponseFromJSON, UploadConstraintsAppliedProcessingClassPreAssignmentEnum, UploadThresholdsSingleShotMaxBytesEnum, UploadThresholdsMultipartChunkSizeEnum, UploadThresholdsMultipartConcurrencyDefaultEnum, } from '@giveitsmaller/contracts/openapi';
 import { GislAbortError, GislApiError, GislAuthError, GislAuthRejectionError, GislBalanceExhaustedError, GislConfigError, GislError, GislFeatureNotAvailableError, GislFeatureTierRestrictedError, GislLongFormConcurrencyError, GislMultipartPartCountError, GislMultipartPartError, GislMultipartSessionNotFoundError, GislUnsupportedFileTypeError, GislMultipartSessionOwnershipError, GislMultipartSessionAuthRequiredError, GislTierRestrictedError, GislTimeoutError, GislProbePendingError, GislResponseContractError, GislStreamHostNotDeclaredError, GislUploadCapExceededError, GislValidationError, GislWorkflowExpiredError, } from './errors.js';
 // Stream-host vocabulary for the fail-closed `streamEvents` guard. The
 // resolver itself runs in `gisl.create()`; the client only reports what a
@@ -758,6 +758,12 @@ export class GislClient {
                 }
             }
             const isInEnum = (value, members) => typeof value === 'string' && Object.values(members).includes(value);
+            // 82hI8dcQ: a tier is checked for being a STRING, not for being a member
+            // this SDK version knows. An unknown tier (a renamed or newly added one,
+            // before this SDK re-vendors) is still a fully interpretable envelope, so
+            // it keeps its typed error; the raw value stays on the payload. A MISSING
+            // or non-string tier still falls through, as does every other malformed field.
+            const isTierValue = (value) => typeof value === 'string' && value !== '';
             const isFeatureViolation = (v) => typeof v === 'object' && v !== null
                 && typeof v.feature === 'string';
             if (status === 402 && errorType === 'balance_exhausted') {
@@ -765,7 +771,7 @@ export class GislClient {
             }
             if (status === 403 && errorType === 'tier_restriction') {
                 tryThrowStructured(TierRestrictionResponseFromJSON, GislTierRestrictedError, (p) => isInEnum(p.restrictionKind, TierRestrictionKind)
-                    && isInEnum(p.currentTier, UserTier));
+                    && isTierValue(p.currentTier));
             }
             if (status === 403 && errorType === 'feature_tier_restricted') {
                 tryThrowStructured(FeatureTierRestrictedResponseFromJSON, GislFeatureTierRestrictedError, (p) => Array.isArray(p.violations) && p.violations.every(isFeatureViolation));
@@ -811,11 +817,11 @@ export class GislClient {
                 throw new GislUploadCapExceededError(status, errorMessage, kind, payload, path, i18n);
             };
             if (status === 422 && errorType === 'upload_size_exceeds_tier') {
-                tryThrowCap(UploadSizeExceedsTierResponseFromJSON, 'size_tier', (p) => isInEnum(p.currentTier, UserTier) &&
+                tryThrowCap(UploadSizeExceedsTierResponseFromJSON, 'size_tier', (p) => isTierValue(p.currentTier) &&
                     typeof p.maxSizeBytes === 'number');
             }
             if (status === 422 && errorType === 'upload_duration_exceeds_tier') {
-                tryThrowCap(UploadDurationExceedsTierResponseFromJSON, 'duration_tier', (p) => isInEnum(p.currentTier, UserTier) &&
+                tryThrowCap(UploadDurationExceedsTierResponseFromJSON, 'duration_tier', (p) => isTierValue(p.currentTier) &&
                     typeof p.maxDurationSeconds === 'number');
             }
             // Long-form concurrency limit (429) — a TIER quota, DISTINCT from a

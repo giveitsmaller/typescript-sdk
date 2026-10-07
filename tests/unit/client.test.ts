@@ -6,6 +6,7 @@ import {
 } from '../../src/client.js';
 import { externalImportSource, uploadSource } from '../../src/types.js';
 import type { GislSseEvent } from '../../src/types.js';
+import type { UserTier } from '@giveitsmaller/contracts/openapi';
 import {
   GislAbortError,
   GislApiError,
@@ -3645,8 +3646,8 @@ describe('GislClient', () => {
     // and warns that code handling `free` and not `basic` "will silently take
     // a different branch the day the producer switches".
     //
-    // Acceptance runs through `isInEnum(p.currentTier, UserTier)`, so `basic`
-    // is tolerated automatically — and NOTHING ASSERTED IT. Every tier fixture
+    // Acceptance once ran through `isInEnum(p.currentTier, UserTier)` (now any
+    // non-empty string, 82hI8dcQ), so `basic` was tolerated automatically — and NOTHING ASSERTED IT. Every tier fixture
     // in this suite used 'free', so the day the producer switches, a typed
     // error would silently degrade to a bare GislApiError and no test would
     // notice. Automatic tolerance is not the same as demonstrated tolerance.
@@ -3676,9 +3677,11 @@ describe('GislClient', () => {
       }
     });
 
-    it('403 tier_restriction with an UNKNOWN tier degrades to a bare GislApiError', async () => {
-      // The negative control for the above. Without it, a validator that
-      // accepted anything would pass the `basic` test for the wrong reason.
+    it('403 tier_restriction with an UNKNOWN tier keeps the TYPED error and the raw tier (82hI8dcQ)', async () => {
+      // REVERSED by 82hI8dcQ: this used to assert an unknown tier degraded to a bare
+      // GislApiError. An unknown tier is a complete envelope naming a tier this SDK
+      // does not know yet; it keeps its typed error, as PHP always did. The
+      // negative control for the `basic` test above is now the non-string case below.
       fetchSpy.mockResolvedValueOnce(
         jsonResponse(
           {
@@ -3686,7 +3689,33 @@ describe('GislClient', () => {
             error: 'File too large for tier',
             error_type: 'tier_restriction',
             restriction_kind: 'file_size',
-            current_tier: 'platinum',
+            current_tier: 'not_a_real_tier',
+            required_tier: 'pro',
+          },
+          403,
+        ),
+      );
+
+      try {
+        await client.getWorkflowStatus('wf-1');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GislTierRestrictedError);
+        expect((err as GislTierRestrictedError).payload.currentTier).toBe('not_a_real_tier');
+      }
+    });
+
+    it('403 tier_restriction with a NON-STRING tier degrades to a bare GislApiError', async () => {
+      // The negative control: a validator that accepted anything would pass the
+      // `basic` and unknown-tier tests for the wrong reason.
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'File too large for tier',
+            error_type: 'tier_restriction',
+            restriction_kind: 'file_size',
+            current_tier: null,
             required_tier: 'pro',
           },
           403,
@@ -3700,6 +3729,15 @@ describe('GislClient', () => {
         expect(err).not.toBeInstanceOf(GislTierRestrictedError);
         expect(err).toBeInstanceOf(GislApiError);
       }
+    });
+
+    it('the typed tier payload exposes currentTier as GislTierValue, not UserTier (compile-time)', () => {
+      const payload = {} as GislTierRestrictedError['payload'];
+      const asString: string = payload.currentTier;
+      // @ts-expect-error — an unknown tier is representable, so it is NOT a UserTier.
+      const asUserTier: UserTier = payload.currentTier;
+      void asString;
+      void asUserTier;
     });
 
     it('403 feature_tier_restricted → GislFeatureTierRestrictedError with violations[]', async () => {

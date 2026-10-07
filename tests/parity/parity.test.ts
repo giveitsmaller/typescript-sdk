@@ -71,9 +71,7 @@ const KNOWN_DIVERGENCES: Record<string, string> = {
 // any other shape is not masked. PHP runs these fixtures unpinned and passes.
 const KNOWN_FAILING: Record<string, { reason: string; failsWith: RegExp }> = Object.fromEntries(
   [
-    'error_403_tier_restriction_unknown_tier',
-    'error_422_upload_size_exceeds_tier_unknown_tier',
-    'error_422_upload_duration_exceeds_tier_unknown_tier',
+    // 82hI8dcQ closed the unknown-tier divergence; its three entries were deleted here.
   ].map((name) => [
     name,
     {

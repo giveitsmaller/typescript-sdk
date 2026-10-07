@@ -1,4 +1,4 @@
-import type { AuthErrorResponse, AuthRejectionEnvelope, AuthRejectionEnvelopeErrorTypeEnum, BalanceExhaustedResponse, FeatureNotAvailableResponse, FeatureTierRestrictedResponse, LongFormConcurrencyLimitResponse, ProbePendingResponse, TierRestrictionResponse, UploadDurationExceedsTierResponse, UploadSizeExceedsTierResponse, WorkflowExpiredResponse } from '@giveitsmaller/contracts/openapi';
+import type { AuthErrorResponse, AuthRejectionEnvelope, AuthRejectionEnvelopeErrorTypeEnum, BalanceExhaustedResponse, FeatureNotAvailableResponse, FeatureTierRestrictedResponse, LongFormConcurrencyLimitResponse, ProbePendingResponse, TierRestrictionResponse, UploadDurationExceedsTierResponse, UploadSizeExceedsTierResponse, UserTier, WorkflowExpiredResponse } from '@giveitsmaller/contracts/openapi';
 import type { ErrorCategory } from './generated/sdk_spec/errors.js';
 import type { RateLimitSnapshot } from './retry-metadata.js';
 export declare class GislError extends Error {
@@ -177,9 +177,23 @@ export declare class GislLongFormConcurrencyError extends GislApiError {
     /** The pricing / upgrade deep link (`links.upgrade`), or `undefined` when absent. */
     get upgradeUrl(): string | undefined;
 }
+/**
+ * A tier as the server sent it: a {@link UserTier} this SDK knows, or a tier it
+ * does not know yet (a rename or a new tier, before this SDK re-vendors). The
+ * typed tier errors keep the raw value instead of dropping to a bare
+ * `GislApiError` (82hI8dcQ). Compare against `UserTier` members; treat any other
+ * string as "a tier this SDK version does not recognise".
+ */
+export type GislTierValue = UserTier | (string & {});
+/** A generated tier envelope whose `currentTier` may be a tier this SDK does not know yet. */
+export type WithOpenTier<T extends {
+    currentTier: UserTier;
+}> = Omit<T, 'currentTier'> & {
+    currentTier: GislTierValue;
+};
 export declare class GislTierRestrictedError extends GislApiError {
-    readonly payload: TierRestrictionResponse;
-    constructor(statusCode: number, errorMessage: string, payload: TierRestrictionResponse, path?: string, extra?: Omit<GislApiErrorOptions, 'payload'>);
+    readonly payload: WithOpenTier<TierRestrictionResponse>;
+    constructor(statusCode: number, errorMessage: string, payload: WithOpenTier<TierRestrictionResponse>, path?: string, extra?: Omit<GislApiErrorOptions, 'payload'>);
 }
 export declare class GislFeatureTierRestrictedError extends GislApiError {
     readonly payload: FeatureTierRestrictedResponse;
@@ -287,8 +301,8 @@ export type GislUploadCapKind = 'size_tier' | 'duration_tier' | 'absolute_413' |
  */
 export declare class GislUploadCapExceededError extends GislApiError {
     readonly kind: GislUploadCapKind;
-    readonly payload: UploadSizeExceedsTierResponse | UploadDurationExceedsTierResponse | undefined;
-    constructor(statusCode: number, errorMessage: string, kind: GislUploadCapKind, payload: UploadSizeExceedsTierResponse | UploadDurationExceedsTierResponse | undefined, path?: string, extra?: Omit<GislApiErrorOptions, 'payload'>);
+    readonly payload: WithOpenTier<UploadSizeExceedsTierResponse> | WithOpenTier<UploadDurationExceedsTierResponse> | undefined;
+    constructor(statusCode: number, errorMessage: string, kind: GislUploadCapKind, payload: WithOpenTier<UploadSizeExceedsTierResponse> | WithOpenTier<UploadDurationExceedsTierResponse> | undefined, path?: string, extra?: Omit<GislApiErrorOptions, 'payload'>);
 }
 /**
  * 404 `MULTIPART_SESSION_NOT_FOUND` — the durable multipart session referenced

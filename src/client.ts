@@ -47,7 +47,6 @@ import {
   LongFormConcurrencyLimitResponseFromJSON,
   TierRestrictionKind,
   TierRestrictionResponseFromJSON,
-  UserTier,
   WorkflowExpiredResponseFromJSON,
   ProbePendingResponseFromJSON,
   UploadSizeExceedsTierResponseFromJSON,
@@ -1111,6 +1110,13 @@ export class GislClient {
       const isInEnum = (value: unknown, members: Readonly<Record<string, string>>): boolean =>
         typeof value === 'string' && Object.values(members).includes(value);
 
+      // 82hI8dcQ: a tier is checked for being a STRING, not for being a member
+      // this SDK version knows. An unknown tier (a renamed or newly added one,
+      // before this SDK re-vendors) is still a fully interpretable envelope, so
+      // it keeps its typed error; the raw value stays on the payload. A MISSING
+      // or non-string tier still falls through, as does every other malformed field.
+      const isTierValue = (value: unknown): boolean => typeof value === 'string' && value !== '';
+
       const isFeatureViolation = (v: unknown): boolean =>
         typeof v === 'object' && v !== null
           && typeof (v as { feature?: unknown }).feature === 'string';
@@ -1128,7 +1134,7 @@ export class GislClient {
           TierRestrictionResponseFromJSON,
           GislTierRestrictedError,
           (p) => isInEnum(p.restrictionKind, TierRestrictionKind)
-            && isInEnum(p.currentTier, UserTier),
+            && isTierValue(p.currentTier),
         );
       }
 
@@ -1213,7 +1219,7 @@ export class GislClient {
           UploadSizeExceedsTierResponseFromJSON,
           'size_tier',
           (p) =>
-            isInEnum(p.currentTier, UserTier) &&
+            isTierValue(p.currentTier) &&
             typeof p.maxSizeBytes === 'number',
         );
       }
@@ -1223,7 +1229,7 @@ export class GislClient {
           UploadDurationExceedsTierResponseFromJSON,
           'duration_tier',
           (p) =>
-            isInEnum(p.currentTier, UserTier) &&
+            isTierValue(p.currentTier) &&
             typeof p.maxDurationSeconds === 'number',
         );
       }

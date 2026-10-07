@@ -196,6 +196,9 @@ import type {
   AudioSampleRate,
   // T4b / 27rE1fZn — resolver public surface + augmented GislConfigError metadata.
   GislConfigErrorMetadata,
+  // 82hI8dcQ — a tier value this SDK may not know yet, on the typed tier errors.
+  GislTierValue,
+  WithOpenTier,
   ResolvedOptionsSources,
   ResolveCompressOptionsInput,
   ResolveCompressOptionsOutput,
@@ -526,6 +529,8 @@ export function _runAudit(): void {
   accept<AudioSampleRate>();
   // T4b / 27rE1fZn — preset resolver public types.
   accept<GislConfigErrorMetadata>();
+  accept<GislTierValue>();
+  accept<WithOpenTier<TierRestrictionResponse>>();
   accept<ResolvedOptionsSources>();
   accept<ResolveCompressOptionsInput>();
   accept<ResolveCompressOptionsOutput>();
