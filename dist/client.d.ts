@@ -1,6 +1,6 @@
 import type { AudioWatermarkDecodeRequest, AudioWatermarkDecodeResponse, ExternalImportCreatedResponse, ExternalImportRequest, LoginUserRequest, LoginUser200ResponseData, ContactRequest, BillingCheckoutRequest, BillingCheckoutSession, CheckoutSessionStatusResponseData, AccountLimits, AuthenticatedIdentity, CreditsBalanceResponse, LivenessResponse, CreditsUsageResponse, UploadResponse, UploadProbeResponse, WorkflowCancelResponse, WorkflowArchiveResponse, WorkflowRestoreResponse, WorkflowCreateResponse, WorkflowResumeResponse, WorkflowStatusResponse, WorkflowListResponse, WorkflowSummary, WorkflowDownloadResponse, MetadataResponse, RetryResponse } from '@giveitsmaller/contracts/openapi';
 import { type CreateAwaitingProbeOptions } from './probe-pending.js';
-import type { CreditsUsageOptions, ListWorkflowsOptions, GetSchemaOptions, GetSchemaResult, GislClientConfig, GislSseEvent, GislSseParseFailure, PreflightClipsResult, ProbeWaitOptions, ProbeWaitResult, ReadCapabilityOptions, UploadOptions, WaitOptions, WorkflowCreatePayload, _Sdk3HandCodedKeepaliveResult, _Sdk3HandCodedMultipartStatusResult, _Sdk3HandCodedPresignPartsResult } from './types.js';
+import type { CreditsUsageOptions, ListWorkflowsOptions, GetSchemaOptions, GetSchemaResult, GislClientConfig, GislSseEvent, GislSseParseFailure, PreflightClipsResult, ProbeWaitOptions, ProbeWaitResult, ReadCapabilityOptions, UploadOptions, WaitOptions, WorkflowCreatePayload, _Sdk3HandCodedKeepaliveResult, MultipartUploadState, _Sdk3HandCodedPresignPartsResult } from './types.js';
 export declare const MULTIPART_CONCURRENCY_DEFAULT: 4;
 export declare const DEFAULT_MULTIPART_FIRST_CHUNK_SIZE: number;
 /**
@@ -108,7 +108,7 @@ export declare class GislClient {
      */
     getUploadStatus(uploadId: string, opts?: {
         signal?: AbortSignal;
-    }): Promise<_Sdk3HandCodedMultipartStatusResult>;
+    }): Promise<MultipartUploadState>;
     /**
      * Re-presign a batch of missing part numbers on an in-progress multipart
      * session.
@@ -145,7 +145,7 @@ export declare class GislClient {
     }): Promise<_Sdk3HandCodedKeepaliveResult>;
     /**
      * Private walk-pagination helper for /status. Aggregates every page into
-     * a single `_Sdk3HandCodedMultipartStatusResult`. AbortSignal short-circuits
+     * a single `MultipartUploadState`. AbortSignal short-circuits
      * the loop between page fetches AND propagates into each fetch.
      *
      * Limit pinned to 1000 (max per page) so we make the minimum number of

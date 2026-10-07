@@ -152,7 +152,7 @@ import type {
   WaitOptions,
   WorkflowCreatePayload,
   _Sdk3HandCodedKeepaliveResult,
-  _Sdk3HandCodedMultipartStatusResult,
+  MultipartUploadState,
   _Sdk3HandCodedPresignPartsResult,
   _Sdk3HandCodedPresignedPart,
   _Sdk3HandCodedUploadedPart,
@@ -2276,7 +2276,7 @@ export class GislClient {
   async getUploadStatus(
     uploadId: string,
     opts: { signal?: AbortSignal } = {},
-  ): Promise<_Sdk3HandCodedMultipartStatusResult> {
+  ): Promise<MultipartUploadState> {
     if (typeof uploadId !== 'string' || uploadId === '') {
       throw new GislError('getUploadStatus: uploadId must be a non-empty string.');
     }
@@ -2429,7 +2429,7 @@ export class GislClient {
 
   /**
    * Private walk-pagination helper for /status. Aggregates every page into
-   * a single `_Sdk3HandCodedMultipartStatusResult`. AbortSignal short-circuits
+   * a single `MultipartUploadState`. AbortSignal short-circuits
    * the loop between page fetches AND propagates into each fetch.
    *
    * Limit pinned to 1000 (max per page) so we make the minimum number of
@@ -2438,7 +2438,7 @@ export class GislClient {
   private async walkUploadStatus(
     uploadId: string,
     opts: { signal?: AbortSignal },
-  ): Promise<_Sdk3HandCodedMultipartStatusResult> {
+  ): Promise<MultipartUploadState> {
     const PAGE_LIMIT = 1000;
     // Slow-path DoS guard (code-reviewer minor 6). The cursor-advance check
     // already prevents an infinite loop; this cap additionally prevents a

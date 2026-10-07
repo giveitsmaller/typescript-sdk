@@ -241,6 +241,11 @@ MultiInputSourcePayload	type
 MultiOutputCompletion	type
 MultipartCheckpointState	type
 MultipartInitiateRequestMetadataHint	type
+MultipartKeepaliveResponse	type
+MultipartPartListing	type
+MultipartPresignResponse	type
+MultipartStatusResponse	type
+MultipartUploadState	type
 OperationBreakdown	type
 OperationBuilder	value+type
 OperationCapability	type
@@ -273,6 +278,7 @@ presetDefaults	value
 PresetDefaults	value+type
 PresetMedia	type
 PresetOp	type
+PresignedUrlPart	type
 ProbePendingResponse	type
 ProbeWaitOptions	type
 ProbeWaitResult	type

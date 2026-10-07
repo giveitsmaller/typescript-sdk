@@ -1725,7 +1725,7 @@ export class GislClient {
     }
     /**
      * Private walk-pagination helper for /status. Aggregates every page into
-     * a single `_Sdk3HandCodedMultipartStatusResult`. AbortSignal short-circuits
+     * a single `MultipartUploadState`. AbortSignal short-circuits
      * the loop between page fetches AND propagates into each fetch.
      *
      * Limit pinned to 1000 (max per page) so we make the minimum number of

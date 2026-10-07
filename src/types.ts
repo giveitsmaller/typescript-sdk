@@ -813,6 +813,8 @@ export interface MultipartCheckpointState {
  * walk-pagination loop.
  *
  * TODO(HxUmVr3Y): replace hand-coded shape on regen.
+ *
+ * @deprecated iqR0V1mt — removed in the next minor. `getUploadStatus()` / `presignParts()` / `keepaliveUpload()` will then use the generated contract types (`MultipartPartListing`, `PresignedUrlPart`, `MultipartKeepaliveResponse`, re-exported from this package), whose timestamps are `Date`, not ISO strings; `getUploadStatus()` returns {@link MultipartUploadState} (never `MultipartStatusResponse`, which is one page).
  */
 export interface _Sdk3HandCodedUploadedPart {
   readonly partNumber: number;
@@ -831,6 +833,8 @@ export interface _Sdk3HandCodedUploadedPart {
  * needing to drive the pagination cursor themselves.
  *
  * TODO(HxUmVr3Y): replace hand-coded shape on regen.
+ *
+ * @deprecated iqR0V1mt — removed in the next minor. `getUploadStatus()` / `presignParts()` / `keepaliveUpload()` will then use the generated contract types (`MultipartPartListing`, `PresignedUrlPart`, `MultipartKeepaliveResponse`, re-exported from this package), whose timestamps are `Date`, not ISO strings; `getUploadStatus()` returns {@link MultipartUploadState} (never `MultipartStatusResponse`, which is one page).
  */
 export interface _Sdk3HandCodedMultipartStatusResult {
   readonly uploadId: string;
@@ -846,12 +850,24 @@ export interface _Sdk3HandCodedMultipartStatusResult {
 }
 
 /**
+ * The SDK's aggregate of every `GET /api/uploads/multipart/{uploadId}/status`
+ * page (merged, sorted, no pagination cursor) — what `getUploadStatus()`
+ * returns. It has no generated equivalent: `MultipartStatusResponse` is ONE
+ * page. The stable name for the shape now called
+ * `_Sdk3HandCodedMultipartStatusResult` (iqR0V1mt); timestamps stay ISO strings
+ * in this release and become `Date` with the generated part type in the next.
+ */
+export type MultipartUploadState = _Sdk3HandCodedMultipartStatusResult;
+
+/**
  * One entry in `_Sdk3HandCodedPresignPartsResult.presignedUrls`. Shape mirrors
  * the contract-pinned `PresignedUrlPart` from the initiate envelope; kept
  * hand-coded here so the resume path does not depend on the generator's name
  * for that shape (decoupling for the HxUmVr3Y regen window).
  *
  * TODO(HxUmVr3Y): replace hand-coded shape on regen.
+ *
+ * @deprecated iqR0V1mt — removed in the next minor. `getUploadStatus()` / `presignParts()` / `keepaliveUpload()` will then use the generated contract types (`MultipartPartListing`, `PresignedUrlPart`, `MultipartKeepaliveResponse`, re-exported from this package), whose timestamps are `Date`, not ISO strings; `getUploadStatus()` returns {@link MultipartUploadState} (never `MultipartStatusResponse`, which is one page).
  */
 export interface _Sdk3HandCodedPresignedPart {
   readonly partNumber: number;
@@ -864,6 +880,8 @@ export interface _Sdk3HandCodedPresignedPart {
  * requested part numbers.
  *
  * TODO(HxUmVr3Y): replace hand-coded shape on regen.
+ *
+ * @deprecated iqR0V1mt — removed in the next minor. `getUploadStatus()` / `presignParts()` / `keepaliveUpload()` will then use the generated contract types (`MultipartPartListing`, `PresignedUrlPart`, `MultipartKeepaliveResponse`, re-exported from this package), whose timestamps are `Date`, not ISO strings; `getUploadStatus()` returns {@link MultipartUploadState} (never `MultipartStatusResponse`, which is one page).
  */
 export interface _Sdk3HandCodedPresignPartsResult {
   readonly uploadId: string;
@@ -874,6 +892,8 @@ export interface _Sdk3HandCodedPresignPartsResult {
  * Result of `keepaliveUpload()` — the refreshed manifest TTL expiry instant.
  *
  * TODO(HxUmVr3Y): replace hand-coded shape on regen.
+ *
+ * @deprecated iqR0V1mt — removed in the next minor. `getUploadStatus()` / `presignParts()` / `keepaliveUpload()` will then use the generated contract types (`MultipartPartListing`, `PresignedUrlPart`, `MultipartKeepaliveResponse`, re-exported from this package), whose timestamps are `Date`, not ISO strings; `getUploadStatus()` returns {@link MultipartUploadState} (never `MultipartStatusResponse`, which is one page).
  */
 export interface _Sdk3HandCodedKeepaliveResult {
   readonly uploadId: string;

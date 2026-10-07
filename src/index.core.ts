@@ -60,7 +60,19 @@ export type {
   _Sdk3HandCodedPresignedPart,
   _Sdk3HandCodedPresignPartsResult,
   _Sdk3HandCodedKeepaliveResult,
+  // iqR0V1mt — the stable name for the getUploadStatus() aggregate.
+  MultipartUploadState,
 } from './types.js';
+// iqR0V1mt — the generated multipart-resume models, re-exported ALONGSIDE the
+// deprecated `_Sdk3HandCoded*` shapes for one release; the resume methods
+// switch to these (Date timestamps) in the next minor.
+export type {
+  MultipartPartListing,
+  PresignedUrlPart,
+  MultipartPresignResponse,
+  MultipartKeepaliveResponse,
+  MultipartStatusResponse,
+} from '@giveitsmaller/contracts/openapi';
 export {
   uploadSource,
   jobOutputSource,

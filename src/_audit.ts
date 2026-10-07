@@ -265,6 +265,15 @@ import type {
   _Sdk3HandCodedPresignPartsResult,
   _Sdk3HandCodedKeepaliveResult,
 } from './types.js';
+// iqR0V1mt — imported from the PUBLIC barrel, so a dropped re-export fails here.
+import type {
+  MultipartUploadState,
+  MultipartPartListing,
+  PresignedUrlPart,
+  MultipartPresignResponse,
+  MultipartKeepaliveResponse,
+  MultipartStatusResponse,
+} from './index.js';
 
 function accept<T>(_value?: T): void {
   // intentionally empty — type-presence is the assertion
@@ -323,6 +332,12 @@ export function _runAudit(): void {
   accept<_Sdk3HandCodedPresignedPart>();
   accept<_Sdk3HandCodedPresignPartsResult>();
   accept<_Sdk3HandCodedKeepaliveResult>();
+  accept<MultipartUploadState>();
+  accept<MultipartPartListing>();
+  accept<PresignedUrlPart>();
+  accept<MultipartPresignResponse>();
+  accept<MultipartKeepaliveResponse>();
+  accept<MultipartStatusResponse>();
   // T1 / wVU4xHx3 — ergonomic-layer entry points.
   accept<GislCreateOptions>();
   accept<GislAnonymousOptions>();
