@@ -66,7 +66,9 @@ describe('capability conditions survive OperationsSchemaResponseFromJSON (F9UUic
   it('positive control: the shipped sidecar exercises every condition form and every produces form', () => {
     const forms = new Set<string>();
     rules(sidecar.operations).forEach((r) => leafForms(r.when, forms));
-    for (const form of ['all', 'any', 'not', 'equals+field', 'field+in', 'field+isSet', 'field+numericZero', 'opSelected']) {
+    // `opSelected` left the shipped sidecar at contracts v2.227.0; its decode path stays
+    // covered by the synthetic 'decodes every operator form' case below.
+    for (const form of ['all', 'any', 'not', 'equals+field', 'field+in', 'field+isSet', 'field+numericZero']) {
       expect(forms, `sidecar no longer carries a ${form} node`).toContain(form);
     }
     const produces = new Set(

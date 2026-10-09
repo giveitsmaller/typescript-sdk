@@ -179,7 +179,9 @@ describe('code-builder compress conformance', () => {
     let exposeOptinCount = 0;
     for (const mg of Object.values(compress.media_groups)) {
       for (const [key, opt] of Object.entries(mg.options)) {
-        const availability = opt.availability ?? 'stable';
+        // An option with no availability of its own inherits its media group's (a planned
+        // group's options derive coming_soon: compress.document_pdf, contracts v2.227.0).
+        const availability = opt.availability ?? (mg as { availability?: string }).availability ?? 'stable';
         const expected = EXPOSURE_BY_AVAILABILITY[availability];
         expect(
           expected,

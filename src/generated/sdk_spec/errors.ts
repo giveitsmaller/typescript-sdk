@@ -40,6 +40,7 @@ export type ErrorCode =
   | "probe_pending"
   | "probe_not_ready"
   | "probe_not_applicable"
+  | "gif_too_long"
   | "inputs_not_concat_uniform"
   | "requires_reencode"
   | "invalid_options"
@@ -565,6 +566,17 @@ export const ERROR_CODES: Readonly<Record<ErrorCode, ErrorEntry>> = Object.freez
     description: "422 on upload probe — this upload's type is never probed (e.g. an image); terminal, do not retry. Wire `error_type: \"probe_not_applicable\"`.",
     metadataSchema: Object.freeze({}),
   }),
+  "gif_too_long": Object.freeze({
+    code: "gif_too_long",
+    category: "validation" as ErrorCategory,
+    source: "ErrorEnvelope.error",
+    status: "planned" as ErrorStatus,
+    httpStatus: 422,
+    retryable: false,
+    sdkClass: "GislValidationError",
+    description: "422 — a convert of video to GIF whose kept window (input duration minus trims) exceeds convert.video output_format per_value_constraints.gif.max_kept_duration (PT10S). Wire `GIF_TOO_LONG`; ValidationErrorEnvelope, one details[] entry. The caller trims to the limit or picks mp4/webm; retrying does not help. `planned` until api ships the create-time refusal (zfFnNYRY).",
+    metadataSchema: Object.freeze({}),
+  }),
   "inputs_not_concat_uniform": Object.freeze({
     code: "inputs_not_concat_uniform",
     category: "validation" as ErrorCategory,
@@ -963,6 +975,7 @@ export const ERROR_CATEGORIES: Readonly<Record<ErrorCategory, readonly ErrorCode
     "workflow_edge_references_unknown_job",
     "reserved_job_id_pattern",
     "cyclic_job_output_source_graph",
+    "gif_too_long",
     "inputs_not_concat_uniform",
     "invalid_options",
     "invalid_combination",
