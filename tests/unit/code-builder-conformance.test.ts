@@ -105,10 +105,14 @@ const CROSS_VERB_ROUTING: Readonly<Record<string, Readonly<Record<string, 'outpu
 /**
  * DEFERRED_EXPOSURE: expose+contract compress options reachable by NO ergonomic verb
  * today. Drift-guarded below (each must stay expose+contract AND genuinely
- * unreachable). EMPTY since f3JiTxkK: document `quality` (its only former entries)
+ * unreachable). Empty from f3JiTxkK until oavTfC6C: document `quality` (its only former entries)
  * is now native in KNOWN_WIRE_FIELDS. A new entry here is a deliberate deferral.
  */
-const DEFERRED_EXPOSURE: Readonly<Record<string, readonly string[]>> = {};
+// oavTfC6C: compress.document_pdf went planned -> beta at contracts v2.228.0; the SDK has
+// no document_pdf compress surface yet. Deliberate deferral until the card lands.
+const DEFERRED_EXPOSURE: Readonly<Record<string, readonly string[]>> = {
+  document_pdf: ['quality', 'max_image_dimension'],
+};
 
 /**
  * PRE_EXPOSED: keys the SDK's `KNOWN_WIRE_FIELDS` ALLOWS ahead of the contract — the

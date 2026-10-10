@@ -40,6 +40,7 @@ export type ErrorCode =
   | "probe_pending"
   | "probe_not_ready"
   | "probe_not_applicable"
+  | "input_password_protected"
   | "gif_too_long"
   | "inputs_not_concat_uniform"
   | "requires_reencode"
@@ -566,6 +567,17 @@ export const ERROR_CODES: Readonly<Record<ErrorCode, ErrorEntry>> = Object.freez
     description: "422 on upload probe — this upload's type is never probed (e.g. an image); terminal, do not retry. Wire `error_type: \"probe_not_applicable\"`.",
     metadataSchema: Object.freeze({}),
   }),
+  "input_password_protected": Object.freeze({
+    code: "input_password_protected",
+    category: "validation" as ErrorCategory,
+    source: "ErrorEnvelope.error",
+    status: "planned" as ErrorStatus,
+    httpStatus: 422,
+    retryable: false,
+    sdkClass: "GislValidationError",
+    description: "422 — the job's uploaded source is encrypted (its probe reported probe_status password_protected). Wire `INPUT_PASSWORD_PROTECTED`; ValidationErrorEnvelope. The user removes the password and uploads again; retrying does not help. `planned` until api ships the create-time refusal.",
+    metadataSchema: Object.freeze({}),
+  }),
   "gif_too_long": Object.freeze({
     code: "gif_too_long",
     category: "validation" as ErrorCategory,
@@ -975,6 +987,7 @@ export const ERROR_CATEGORIES: Readonly<Record<ErrorCategory, readonly ErrorCode
     "workflow_edge_references_unknown_job",
     "reserved_job_id_pattern",
     "cyclic_job_output_source_graph",
+    "input_password_protected",
     "gif_too_long",
     "inputs_not_concat_uniform",
     "invalid_options",
