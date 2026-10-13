@@ -203,6 +203,8 @@ import type {
   DocumentOdfCompressPresetOptionsInput,
   DocumentEpubCompressPresetOptions,
   DocumentEpubCompressPresetOptionsInput,
+  DocumentPdfCompressPresetOptions,
+  DocumentPdfCompressPresetOptionsInput,
   OptimizeFor,
   ImageMetadataPolicy,
   ImageFormat,
@@ -551,6 +553,8 @@ export function _runAudit(): void {
   accept<DocumentOdfCompressPresetOptionsInput>();
   accept<DocumentEpubCompressPresetOptions>();
   accept<DocumentEpubCompressPresetOptionsInput>();
+  accept<DocumentPdfCompressPresetOptions>();
+  accept<DocumentPdfCompressPresetOptionsInput>();
   accept<OptimizeFor>();
   accept<ImageMetadataPolicy>();
   accept<ImageFormat>();

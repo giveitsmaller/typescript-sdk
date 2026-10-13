@@ -248,6 +248,26 @@ describe('Recipe chain compress — document quality reaches the wire (f3JiTxkK)
   });
 });
 
+describe('Recipe chain compress — PDF quality + max_image_dimension reach the wire (oavTfC6C)', () => {
+  it('report.pdf: compress(undefined, { quality, maxImageDimension }) lowers both, snake_case', () => {
+    expect(
+      operations(recipe('report.pdf').compress(undefined, { quality: 40, maxImageDimension: 900 })),
+    ).toEqual([{ type: 'compress', options: { quality: 40, max_image_dimension: 900 } }]);
+  });
+
+  it('report.pdf: compress(Size) lowers the shipped PDF Size cell', () => {
+    expect(operations(recipe('report.pdf').compress(OptimizeFor.Size))).toEqual([
+      { type: 'compress', options: { quality: 50, max_image_dimension: 1200 } },
+    ]);
+  });
+
+  it('report.pdf: compress(Quality, { max_image_dimension }) — explicit beats the cell', () => {
+    expect(
+      operations(recipe('report.pdf').compress(OptimizeFor.Quality, { max_image_dimension: 5000 })),
+    ).toEqual([{ type: 'compress', options: { quality: 85, max_image_dimension: 5000 } }]);
+  });
+});
+
 describe('Recipe chain compress — bag-supplied optimize is resolved (regression parity)', () => {
   it('compress(undefined, { optimize: Balanced }) lowers identically to compress(Balanced)', () => {
     const viaBag = operations(

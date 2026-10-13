@@ -268,17 +268,19 @@ describe('PresetDefaults.merge (static)', () => {
     expect(Object.isFrozen(merged)).toBe(true);
   });
 
-  it('merges across all 6 cell types correctly', () => {
+  it('merges across all 7 cell types correctly', () => {
     const parent = presetDefaults()
       .imageCompress(OptimizeFor.Size, { quality: 70 })
       .audioCompress(OptimizeFor.Size, { bitrate: AudioBitrate._128 })
       .videoCompress(OptimizeFor.Size, { codec: VideoCodec.H264 })
       .officeCompress(OptimizeFor.Size, { stripHiddenData: true })
       .odfCompress(OptimizeFor.Size, { stripUnusedStyles: true })
-      .epubCompress(OptimizeFor.Size, { stripUnusedCss: true });
+      .epubCompress(OptimizeFor.Size, { stripUnusedCss: true })
+      .pdfCompress(OptimizeFor.Size, { quality: 40, maxImageDimension: 1000 });
     const child = presetDefaults()
       .imageCompress(OptimizeFor.Size, { quality: 90 })
-      .audioCompress(OptimizeFor.Size, { bitrate: AudioBitrate._320 });
+      .audioCompress(OptimizeFor.Size, { bitrate: AudioBitrate._320 })
+      .pdfCompress(OptimizeFor.Size, { maxImageDimension: 2000 });
     const merged = PresetDefaults.merge(parent, child);
     // Overlapping cells: child wins
     expect(merged.cellFor('image', 'compress', OptimizeFor.Size)?.quality).toBe(90);
@@ -288,6 +290,9 @@ describe('PresetDefaults.merge (static)', () => {
     expect(merged.cellFor('document_office', 'compress', OptimizeFor.Size)?.stripHiddenData).toBe(true);
     expect(merged.cellFor('document_odf', 'compress', OptimizeFor.Size)?.stripUnusedStyles).toBe(true);
     expect(merged.cellFor('document_epub', 'compress', OptimizeFor.Size)?.stripUnusedCss).toBe(true);
+    // PDF overlaps field-wise: child's maxImageDimension wins, parent's quality survives.
+    expect(merged.cellFor('document_pdf', 'compress', OptimizeFor.Size)?.maxImageDimension).toBe(2000);
+    expect(merged.cellFor('document_pdf', 'compress', OptimizeFor.Size)?.quality).toBe(40);
   });
 });
 

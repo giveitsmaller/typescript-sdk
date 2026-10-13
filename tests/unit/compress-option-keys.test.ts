@@ -9,6 +9,7 @@ import {
 } from '../../src/ergonomic/preset_resolver.js';
 import { COMPRESS_OPTION_KEYS, type CompressOptions } from '../../src/ergonomic/option_types.js';
 import {
+  DocumentPdfCompressPresetOptions,
   ImageCompressPresetOptions,
   VideoCompressPresetOptions,
   type PresetMedia,
@@ -104,6 +105,8 @@ describe('compress()/transform() option bags are typed — compile-time guards (
       (): unknown => c.compress('photo.jpg', { optimize: 'Smallest' }),
       // @ts-expect-error — presetOverrides takes the camelCase preset shape, not a wire key.
       (): unknown => c.compress('photo.jpg', { presetOverrides: { qualty: 40 } }),
+      // @ts-expect-error — `maxImageDimensions` (plural) is not a CompressOptions key.
+      (): unknown => c.compress('report.pdf', { maxImageDimensions: 1200 }),
       // @ts-expect-error — rotate is 0/90/180/270 only.
       (): unknown => c.transform('photo.jpg', { rotate: 45 }),
     ];
@@ -122,6 +125,13 @@ describe('compress()/transform() option bags are typed — compile-time guards (
       (): unknown => c.compress('song.wav', { sample_rate: AudioSampleRate._44100, normalize: true }),
       (): unknown => c.compress('song.wav', { sampleRate: 48000, bitrate: 192 }),
       (): unknown => c.compress('deck.pptx', { quality: 70, stripMacros: true }),
+      (): unknown => c.compress('report.pdf', { quality: 60, maxImageDimension: 1200 }),
+      (): unknown => c.compress('report.pdf', { max_image_dimension: 800 }),
+      (): unknown =>
+        c.compress('report.pdf', {
+          optimize: OptimizeFor.Size,
+          presetOverrides: DocumentPdfCompressPresetOptions.from({ maxImageDimension: 640 }),
+        }),
       (): unknown => c.transform('photo.jpg', { rotate: 90, flip: 'horizontal' }),
       (): unknown => c.transform('photo.jpg'),
       (): unknown => recipe.compress(OptimizeFor.Balanced, { quality: 55 }),

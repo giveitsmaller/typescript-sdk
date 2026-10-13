@@ -37,6 +37,7 @@ export const COMPRESS_OPTION_KEYS = [
     'strip_macros', 'stripMacros', 'strip_hidden_data', 'stripHiddenData', 'strip_unused_fonts', 'stripUnusedFonts',
     'strip_metadata', 'stripMetadata', 'strip_unused_styles', 'stripUnusedStyles',
     'font_subsetting', 'fontSubsetting', 'strip_unused_css', 'stripUnusedCss',
+    'max_image_dimension', 'maxImageDimension',
 ];
 const TEXT_WATERMARK_OPTION_KEYS = [
     'font_size', 'color', 'font_family', 'rotation', 'watermark_mode',

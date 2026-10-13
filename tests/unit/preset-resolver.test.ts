@@ -9,6 +9,7 @@ import {
   ImageCompressPresetOptions,
   AudioCompressPresetOptions,
   VideoCompressPresetOptions,
+  DocumentPdfCompressPresetOptions,
   OptimizeFor,
   VideoCodec,
   AudioBitrate,
@@ -661,6 +662,119 @@ describe('resolveCompressOptions — document compress quality (f3JiTxkK)', () =
 });
 
 // ---------------------------------------------------------------------------
+// PDF compress (oavTfC6C)
+// ---------------------------------------------------------------------------
+//
+// compress.document_pdf (beta at contracts v2.228.0) exposes `quality` and
+// `max_image_dimension`, both acting on the images inside the PDF. Unlike the other
+// document media, its shipped preset cells are NOT planned-dropped, so an optimize
+// level genuinely moves the wire.
+
+describe('resolveCompressOptions — document_pdf (oavTfC6C)', () => {
+  it.each([
+    [OptimizeFor.Size, 50, 1200],
+    [OptimizeFor.Balanced, 70, 1600],
+    [OptimizeFor.Quality, 85, 2400],
+  ] as const)('optimize %s resolves the shipped cell to quality %i / max_image_dimension %i', (optimize, quality, maxImageDimension) => {
+    const { wireOptions, resolvedOptions } = resolveCompressOptions({
+      media: 'document_pdf',
+      op: 'compress',
+      optimize,
+      explicitOptions: {},
+    });
+    expect(wireOptions).toEqual({ quality, max_image_dimension: maxImageDimension });
+    expect([...resolvedOptions.sources.sdkDefault].sort()).toEqual(['max_image_dimension', 'quality']);
+    expect(resolvedOptions.preset).toBe(optimize);
+  });
+
+  it('no optimize: only the explicit keys reach the wire', () => {
+    const { wireOptions, resolvedOptions } = resolveCompressOptions({
+      media: 'document_pdf',
+      op: 'compress',
+      explicitOptions: { quality: 40 },
+    });
+    expect(wireOptions).toEqual({ quality: 40 });
+    expect(resolvedOptions.sources.explicit).toEqual(['quality']);
+  });
+
+  it('camelCase maxImageDimension is aliased to snake_case max_image_dimension', () => {
+    const { wireOptions, resolvedOptions } = resolveCompressOptions({
+      media: 'document_pdf',
+      op: 'compress',
+      explicitOptions: { maxImageDimension: 900 },
+    });
+    expect(wireOptions).toEqual({ max_image_dimension: 900 });
+    expect(wireOptions).not.toHaveProperty('maxImageDimension');
+    expect(resolvedOptions.sources.explicit).toEqual(['max_image_dimension']);
+  });
+
+  it('snake_case max_image_dimension is accepted verbatim', () => {
+    const { wireOptions } = resolveCompressOptions({
+      media: 'document_pdf',
+      op: 'compress',
+      explicitOptions: { max_image_dimension: 700, quality: 30 },
+    });
+    expect(wireOptions).toEqual({ max_image_dimension: 700, quality: 30 });
+  });
+
+  it('explicit keys override the optimize cell field by field', () => {
+    const { wireOptions, resolvedOptions } = resolveCompressOptions({
+      media: 'document_pdf',
+      op: 'compress',
+      optimize: OptimizeFor.Quality,
+      explicitOptions: { maxImageDimension: 4000 },
+    });
+    expect(wireOptions).toEqual({ quality: 85, max_image_dimension: 4000 });
+    expect(resolvedOptions.sources.explicit).toEqual(['max_image_dimension']);
+    expect(resolvedOptions.sources.sdkDefault).toEqual(['quality']);
+  });
+
+  it('a PDF-shaped presetOverrides is accepted and layered under the explicit keys', () => {
+    const { wireOptions, resolvedOptions } = resolveCompressOptions({
+      media: 'document_pdf',
+      op: 'compress',
+      optimize: OptimizeFor.Balanced,
+      presetOverrides: { quality: 35, maxImageDimension: 1000 },
+      explicitOptions: { quality: 60 },
+    });
+    expect(wireOptions).toEqual({ quality: 60, max_image_dimension: 1000 });
+    expect(resolvedOptions.sources.callPresetOverride).toEqual(['max_image_dimension']);
+    expect(resolvedOptions.sources.explicit).toEqual(['quality']);
+  });
+
+  it('a key PDF compress does not define is refused as unknown_field', () => {
+    try {
+      resolveCompressOptions({
+        media: 'document_pdf',
+        op: 'compress',
+        explicitOptions: { quality: 40, strip_macros: true },
+      });
+      throw new Error('expected throw');
+    } catch (err) {
+      const e = err as GislConfigError;
+      expect(e).toBeInstanceOf(GislConfigError);
+      expect(e.reason).toBe('unknown_field');
+      expect(e.conflictingFields).toEqual(['strip_macros']);
+    }
+  });
+
+  it('max_image_dimension is refused for a medium that does not define it', () => {
+    try {
+      resolveCompressOptions({
+        media: 'document_epub',
+        op: 'compress',
+        explicitOptions: { maxImageDimension: 900 },
+      });
+      throw new Error('expected throw');
+    } catch (err) {
+      const e = err as GislConfigError;
+      expect(e.reason).toBe('unknown_field');
+      expect(e.conflictingFields).toEqual(['max_image_dimension']);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // presetConfigHash — present iff cell registered
 // ---------------------------------------------------------------------------
 
@@ -1050,6 +1164,24 @@ describe('code-review R1 regression: type_mismatch suggestion uses correct Pasca
     }
   });
 
+  it('PDF-shaped override (maxImageDimension) on an EPUB op names DocumentPdfCompressPresetOptionsInput', () => {
+    // Pins MEDIA_FIELDS.document_pdf: without `maxImageDimension` there, the
+    // key belongs to no media and this degrades to a bare unknown_field.
+    try {
+      resolveCompressOptions({
+        media: 'document_epub',
+        op: 'compress',
+        presetOverrides: { maxImageDimension: 1200 },
+        explicitOptions: {},
+      });
+      throw new Error('expected throw');
+    } catch (err) {
+      const e = err as GislConfigError;
+      expect(e.reason).toBe('type_mismatch');
+      expect(e.suggestion).toContain('DocumentPdfCompressPresetOptionsInput');
+    }
+  });
+
   it('image Size sample assertion (chained Image fields end up in wire snake_case)', () => {
     const { wireOptions } = resolveCompressOptions({
       media: 'image',
@@ -1228,5 +1360,58 @@ describe('document compress quality through the typed preset surface (f3JiTxkK)'
     const cell = merged.cellFor('document_office', 'compress', OptimizeFor.Size);
     expect(cell?.quality).toBe(20);
     expect(cell?.stripMacros).toBe(true);
+  });
+});
+
+// The TYPED preset surface for PDF (oavTfC6C): PresetDefaults.pdfCompress registers a
+// client default the resolver reads at every optimize level.
+describe('document_pdf through the typed preset surface (oavTfC6C)', () => {
+  it.each([OptimizeFor.Size, OptimizeFor.Balanced, OptimizeFor.Quality])(
+    '%s: a pdfCompress client default overrides that cell, the rest of the cell survives',
+    (level) => {
+      const shipped = DocumentPdfCompressPresetOptions.shippedDefaultsFor(level);
+      const { wireOptions, resolvedOptions } = resolveCompressOptions({
+        media: 'document_pdf',
+        op: 'compress',
+        optimize: level,
+        presetDefaults: presetDefaults().pdfCompress(level, { maxImageDimension: 512 }),
+        explicitOptions: {},
+      });
+      expect(wireOptions).toEqual({ quality: shipped.quality, max_image_dimension: 512 });
+      expect(resolvedOptions.sources.clientDefault).toEqual(['max_image_dimension']);
+      expect(resolvedOptions.presetConfigHash).toMatch(/^sha256:[0-9a-f]{64}$/);
+    },
+  );
+
+  it('a pdfCompress default registered at another level does not apply', () => {
+    const { wireOptions } = resolveCompressOptions({
+      media: 'document_pdf',
+      op: 'compress',
+      optimize: OptimizeFor.Size,
+      presetDefaults: presetDefaults().pdfCompress(OptimizeFor.Quality, { quality: 99 }),
+      explicitOptions: {},
+    });
+    expect(wireOptions).toEqual({ quality: 50, max_image_dimension: 1200 });
+  });
+
+  it('explicit quality beats the pdfCompress client default', () => {
+    const { wireOptions } = resolveCompressOptions({
+      media: 'document_pdf',
+      op: 'compress',
+      optimize: OptimizeFor.Size,
+      presetDefaults: presetDefaults().pdfCompress(OptimizeFor.Size, { quality: 35 }),
+      explicitOptions: { quality: 70 },
+    });
+    expect(wireOptions).toEqual({ quality: 70, max_image_dimension: 1200 });
+  });
+
+  it('PresetDefaults.merge keeps a parent pdf quality under a child that sets maxImageDimension', () => {
+    const merged = PresetDefaults.merge(
+      presetDefaults().pdfCompress(OptimizeFor.Size, { quality: 20 }),
+      presetDefaults().pdfCompress(OptimizeFor.Size, { maxImageDimension: 640 }),
+    );
+    const cell = merged.cellFor('document_pdf', 'compress', OptimizeFor.Size);
+    expect(cell?.quality).toBe(20);
+    expect(cell?.maxImageDimension).toBe(640);
   });
 });

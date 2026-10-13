@@ -15,7 +15,7 @@
  * Mirrored by the PHP array-shape docblocks — keep in lockstep.
  */
 import type { AudioBitrate, AudioCodec, AudioSampleRate, ImageFormat, ImageMetadataPolicy, OptimizeFor, VideoCodec, VideoFit, VideoPreset } from '../generated/sdk_spec/enums.js';
-import type { AudioCompressPresetOptionsInput, DocumentEpubCompressPresetOptionsInput, DocumentOdfCompressPresetOptionsInput, DocumentOfficeCompressPresetOptionsInput, ImageCompressPresetOptionsInput, VideoCompressPresetOptionsInput } from './presets/index.js';
+import type { AudioCompressPresetOptionsInput, DocumentEpubCompressPresetOptionsInput, DocumentOdfCompressPresetOptionsInput, DocumentOfficeCompressPresetOptionsInput, DocumentPdfCompressPresetOptionsInput, ImageCompressPresetOptionsInput, VideoCompressPresetOptionsInput } from './presets/index.js';
 /** 9-grid anchor shared by text/image/video watermark. */
 export type WatermarkAnchor = 'top_left' | 'top_center' | 'top_right' | 'center_left' | 'center' | 'center_right' | 'bottom_left' | 'bottom_center' | 'bottom_right';
 export interface ConvertOptions {
@@ -84,11 +84,11 @@ export interface TransformOptions {
 }
 /**
  * A per-call preset override for {@link CompressOptions.presetOverrides}: one of
- * the six per-media compress preset DTOs, as a `*CompressPresetOptions` instance
+ * the seven per-media compress preset DTOs, as a `*CompressPresetOptions` instance
  * (e.g. `ImageCompressPresetOptions.from({ quality: 40 })`) or a plain object of
  * the same camelCase shape. Which one applies is decided by the input's media.
  */
-export type CompressPresetOverrides = ImageCompressPresetOptionsInput | AudioCompressPresetOptionsInput | VideoCompressPresetOptionsInput | DocumentOfficeCompressPresetOptionsInput | DocumentOdfCompressPresetOptionsInput | DocumentEpubCompressPresetOptionsInput;
+export type CompressPresetOverrides = ImageCompressPresetOptionsInput | AudioCompressPresetOptionsInput | VideoCompressPresetOptionsInput | DocumentOfficeCompressPresetOptionsInput | DocumentOdfCompressPresetOptionsInput | DocumentEpubCompressPresetOptionsInput | DocumentPdfCompressPresetOptionsInput;
 /**
  * Options for `compress()` — operation-first `client.compress(input, options)` and
  * the file-first `.compress(optimize, options)` verbs.
@@ -113,7 +113,8 @@ export type CompressPresetOverrides = ImageCompressPresetOptionsInput | AudioCom
  * `codec`, `encoding_mode`, `crf`, `target_size_bytes`, `targetSize`, `preset`,
  * `width`, `height`, `fit`, `fps`, `faststart`, `audio_codec`, `audio_bitrate`,
  * `trim_start`, `trim_end`; Office / ODF / EPUB documents — `quality` plus their
- * `strip_*` / `font_subsetting` keys.
+ * `strip_*` / `font_subsetting` keys; PDF — `quality` and `max_image_dimension`, both
+ * acting on the images inside the PDF.
  *
  * An unknown key is a compile-time error for an INLINE bag only — an aliased bag
  * bypasses excess-property checks — so the resolver's runtime check remains the
@@ -125,7 +126,7 @@ export interface CompressOptions {
     optimize?: OptimizeFor;
     /** Per-call override of the preset's own values; a lower layer than the explicit keys below. */
     presetOverrides?: CompressPresetOverrides;
-    /** Encode quality (1-100). Image, and the Office / ODF / EPUB documents. */
+    /** Encode quality (1-100). Image, the Office / ODF / EPUB documents, and PDF (JPEG quality of the images inside it). */
     quality?: number;
     /** Image metadata policy (`all` is a deprecated alias of `strip`). */
     metadata?: ImageMetadataPolicy;
@@ -208,6 +209,10 @@ export interface CompressOptions {
     strip_unused_css?: boolean;
     /** camelCase spelling of `strip_unused_css`. */
     stripUnusedCss?: boolean;
+    /** PDF: longest side in px for each image inside the PDF (64-10000); larger images are scaled down. */
+    max_image_dimension?: number;
+    /** camelCase spelling of `max_image_dimension`. */
+    maxImageDimension?: number;
 }
 /**
  * The {@link CompressOptions} key set as a runtime tuple, for the conformance test
@@ -215,7 +220,7 @@ export interface CompressOptions {
  *
  * @internal Not re-exported from the package entry points.
  */
-export declare const COMPRESS_OPTION_KEYS: readonly ["optimize", "presetOverrides", "quality", "metadata", "output_format", "outputFormat", "bitrate", "channels", "sample_rate", "sampleRate", "normalize", "trim_start", "trim_end", "codec", "encoding_mode", "crf", "target_size_bytes", "targetSize", "preset", "width", "height", "fit", "fps", "faststart", "audio_codec", "audioCodec", "audio_bitrate", "audioBitrate", "strip_macros", "stripMacros", "strip_hidden_data", "stripHiddenData", "strip_unused_fonts", "stripUnusedFonts", "strip_metadata", "stripMetadata", "strip_unused_styles", "stripUnusedStyles", "font_subsetting", "fontSubsetting", "strip_unused_css", "stripUnusedCss"];
+export declare const COMPRESS_OPTION_KEYS: readonly ["optimize", "presetOverrides", "quality", "metadata", "output_format", "outputFormat", "bitrate", "channels", "sample_rate", "sampleRate", "normalize", "trim_start", "trim_end", "codec", "encoding_mode", "crf", "target_size_bytes", "targetSize", "preset", "width", "height", "fit", "fps", "faststart", "audio_codec", "audioCodec", "audio_bitrate", "audioBitrate", "strip_macros", "stripMacros", "strip_hidden_data", "stripHiddenData", "strip_unused_fonts", "stripUnusedFonts", "strip_metadata", "stripMetadata", "strip_unused_styles", "stripUnusedStyles", "font_subsetting", "fontSubsetting", "strip_unused_css", "stripUnusedCss", "max_image_dimension", "maxImageDimension"];
 export interface TextWatermarkOptions {
     /** Font size in pixels (8-512). */
     font_size?: number;

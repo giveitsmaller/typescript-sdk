@@ -1100,7 +1100,7 @@ describe('T4b — _detectCompressMedia (input → media classification)', () => 
     expect(_detectCompressMedia(new Blob(['x'], { type: 'video/mp4' }))).toBe('video');
   });
 
-  it('application/pdf MIME → document_pdf (still a detectable media; only lossy compress dropped in v2.166.0)', async () => {
+  it('application/pdf MIME → document_pdf (a compressible media again, oavTfC6C)', async () => {
     const { _detectCompressMedia } = await import('../../src/builder.js');
     expect(_detectCompressMedia(new Blob(['x'], { type: 'application/pdf' }))).toBe('document_pdf');
   });
@@ -1140,7 +1140,7 @@ describe('T4b — _detectCompressMedia (input → media classification)', () => 
     expect(_detectCompressMedia('CLIP.MOV')).toBe('video');
   });
 
-  it('filename extension fallback — .pdf → document_pdf (still a detectable media; only lossy compress dropped in v2.166.0)', async () => {
+  it('filename extension fallback — .pdf → document_pdf (a compressible media again, oavTfC6C)', async () => {
     const { _detectCompressMedia } = await import('../../src/builder.js');
     expect(_detectCompressMedia('paper.pdf')).toBe('document_pdf');
   });
@@ -1303,15 +1303,84 @@ describe('T4b — non-compress ops bypass the resolver (passthrough)', () => {
     expect(payload.jobs[0].operations[0].options).toEqual({ quality: 80 });
   });
 
-  it('compress op on a PDF fails fast with a specific error (PDF lossy compress dropped in v2.166.0)', async () => {
+  it('compress op on a PDF resolves document_pdf options onto the wire (oavTfC6C)', async () => {
     const mock = makeMockClient();
-    // .pdf → _detectCompressMedia → document_pdf (detectable but not compressible):
-    // the resolver fail-fasts client-side, before any upload, with an actionable message.
+    // .pdf → _detectCompressMedia → document_pdf, which compress accepts again: the
+    // camelCase alias is lowered to the snake_case wire key, and nothing else is added
+    // (no optimize ⇒ no preset layer).
+    await new OperationBuilder(mock.client, 'compress', 'report.pdf', {
+      quality: 60,
+      maxImageDimension: 1000,
+    }).run({ maxWait: '30s' });
+    expect(mock.createWorkflow).toHaveBeenCalledTimes(1);
+    const payload = mock.createWorkflow.mock.calls[0][0];
+    expect(payload.jobs[0].operations[0]).toEqual({
+      type: 'compress',
+      options: { quality: 60, max_image_dimension: 1000 },
+    });
+  });
+});
+
+describe('compress on a PDF input — document_pdf wire options (oavTfC6C)', () => {
+  it('application/pdf Blob with explicit snake_case options sends them verbatim', async () => {
+    const mock = makeMockClient();
+    const blob = new Blob(['%PDF-1.7'], { type: 'application/pdf' });
+    await new OperationBuilder(mock.client, 'compress', blob, {
+      quality: 45,
+      max_image_dimension: 800,
+    }).run({ maxWait: '30s' });
+    const payload = mock.createWorkflow.mock.calls[0][0];
+    expect(payload.jobs[0].operations[0].options).toEqual({ quality: 45, max_image_dimension: 800 });
+  });
+
+  it.each([
+    ['Size', 50, 1200],
+    ['Balanced', 70, 1600],
+    ['Quality', 85, 2400],
+  ] as const)('optimize %s resolves the shipped PDF cell (quality %i, max_image_dimension %i)', async (level, quality, maxImageDimension) => {
+    const { OptimizeFor } = await import('../../src/generated/sdk_spec/enums.js');
+    const mock = makeMockClient();
+    await new OperationBuilder(mock.client, 'compress', 'report.pdf', {
+      optimize: OptimizeFor[level],
+    }).run({ maxWait: '30s' });
+    const payload = mock.createWorkflow.mock.calls[0][0];
+    expect(payload.jobs[0].operations[0].options).toEqual({
+      quality,
+      max_image_dimension: maxImageDimension,
+    });
+  });
+
+  it('a DocumentPdfCompressPresetOptions presetOverrides DTO reaches the wire', async () => {
+    const { OptimizeFor } = await import('../../src/generated/sdk_spec/enums.js');
+    const { DocumentPdfCompressPresetOptions } = await import('../../src/ergonomic/presets/index.js');
+    const mock = makeMockClient();
+    await new OperationBuilder(mock.client, 'compress', 'report.pdf', {
+      optimize: OptimizeFor.Balanced,
+      presetOverrides: DocumentPdfCompressPresetOptions.from({ maxImageDimension: 1000 }),
+    }).run({ maxWait: '30s' });
+    const payload = mock.createWorkflow.mock.calls[0][0];
+    expect(payload.jobs[0].operations[0].options).toEqual({ quality: 70, max_image_dimension: 1000 });
+  });
+
+  it('an explicit option beats the optimize cell, field by field', async () => {
+    const { OptimizeFor } = await import('../../src/generated/sdk_spec/enums.js');
+    const mock = makeMockClient();
+    await new OperationBuilder(mock.client, 'compress', 'report.pdf', {
+      optimize: OptimizeFor.Size,
+      maxImageDimension: 3000,
+    }).run({ maxWait: '30s' });
+    const payload = mock.createWorkflow.mock.calls[0][0];
+    // quality from the Size cell, max_image_dimension from the explicit key.
+    expect(payload.jobs[0].operations[0].options).toEqual({ quality: 50, max_image_dimension: 3000 });
+  });
+
+  it('a key PDF compress does not define is still refused before any I/O', async () => {
+    const mock = makeMockClient();
     await expect(
       new OperationBuilder(mock.client, 'compress', 'report.pdf', {
-        quality: 80,
+        stripMacros: true,
       }).run({ maxWait: '30s' }),
-    ).rejects.toThrow(/PDF compression was removed at contracts v2\.166\.0/);
+    ).rejects.toMatchObject({ reason: 'unknown_field' });
     expect(mock.createWorkflow).not.toHaveBeenCalled();
   });
 });

@@ -297,6 +297,8 @@ export {
   type DocumentOdfCompressPresetOptionsInput,
   DocumentEpubCompressPresetOptions,
   type DocumentEpubCompressPresetOptionsInput,
+  DocumentPdfCompressPresetOptions,
+  type DocumentPdfCompressPresetOptionsInput,
   OptimizeFor,
   ImageMetadataPolicy,
   ImageFormat,
@@ -677,6 +679,7 @@ export type {
   CompressDocumentOfficeOptions,
   CompressDocumentOdfOptions,
   CompressDocumentEpubOptions,
+  CompressDocumentPdfOptions,
   ThumbnailImageOptions,
   ThumbnailVideoOptions,
   // Contracts v2.198.0 split the single `document` thumbnail group into per-format

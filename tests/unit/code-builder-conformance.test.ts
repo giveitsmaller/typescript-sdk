@@ -105,14 +105,11 @@ const CROSS_VERB_ROUTING: Readonly<Record<string, Readonly<Record<string, 'outpu
 /**
  * DEFERRED_EXPOSURE: expose+contract compress options reachable by NO ergonomic verb
  * today. Drift-guarded below (each must stay expose+contract AND genuinely
- * unreachable). Empty from f3JiTxkK until oavTfC6C: document `quality` (its only former entries)
- * is now native in KNOWN_WIRE_FIELDS. A new entry here is a deliberate deferral.
+ * unreachable). Empty: every former entry (document `quality`, then PDF `quality` and
+ * `max_image_dimension`) is now native in KNOWN_WIRE_FIELDS. A new entry here is a
+ * deliberate deferral.
  */
-// oavTfC6C: compress.document_pdf went planned -> beta at contracts v2.228.0; the SDK has
-// no document_pdf compress surface yet. Deliberate deferral until the card lands.
-const DEFERRED_EXPOSURE: Readonly<Record<string, readonly string[]>> = {
-  document_pdf: ['quality', 'max_image_dimension'],
-};
+const DEFERRED_EXPOSURE: Readonly<Record<string, readonly string[]>> = {};
 
 /**
  * PRE_EXPOSED: keys the SDK's `KNOWN_WIRE_FIELDS` ALLOWS ahead of the contract — the
@@ -184,7 +181,8 @@ describe('code-builder compress conformance', () => {
     for (const mg of Object.values(compress.media_groups)) {
       for (const [key, opt] of Object.entries(mg.options)) {
         // An option with no availability of its own inherits its media group's (a planned
-        // group's options derive coming_soon: compress.document_pdf, contracts v2.227.0).
+        // group's options derive coming_soon — compress.document_pdf did until it went
+        // beta at contracts v2.228.0).
         const availability = opt.availability ?? (mg as { availability?: string }).availability ?? 'stable';
         const expected = EXPOSURE_BY_AVAILABILITY[availability];
         expect(
@@ -298,12 +296,15 @@ describe('code-builder compress conformance', () => {
   // misclassification: an image key wrongly placed in DEFERRED IS in the output surface
   // and fails here.
   it('deferred keys are reachable by no ergonomic surface for their media', () => {
-    // Positive control (f3JiTxkK): DEFERRED_EXPOSURE is empty, so the loop below is
-    // vacuous. Document `quality`, its former entry, IS reachable now — exactly what
-    // the loop's `reachable.has(key) === false` would reject if it were re-deferred.
-    for (const documentGroup of ['document_office', 'document_odf', 'document_epub']) {
+    // Positive control (f3JiTxkK, oavTfC6C): DEFERRED_EXPOSURE is empty, so the loop
+    // below is vacuous. Its former entries — document `quality`, and PDF `quality` +
+    // `max_image_dimension` — ARE reachable now, exactly what the loop's
+    // `reachable.has(key) === false` would reject if they were re-deferred.
+    for (const documentGroup of ['document_office', 'document_odf', 'document_epub', 'document_pdf']) {
       expect(mediaReachableKeys(documentGroup).has('quality')).toBe(true);
     }
+    expect(mediaReachableKeys('document_pdf').has('max_image_dimension')).toBe(true);
+    expect(Object.keys(DEFERRED_EXPOSURE)).toEqual([]);
     for (const [media, keys] of Object.entries(DEFERRED_EXPOSURE)) {
       // Find a representative contract group for this SDK media (documents map 1:1).
       const group = Object.keys(compress.media_groups).find((g) => sdkMediaFor(g) === media);

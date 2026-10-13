@@ -51,6 +51,10 @@ import {
   DocumentEpubCompressPresetOptions,
   type DocumentEpubCompressPresetOptionsInput,
 } from './document_epub_compress.js';
+import {
+  DocumentPdfCompressPresetOptions,
+  type DocumentPdfCompressPresetOptionsInput,
+} from './document_pdf_compress.js';
 
 // Re-export everything callers need from this module's root.
 export {
@@ -77,6 +81,10 @@ export {
   DocumentEpubCompressPresetOptions,
   type DocumentEpubCompressPresetOptionsInput,
 } from './document_epub_compress.js';
+export {
+  DocumentPdfCompressPresetOptions,
+  type DocumentPdfCompressPresetOptionsInput,
+} from './document_pdf_compress.js';
 
 // Re-export ergonomic enums for callers (single canonical path).
 export {
@@ -102,14 +110,8 @@ export type PresetMedia =
   | 'video'
   | 'document_office'
   | 'document_odf'
-  | 'document_epub';
-
-/**
- * Media the file-first detector can identify — the compressible
- * `PresetMedia` set PLUS `document_pdf`, which is detectable (and a valid
- * watermark-reject / convert / transform base) but NOT compressible.
- */
-export type DetectedMedia = PresetMedia | 'document_pdf';
+  | 'document_epub'
+  | 'document_pdf';
 
 export type PresetOp = 'compress';
 
@@ -124,7 +126,8 @@ export type AnyPresetOptions =
   | VideoCompressPresetOptions
   | DocumentOfficeCompressPresetOptions
   | DocumentOdfCompressPresetOptions
-  | DocumentEpubCompressPresetOptions;
+  | DocumentEpubCompressPresetOptions
+  | DocumentPdfCompressPresetOptions;
 
 // ---------------------------------------------------------------------------
 // PresetDefaults builder
@@ -137,7 +140,8 @@ type CellKey =
   | 'video_compress'
   | 'document_office_compress'
   | 'document_odf_compress'
-  | 'document_epub_compress';
+  | 'document_epub_compress'
+  | 'document_pdf_compress';
 
 type CellEntries = ReadonlyMap<OptimizeFor, AnyPresetOptions>;
 
@@ -199,6 +203,8 @@ function mergePresetOptions(
       return DocumentOdfCompressPresetOptions.from(mergedFields as DocumentOdfCompressPresetOptionsInput);
     case 'document_epub_compress':
       return DocumentEpubCompressPresetOptions.from(mergedFields as DocumentEpubCompressPresetOptionsInput);
+    case 'document_pdf_compress':
+      return DocumentPdfCompressPresetOptions.from(mergedFields as DocumentPdfCompressPresetOptionsInput);
   }
 }
 
@@ -324,6 +330,13 @@ export class PresetDefaults {
     );
   }
 
+  /** Register a (level, delta) on the document-pdf-compress cell. Immutable. */
+  pdfCompress(level: OptimizeFor, input: DocumentPdfCompressPresetOptionsInput = {}): PresetDefaults {
+    return new PresetDefaults(
+      withCellEntry(this.cells, 'document_pdf_compress', level, DocumentPdfCompressPresetOptions.from(input)),
+    );
+  }
+
   // Overload set: narrowing return type by media.
   /** @internal */ cellFor(media: 'image', op: 'compress', level: OptimizeFor): ImageCompressPresetOptions | undefined;
   /** @internal */ cellFor(media: 'audio', op: 'compress', level: OptimizeFor): AudioCompressPresetOptions | undefined;
@@ -343,6 +356,11 @@ export class PresetDefaults {
     op: 'compress',
     level: OptimizeFor,
   ): DocumentEpubCompressPresetOptions | undefined;
+  /** @internal */ cellFor(
+    media: 'document_pdf',
+    op: 'compress',
+    level: OptimizeFor,
+  ): DocumentPdfCompressPresetOptions | undefined;
   /**
    * Return the user-supplied delta registered for `(media, op, level)`,
    * or `undefined` if none was registered.

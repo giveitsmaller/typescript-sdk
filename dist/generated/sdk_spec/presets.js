@@ -50,6 +50,20 @@ export const PRESETS = Object.freeze({
             "preset": "Slow",
         }),
     }),
+    "document_pdf_compress": Object.freeze({
+        Size: Object.freeze({
+            "quality": 50,
+            "maxImageDimension": 1200,
+        }),
+        Balanced: Object.freeze({
+            "quality": 70,
+            "maxImageDimension": 1600,
+        }),
+        Quality: Object.freeze({
+            "quality": 85,
+            "maxImageDimension": 2400,
+        }),
+    }),
     "document_office_compress": Object.freeze({
         Size: Object.freeze({
             "stripMacros": true,

@@ -56,7 +56,7 @@ import {
   FACADE_MANAGED_OUTPUTS,
 } from './ergonomic/image_output_routes.js';
 import { OptimizeFor } from './generated/sdk_spec/enums.js';
-import type { PresetDefaults, DetectedMedia } from './ergonomic/presets/index.js';
+import type { PresetDefaults, PresetMedia } from './ergonomic/presets/index.js';
 import type {
   JobDefinitionPayload,
   JobInputV2Payload,
@@ -1709,7 +1709,7 @@ export class Recipe {
   }
 
   /** Media of the original input (no chain context) — used by the probe gate. */
-  private inputMedia(): DetectedMedia | undefined {
+  private inputMedia(): PresetMedia | undefined {
     if (this.input.kind === 'path') return _detectCompressMedia(this.input.path);
     if (this.input.kind === 'blob') return _detectCompressMedia(this.input.blob);
     return undefined;
@@ -1723,7 +1723,7 @@ export class Recipe {
    * `mp3 -> convert(flac) -> compress` must resolve against flac, not mp3). Reuses the
    * synthetic-filename detection precedent from {@link MergedRecipe} (`merged.<ext>`).
    */
-  private compressMediaHint(uptoIndex?: number): DetectedMedia | undefined {
+  private compressMediaHint(uptoIndex?: number): PresetMedia | undefined {
     let media = this.inputMedia();
     if (uptoIndex === undefined) return media;
     for (let i = 0; i < uptoIndex; i++) {
@@ -1767,9 +1767,9 @@ export class Recipe {
  * image-class). Per the 56N4chXY plan review (architect + karen).
  */
 function _resolveConvertOutputMedia(
-  source: DetectedMedia | undefined,
+  source: PresetMedia | undefined,
   outputFormat: string,
-): DetectedMedia | undefined {
+): PresetMedia | undefined {
   if (source === 'video' && outputFormat.toLowerCase() === 'ogg') return 'video';
   return _detectCompressMedia(`f.${outputFormat}`);
 }
@@ -1845,7 +1845,7 @@ function _watermarkBlobMime(blob: Blob): string | undefined {
 
 /** The effective base of a watermark recipe AFTER folding its preceding steps. */
 interface WatermarkBase {
-  readonly media?: DetectedMedia;
+  readonly media?: PresetMedia;
   readonly mime?: string;
 }
 
@@ -1859,7 +1859,7 @@ function _watermarkEffectiveBase(
   input: FileInput,
   steps: readonly RecipeStep[],
 ): WatermarkBase {
-  let media: DetectedMedia | undefined =
+  let media: PresetMedia | undefined =
     input.kind === 'path'
       ? _detectCompressMedia(input.path)
       : input.kind === 'blob'

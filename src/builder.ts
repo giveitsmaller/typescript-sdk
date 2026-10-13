@@ -54,7 +54,7 @@ import { GislApiError, GislConfigError, GislTimeoutError, GislFanOutTimeoutError
 // time, not at module load, so the builder.ts <-> handle.ts cycle is safe
 // under ESM (handle.ts imports the await-primitives from this module).
 import { Handle } from './handle.js';
-import type { PresetDefaults, PresetMedia, DetectedMedia } from './ergonomic/presets/index.js';
+import type { PresetDefaults, PresetMedia } from './ergonomic/presets/index.js';
 import type { OptimizeFor } from './generated/sdk_spec/enums.js';
 import {
   resolveCompressOptions,
@@ -74,7 +74,7 @@ import { createWorkflowAwaitingProbe } from './probe-pending.js';
  *
  * @internal — exported for tests + the preset resolver.
  */
-export function _detectCompressMedia(input: string | Blob): DetectedMedia | undefined {
+export function _detectCompressMedia(input: string | Blob): PresetMedia | undefined {
   let filename: string | undefined;
   let mime: string | undefined;
   if (typeof input === 'string') {

@@ -1,6 +1,6 @@
 import type { ResolvedOptions } from '../builder.js';
 import type { OptimizeFor } from '../generated/sdk_spec/enums.js';
-import { type PresetDefaults, type PresetMedia, type DetectedMedia, type PresetOp } from './presets/index.js';
+import { type PresetDefaults, type PresetMedia, type PresetOp } from './presets/index.js';
 /**
  * The preset matrix version emitted on every resolve. Re-exported from the
  * GENERATED `sdk_spec/version.ts` (source of truth: contracts
@@ -9,7 +9,7 @@ import { type PresetDefaults, type PresetMedia, type DetectedMedia, type PresetO
  * construction. Previously a hand-typed literal that the v2.73.0 regen had to
  * bump manually (yREs0srv).
  */
-export declare const PRESET_VERSION: "1.6";
+export declare const PRESET_VERSION: "1.7";
 export declare const WIRE_ALIASES: Readonly<Record<string, string>>;
 /**
  * Inputs to {@link resolveCompressOptions}. `media` selects which leaf
@@ -18,7 +18,7 @@ export declare const WIRE_ALIASES: Readonly<Record<string, string>>;
  * extend the union.
  */
 export interface ResolveCompressOptionsInput {
-    readonly media: DetectedMedia;
+    readonly media: PresetMedia;
     readonly op: PresetOp;
     /** Defaults registered via `gisl.create({ presetDefaults: ... })`. */
     readonly presetDefaults?: PresetDefaults;

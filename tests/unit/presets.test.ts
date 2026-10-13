@@ -11,6 +11,7 @@ import {
   DocumentOfficeCompressPresetOptions,
   DocumentOdfCompressPresetOptions,
   DocumentEpubCompressPresetOptions,
+  DocumentPdfCompressPresetOptions,
   OptimizeFor,
   ImageMetadataPolicy,
   ImageFormat,
@@ -60,7 +61,7 @@ describe('ImageCompressPresetOptions.shippedDefaultsFor', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Audio / Video / Office / ODF / EPUB — coverage smoke
+// Audio / Video / Office / ODF / EPUB / PDF — coverage smoke
 // ---------------------------------------------------------------------------
 
 describe('AudioCompressPresetOptions.shippedDefaultsFor', () => {
@@ -183,6 +184,29 @@ describe('DocumentEpubCompressPresetOptions.shippedDefaultsFor', () => {
   });
 });
 
+describe('DocumentPdfCompressPresetOptions.shippedDefaultsFor (oavTfC6C)', () => {
+  it('Size / Balanced / Quality — quality and maxImageDimension per cell', () => {
+    const size = DocumentPdfCompressPresetOptions.shippedDefaultsFor(OptimizeFor.Size);
+    expect(size.quality).toBe(50);
+    expect(size.maxImageDimension).toBe(1200);
+
+    const balanced = DocumentPdfCompressPresetOptions.shippedDefaultsFor(OptimizeFor.Balanced);
+    expect(balanced.quality).toBe(70);
+    expect(balanced.maxImageDimension).toBe(1600);
+
+    const quality = DocumentPdfCompressPresetOptions.shippedDefaultsFor(OptimizeFor.Quality);
+    expect(quality.quality).toBe(85);
+    expect(quality.maxImageDimension).toBe(2400);
+  });
+
+  it('from() is sparse and frozen', () => {
+    const delta = DocumentPdfCompressPresetOptions.from({ maxImageDimension: 640 });
+    expect(delta.maxImageDimension).toBe(640);
+    expect(delta.quality).toBeUndefined();
+    expect(Object.isFrozen(delta)).toBe(true);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Sparse-delta construction via .from()
 // ---------------------------------------------------------------------------
@@ -296,7 +320,8 @@ describe('presetDefaults() / PresetDefaults', () => {
       .audioCompress(OptimizeFor.Balanced, { bitrate: AudioBitrate._192 })
       .officeCompress(OptimizeFor.Balanced, { stripHiddenData: true })
       .odfCompress(OptimizeFor.Quality, { stripMetadata: false })
-      .epubCompress(OptimizeFor.Size, { fontSubsetting: true });
+      .epubCompress(OptimizeFor.Size, { fontSubsetting: true })
+      .pdfCompress(OptimizeFor.Balanced, { quality: 55, maxImageDimension: 1024 });
 
     expect(d.cellFor('image', 'compress', OptimizeFor.Size)?.quality).toBe(70);
     expect(d.cellFor('video', 'compress', OptimizeFor.Quality)?.crf).toBe(18);
@@ -304,6 +329,9 @@ describe('presetDefaults() / PresetDefaults', () => {
     expect(d.cellFor('document_office', 'compress', OptimizeFor.Balanced)?.stripHiddenData).toBe(true);
     expect(d.cellFor('document_odf', 'compress', OptimizeFor.Quality)?.stripMetadata).toBe(false);
     expect(d.cellFor('document_epub', 'compress', OptimizeFor.Size)?.fontSubsetting).toBe(true);
+    expect(d.cellFor('document_pdf', 'compress', OptimizeFor.Balanced)?.quality).toBe(55);
+    expect(d.cellFor('document_pdf', 'compress', OptimizeFor.Balanced)?.maxImageDimension).toBe(1024);
+    expect(d.cellFor('document_pdf', 'compress', OptimizeFor.Size)).toBeUndefined();
   });
 
   it('a cell registered at two different levels keeps both entries (level-keyed map)', () => {
@@ -408,6 +436,7 @@ describe('PRESETS regen drift trip-wire', () => {
     { cellKey: 'document_office_compress', fn: DocumentOfficeCompressPresetOptions.shippedDefaultsFor },
     { cellKey: 'document_odf_compress', fn: DocumentOdfCompressPresetOptions.shippedDefaultsFor },
     { cellKey: 'document_epub_compress', fn: DocumentEpubCompressPresetOptions.shippedDefaultsFor },
+    { cellKey: 'document_pdf_compress', fn: DocumentPdfCompressPresetOptions.shippedDefaultsFor },
   ] as const;
 
   it('every cell key in F3 PRESETS has a corresponding leaf DTO', () => {

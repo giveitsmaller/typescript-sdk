@@ -48,10 +48,10 @@ import {
   DocumentOfficeCompressPresetOptions,
   DocumentOdfCompressPresetOptions,
   DocumentEpubCompressPresetOptions,
+  DocumentPdfCompressPresetOptions,
   definedFieldsOf,
   type PresetDefaults,
   type PresetMedia,
-  type DetectedMedia,
   type PresetOp,
 } from './presets/index.js';
 
@@ -92,6 +92,7 @@ export const WIRE_ALIASES: Readonly<Record<string, string>> = Object.freeze({
   stripUnusedStyles: 'strip_unused_styles',
   fontSubsetting: 'font_subsetting',
   stripUnusedCss: 'strip_unused_css',
+  maxImageDimension: 'max_image_dimension',
   // `targetSize` is a resolver-only ergonomic field — translated below
   // into `target_size_bytes` + `encoding_mode`. Don't emit it under
   // its own snake form.
@@ -112,7 +113,7 @@ function applyAlias(camelKey: string): string {
  * extend the union.
  */
 export interface ResolveCompressOptionsInput {
-  readonly media: DetectedMedia;
+  readonly media: PresetMedia;
   readonly op: PresetOp;
   /** Defaults registered via `gisl.create({ presetDefaults: ... })`. */
   readonly presetDefaults?: PresetDefaults;
@@ -286,6 +287,8 @@ function sdkDefaultRecord(media: PresetMedia, op: PresetOp, optimize: OptimizeFo
       return { ...DocumentOdfCompressPresetOptions.shippedDefaultsFor(optimize) };
     case 'document_epub':
       return { ...DocumentEpubCompressPresetOptions.shippedDefaultsFor(optimize) };
+    case 'document_pdf':
+      return { ...DocumentPdfCompressPresetOptions.shippedDefaultsFor(optimize) };
   }
 }
 
@@ -329,6 +332,9 @@ function presetDefaultsCellRecord(
     case 'document_epub':
       cell = defaults.cellFor('document_epub', 'compress', optimize);
       break;
+    case 'document_pdf':
+      cell = defaults.cellFor('document_pdf', 'compress', optimize);
+      break;
   }
   if (cell === undefined) return undefined;
   // Reduce to a SPARSE camelCase record, dropping undefined-valued keys.
@@ -360,6 +366,7 @@ const MEDIA_FIELDS: Readonly<Record<PresetMedia, ReadonlySet<string>>> = Object.
   document_office: new Set(['quality', 'stripMacros', 'stripHiddenData', 'stripUnusedFonts']),
   document_odf: new Set(['quality', 'stripMetadata', 'stripUnusedStyles']),
   document_epub: new Set(['quality', 'fontSubsetting', 'stripUnusedCss']),
+  document_pdf: new Set(['quality', 'maxImageDimension']),
 });
 
 /**
@@ -535,6 +542,7 @@ export const KNOWN_WIRE_FIELDS: Readonly<Record<PresetMedia, ReadonlySet<string>
   document_office: new Set(['quality', 'strip_macros', 'strip_hidden_data', 'strip_unused_fonts']),
   document_odf: new Set(['quality', 'strip_metadata', 'strip_unused_styles']),
   document_epub: new Set(['quality', 'font_subsetting', 'strip_unused_css']),
+  document_pdf: new Set(['quality', 'max_image_dimension']),
 });
 
 /**
@@ -565,6 +573,7 @@ export const PLANNED_COMPRESS_OPTIONS: Readonly<Record<PresetMedia, ReadonlySet<
   document_office: new Set(['strip_hidden_data', 'strip_macros', 'strip_unused_fonts']),
   document_odf: new Set(['strip_metadata', 'strip_unused_styles']),
   document_epub: new Set(['font_subsetting', 'strip_unused_css']),
+  document_pdf: new Set<string>([]),
 });
 
 function validateMerged(
@@ -713,12 +722,6 @@ function computePresetConfigHash(
 export function resolveCompressOptions(
   input: ResolveCompressOptionsInput,
 ): ResolveCompressOptionsOutput {
-  if (input.media === 'document_pdf') {
-    throw new GislConfigError(
-      'PDF compression was removed at contracts v2.166.0; convert() / transform() still accept PDF.',
-      { reason: 'unsupported_media' },
-    );
-  }
   const { media, op, presetDefaults, scopedPresetDefaults, presetOverrides, optimize, explicitOptions, audioLossless } = input;
   if (op !== 'compress') {
     throw new GislConfigError(

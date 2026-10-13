@@ -5,28 +5,24 @@ import { VideoCompressPresetOptions, type VideoCompressPresetOptionsInput } from
 import { DocumentOfficeCompressPresetOptions, type DocumentOfficeCompressPresetOptionsInput } from './document_office_compress.js';
 import { DocumentOdfCompressPresetOptions, type DocumentOdfCompressPresetOptionsInput } from './document_odf_compress.js';
 import { DocumentEpubCompressPresetOptions, type DocumentEpubCompressPresetOptionsInput } from './document_epub_compress.js';
+import { DocumentPdfCompressPresetOptions, type DocumentPdfCompressPresetOptionsInput } from './document_pdf_compress.js';
 export { ImageCompressPresetOptions, type ImageCompressPresetOptionsInput, } from './image_compress.js';
 export { AudioCompressPresetOptions, type AudioCompressPresetOptionsInput, } from './audio_compress.js';
 export { VideoCompressPresetOptions, type VideoCompressPresetOptionsInput, } from './video_compress.js';
 export { DocumentOfficeCompressPresetOptions, type DocumentOfficeCompressPresetOptionsInput, } from './document_office_compress.js';
 export { DocumentOdfCompressPresetOptions, type DocumentOdfCompressPresetOptionsInput, } from './document_odf_compress.js';
 export { DocumentEpubCompressPresetOptions, type DocumentEpubCompressPresetOptionsInput, } from './document_epub_compress.js';
+export { DocumentPdfCompressPresetOptions, type DocumentPdfCompressPresetOptionsInput, } from './document_pdf_compress.js';
 export { OptimizeFor, ImageMetadataPolicy, ImageFormat, VideoCodec, VideoPreset, VideoFit, AudioBitrate, AudioCodec, AudioSampleRate, } from '../../generated/sdk_spec/enums.js';
 /** Supported media×op pairs for preset cells in T4a. Compress-only. */
-export type PresetMedia = 'image' | 'audio' | 'video' | 'document_office' | 'document_odf' | 'document_epub';
-/**
- * Media the file-first detector can identify — the compressible
- * `PresetMedia` set PLUS `document_pdf`, which is detectable (and a valid
- * watermark-reject / convert / transform base) but NOT compressible.
- */
-export type DetectedMedia = PresetMedia | 'document_pdf';
+export type PresetMedia = 'image' | 'audio' | 'video' | 'document_office' | 'document_odf' | 'document_epub' | 'document_pdf';
 export type PresetOp = 'compress';
 /**
  * Union of leaf-DTO types the resolver will see from `cellFor()`.
  * Discriminated by which `media` the caller passes — the type system
  * narrows the return automatically via the overload set below.
  */
-export type AnyPresetOptions = ImageCompressPresetOptions | AudioCompressPresetOptions | VideoCompressPresetOptions | DocumentOfficeCompressPresetOptions | DocumentOdfCompressPresetOptions | DocumentEpubCompressPresetOptions;
+export type AnyPresetOptions = ImageCompressPresetOptions | AudioCompressPresetOptions | VideoCompressPresetOptions | DocumentOfficeCompressPresetOptions | DocumentOdfCompressPresetOptions | DocumentEpubCompressPresetOptions | DocumentPdfCompressPresetOptions;
 /**
  * Per-cell field-merge: parent fields ⊕ child fields where defined.
  * Re-construct the leaf DTO via the matching `<LeafClass>.from(merged)`
@@ -83,12 +79,15 @@ export declare class PresetDefaults {
     odfCompress(level: OptimizeFor, input?: DocumentOdfCompressPresetOptionsInput): PresetDefaults;
     /** Register a (level, delta) on the document-epub-compress cell. Immutable. */
     epubCompress(level: OptimizeFor, input?: DocumentEpubCompressPresetOptionsInput): PresetDefaults;
+    /** Register a (level, delta) on the document-pdf-compress cell. Immutable. */
+    pdfCompress(level: OptimizeFor, input?: DocumentPdfCompressPresetOptionsInput): PresetDefaults;
     /** @internal */ cellFor(media: 'image', op: 'compress', level: OptimizeFor): ImageCompressPresetOptions | undefined;
     /** @internal */ cellFor(media: 'audio', op: 'compress', level: OptimizeFor): AudioCompressPresetOptions | undefined;
     /** @internal */ cellFor(media: 'video', op: 'compress', level: OptimizeFor): VideoCompressPresetOptions | undefined;
     /** @internal */ cellFor(media: 'document_office', op: 'compress', level: OptimizeFor): DocumentOfficeCompressPresetOptions | undefined;
     /** @internal */ cellFor(media: 'document_odf', op: 'compress', level: OptimizeFor): DocumentOdfCompressPresetOptions | undefined;
     /** @internal */ cellFor(media: 'document_epub', op: 'compress', level: OptimizeFor): DocumentEpubCompressPresetOptions | undefined;
+    /** @internal */ cellFor(media: 'document_pdf', op: 'compress', level: OptimizeFor): DocumentPdfCompressPresetOptions | undefined;
 }
 /**
  * Construct an empty {@link PresetDefaults} builder. Chain per-cell

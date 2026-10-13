@@ -182,6 +182,22 @@ describe('shipped presets never emit a planned option', () => {
   );
 });
 
+describe('document_pdf: the preset is NOT a no-op (oavTfC6C)', () => {
+  // The counterpart of the KNOWN CONSEQUENCE above: PDF's cells carry only
+  // non-planned keys, so every level survives the drop and the levels differ.
+  it('every level emits quality + max_image_dimension, and no two levels are equal', () => {
+    const wires = LEVELS.map(
+      (level) =>
+        resolveCompressOptions({ media: 'document_pdf', op: 'compress', optimize: level, explicitOptions: {} })
+          .wireOptions,
+    );
+    for (const wire of wires) {
+      expect(Object.keys(wire).sort()).toEqual(['max_image_dimension', 'quality']);
+    }
+    expect(new Set(wires.map((w) => JSON.stringify(w))).size).toBe(LEVELS.length);
+  });
+});
+
 describe('planned per-VALUE gating on the resolved preset media', () => {
   // Option-level `availability` is not the only way a key can be unavailable: a
   // stable option can carry a `planned` VALUE (`per_value_availability`). A shipped

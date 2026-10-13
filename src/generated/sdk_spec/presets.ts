@@ -57,6 +57,20 @@ export const PRESETS: PresetMatrix = Object.freeze({
       "preset": "Slow",
     } as PresetCell),
   } as Readonly<Record<PresetLevel, PresetCell>>),
+  "document_pdf_compress": Object.freeze({
+    Size: Object.freeze({
+      "quality": 50,
+      "maxImageDimension": 1200,
+    } as PresetCell),
+    Balanced: Object.freeze({
+      "quality": 70,
+      "maxImageDimension": 1600,
+    } as PresetCell),
+    Quality: Object.freeze({
+      "quality": 85,
+      "maxImageDimension": 2400,
+    } as PresetCell),
+  } as Readonly<Record<PresetLevel, PresetCell>>),
   "document_office_compress": Object.freeze({
     Size: Object.freeze({
       "stripMacros": true,

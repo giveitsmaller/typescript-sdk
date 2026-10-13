@@ -37,7 +37,7 @@
 import { sha256Hex } from '../sha256.js';
 import { GislConfigError } from '../errors.js';
 import { PRESET_VERSION as GENERATED_PRESET_VERSION } from '../generated/sdk_spec/version.js';
-import { ImageCompressPresetOptions, AudioCompressPresetOptions, VideoCompressPresetOptions, DocumentOfficeCompressPresetOptions, DocumentOdfCompressPresetOptions, DocumentEpubCompressPresetOptions, definedFieldsOf, } from './presets/index.js';
+import { ImageCompressPresetOptions, AudioCompressPresetOptions, VideoCompressPresetOptions, DocumentOfficeCompressPresetOptions, DocumentOdfCompressPresetOptions, DocumentEpubCompressPresetOptions, DocumentPdfCompressPresetOptions, definedFieldsOf, } from './presets/index.js';
 /**
  * The preset matrix version emitted on every resolve. Re-exported from the
  * GENERATED `sdk_spec/version.ts` (source of truth: contracts
@@ -73,6 +73,7 @@ export const WIRE_ALIASES = Object.freeze({
     stripUnusedStyles: 'strip_unused_styles',
     fontSubsetting: 'font_subsetting',
     stripUnusedCss: 'strip_unused_css',
+    maxImageDimension: 'max_image_dimension',
     // `targetSize` is a resolver-only ergonomic field — translated below
     // into `target_size_bytes` + `encoding_mode`. Don't emit it under
     // its own snake form.
@@ -184,6 +185,8 @@ function sdkDefaultRecord(media, op, optimize) {
             return { ...DocumentOdfCompressPresetOptions.shippedDefaultsFor(optimize) };
         case 'document_epub':
             return { ...DocumentEpubCompressPresetOptions.shippedDefaultsFor(optimize) };
+        case 'document_pdf':
+            return { ...DocumentPdfCompressPresetOptions.shippedDefaultsFor(optimize) };
     }
 }
 /**
@@ -223,6 +226,9 @@ function presetDefaultsCellRecord(defaults, media, op, optimize) {
         case 'document_epub':
             cell = defaults.cellFor('document_epub', 'compress', optimize);
             break;
+        case 'document_pdf':
+            cell = defaults.cellFor('document_pdf', 'compress', optimize);
+            break;
     }
     if (cell === undefined)
         return undefined;
@@ -253,6 +259,7 @@ const MEDIA_FIELDS = Object.freeze({
     document_office: new Set(['quality', 'stripMacros', 'stripHiddenData', 'stripUnusedFonts']),
     document_odf: new Set(['quality', 'stripMetadata', 'stripUnusedStyles']),
     document_epub: new Set(['quality', 'fontSubsetting', 'stripUnusedCss']),
+    document_pdf: new Set(['quality', 'maxImageDimension']),
 });
 const OUT = (key) => ({ verb: 'output', key });
 const CROSS_VERB_OVERRIDES = Object.freeze({
@@ -371,6 +378,7 @@ export const KNOWN_WIRE_FIELDS = Object.freeze({
     document_office: new Set(['quality', 'strip_macros', 'strip_hidden_data', 'strip_unused_fonts']),
     document_odf: new Set(['quality', 'strip_metadata', 'strip_unused_styles']),
     document_epub: new Set(['quality', 'font_subsetting', 'strip_unused_css']),
+    document_pdf: new Set(['quality', 'max_image_dimension']),
 });
 /**
  * Compress options that are `availability: planned` per mime-group, mirroring the
@@ -400,6 +408,7 @@ export const PLANNED_COMPRESS_OPTIONS = Object.freeze({
     document_office: new Set(['strip_hidden_data', 'strip_macros', 'strip_unused_fonts']),
     document_odf: new Set(['strip_metadata', 'strip_unused_styles']),
     document_epub: new Set(['font_subsetting', 'strip_unused_css']),
+    document_pdf: new Set([]),
 });
 function validateMerged(media, merged, explicitKeys, winners) {
     // Unknown-field defence-in-depth: every key must belong to the
@@ -519,9 +528,6 @@ function computePresetConfigHash(clientDefault, scopedDefault, callPresetOverrid
  * `optimize` unset ⇒ layer 1 contributes nothing; `resolvedOptions.preset = null`.
  */
 export function resolveCompressOptions(input) {
-    if (input.media === 'document_pdf') {
-        throw new GislConfigError('PDF compression was removed at contracts v2.166.0; convert() / transform() still accept PDF.', { reason: 'unsupported_media' });
-    }
     const { media, op, presetDefaults, scopedPresetDefaults, presetOverrides, optimize, explicitOptions, audioLossless } = input;
     if (op !== 'compress') {
         throw new GislConfigError(`Preset resolution is only wired for compress operations today; got op='${op}'.`, { reason: 'unsupported_op' });
