@@ -42,6 +42,7 @@ export type ErrorCode =
   | "probe_not_applicable"
   | "input_password_protected"
   | "gif_too_long"
+  | "merge_over_limit"
   | "inputs_not_concat_uniform"
   | "requires_reencode"
   | "invalid_options"
@@ -589,6 +590,17 @@ export const ERROR_CODES: Readonly<Record<ErrorCode, ErrorEntry>> = Object.freez
     description: "422 — a convert of video to GIF whose kept window (input duration minus trims) exceeds convert.video output_format per_value_constraints.gif.max_kept_duration (PT10S). Wire `GIF_TOO_LONG`; ValidationErrorEnvelope, one details[] entry. The caller trims to the limit or picks mp4/webm; retrying does not help. `planned` until api ships the create-time refusal (zfFnNYRY).",
     metadataSchema: Object.freeze({}),
   }),
+  "merge_over_limit": Object.freeze({
+    code: "merge_over_limit",
+    category: "validation" as ErrorCategory,
+    source: "ErrorEnvelope.error",
+    status: "planned" as ErrorStatus,
+    httpStatus: 422,
+    retryable: false,
+    sdkClass: "GislValidationError",
+    description: "422 — a video merge whose inputs are not concat-uniform (so only merge.video short_form_concat can run it) and whose measured total exceeds that class's max_total_duration (PT5M) or max_total_input_size_bytes (500 MiB). Wire `MERGE_OVER_LIMIT`; ValidationErrorEnvelope, one details[] entry whose `ceiling` (InputCeilingViolation) carries axis, actual, maximum, bound_by merge. The caller trims the clips or uses uniform ones; retrying does not help. `planned` until api ships the create-time refusal (xuVTM06N; owner decision 755).",
+    metadataSchema: Object.freeze({}),
+  }),
   "inputs_not_concat_uniform": Object.freeze({
     code: "inputs_not_concat_uniform",
     category: "validation" as ErrorCategory,
@@ -989,6 +1001,7 @@ export const ERROR_CATEGORIES: Readonly<Record<ErrorCategory, readonly ErrorCode
     "cyclic_job_output_source_graph",
     "input_password_protected",
     "gif_too_long",
+    "merge_over_limit",
     "inputs_not_concat_uniform",
     "invalid_options",
     "invalid_combination",
