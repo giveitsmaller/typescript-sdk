@@ -240,6 +240,12 @@ export interface OperationBreakdown {
   readonly progress?: number;
   readonly errorCode?: string;
   readonly errorMessage?: string;
+  /** ISO-8601 UTC, when the api queued this operation. Absent when the api did not report it. */
+  readonly queuedAt?: string;
+  /** ISO-8601 UTC, when a worker started this operation. */
+  readonly startedAt?: string;
+  /** ISO-8601 UTC, when this operation reached a terminal status. */
+  readonly completedAt?: string;
 }
 
 /**
@@ -1515,7 +1521,15 @@ export function _projectResult(
     progress?: number;
     errorCode?: string;
     errorMessage?: string;
+    queuedAt?: Date;
+    startedAt?: Date;
+    completedAt?: Date;
   };
+  // Codex r2 medium 3d229f9bc1fb — generated FromJSON deserializes timestamps
+  // as Date objects. String(date) gives a locale/timezone-dependent toString();
+  // we want canonical ISO-8601 round-trip with the wire shape. Declared before
+  // the jobs projection, which calls it eagerly.
+  const isoIfDate = (v: unknown): string => (v instanceof Date ? v.toISOString() : String(v));
   const jobs: JobBreakdown[] = ((status as unknown as { jobs?: readonly _RawJob[] }).jobs ?? []).map(
     (j) => ({
       jobId: j.jobId,
@@ -1528,14 +1542,13 @@ export function _projectResult(
         ...(op.progress !== undefined ? { progress: op.progress } : {}),
         ...(op.errorCode !== undefined ? { errorCode: op.errorCode } : {}),
         ...(op.errorMessage !== undefined ? { errorMessage: op.errorMessage } : {}),
+        ...(op.queuedAt !== undefined ? { queuedAt: isoIfDate(op.queuedAt) } : {}),
+        ...(op.startedAt !== undefined ? { startedAt: isoIfDate(op.startedAt) } : {}),
+        ...(op.completedAt !== undefined ? { completedAt: isoIfDate(op.completedAt) } : {}),
       })),
     }),
   );
 
-  // Codex r2 medium 3d229f9bc1fb — generated FromJSON deserializes timestamps
-  // as Date objects. String(date) gives a locale/timezone-dependent toString();
-  // we want canonical ISO-8601 round-trip with the wire shape.
-  const isoIfDate = (v: unknown): string => (v instanceof Date ? v.toISOString() : String(v));
   const result: Result = {
     workflowId: status.workflowId,
     status: status.status,

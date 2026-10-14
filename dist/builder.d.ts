@@ -114,6 +114,12 @@ export interface OperationBreakdown {
     readonly progress?: number;
     readonly errorCode?: string;
     readonly errorMessage?: string;
+    /** ISO-8601 UTC, when the api queued this operation. Absent when the api did not report it. */
+    readonly queuedAt?: string;
+    /** ISO-8601 UTC, when a worker started this operation. */
+    readonly startedAt?: string;
+    /** ISO-8601 UTC, when this operation reached a terminal status. */
+    readonly completedAt?: string;
 }
 /**
  * Per-job breakdown surfaced on `Result.jobs`. Used for inspecting partial

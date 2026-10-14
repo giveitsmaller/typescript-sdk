@@ -6,6 +6,10 @@ import { GislApiError, GislTimeoutError, GislFanOutTimeoutError, SseConnectRefus
 import { Handle } from '../../src/handle.js';
 import { _isPlannedEverywhere } from '../../src/ergonomic/planned_values.js';
 import type { GislClient } from '../../src/client.js';
+import { readFileSync } from 'node:fs';
+import { parse as parseYaml } from 'yaml';
+import { WorkflowStatusResponseFromJSON } from '@giveitsmaller/contracts/openapi';
+import { GENERATED_SPEC_PATH } from './_contract-paths.js';
 
 // ---------------------------------------------------------------------------
 // Test doubles — vi.fn-replaced GislClient methods + a fetch stub for any
@@ -641,6 +645,98 @@ describe('codex R1 regression guards', () => {
     expect(result.jobs[0].operations).toHaveLength(1);
     expect(result.jobs[0].operations[0].errorCode).toBe('INPUT_CORRUPT');
     expect(result.jobs[0].operations[0].errorMessage).toBe('File is not a valid JPEG');
+  });
+
+  describe('OperationBreakdown per-operation timestamps (qFgn1gn4)', () => {
+    async function projectStatus(status: unknown): Promise<Result> {
+      const mock = makeMockClient();
+      mock.getWorkflowStatus.mockResolvedValueOnce(status);
+      return new OperationBuilder(mock.client, 'compress', 'p.jpg', {}).run({ maxWait: '30s' });
+    }
+
+    function wireStatus(operation: Record<string, unknown>): unknown {
+      return WorkflowStatusResponseFromJSON({
+        workflow_id: 'wf_1',
+        status: 'completed',
+        // Required by the contract; FromJSON builds an Invalid Date without them.
+        created_at: '2026-10-14T09:39:00.000Z',
+        updated_at: '2026-10-14T09:40:00.000Z',
+        jobs: [{ job_id: 'job_1', ref: 'op', status: 'completed', operations: [operation] }],
+      });
+    }
+
+    const baseOperation = { id: 'op_1', type: 'compress', status: 'completed' };
+
+    it('surfaces queuedAt/startedAt/completedAt as exact ISO-8601 strings', async () => {
+      const result = await projectStatus(
+        wireStatus({
+          ...baseOperation,
+          queued_at: '2026-10-14T09:39:06.800Z',
+          started_at: '2026-10-14T09:39:08.108Z',
+          completed_at: '2026-10-14T09:39:56.451Z',
+        }),
+      );
+      const op = result.jobs[0].operations[0];
+      expect(op.queuedAt).toBe('2026-10-14T09:39:06.800Z');
+      expect(op.startedAt).toBe('2026-10-14T09:39:08.108Z');
+      expect(op.completedAt).toBe('2026-10-14T09:39:56.451Z');
+    });
+
+    it('normalises a non-UTC wire offset to the UTC ISO form', async () => {
+      const result = await projectStatus(wireStatus({ ...baseOperation, queued_at: '2026-10-14T10:39:06.800+01:00' }));
+      expect(result.jobs[0].operations[0].queuedAt).toBe('2026-10-14T09:39:06.800Z');
+    });
+
+    it('omits each key when the api did not report it', async () => {
+      const result = await projectStatus(wireStatus({ ...baseOperation, queued_at: '2026-10-14T09:39:06.800Z' }));
+      const op = result.jobs[0].operations[0];
+      expect(op.queuedAt).toBe('2026-10-14T09:39:06.800Z');
+      expect('startedAt' in op).toBe(false);
+      expect('completedAt' in op).toBe(false);
+    });
+
+    it('omits each key when the api sent null', async () => {
+      const result = await projectStatus(
+        wireStatus({ ...baseOperation, queued_at: null, started_at: null, completed_at: null }),
+      );
+      const op = result.jobs[0].operations[0];
+      expect(Object.keys(op).sort()).toEqual(['id', 'status', 'type']);
+    });
+
+    // Contract-drift guard: every date-time property the vendored contract
+    // declares on OperationResponse must reach Result.jobs[].operations[], so
+    // a future op-level timestamp cannot be silently dropped by the projection.
+    function dateTimeOperationProps(): string[] {
+      const spec = parseYaml(readFileSync(GENERATED_SPEC_PATH, 'utf8')) as {
+        components: { schemas: { OperationResponse: { properties: Record<string, { format?: string }> } } };
+      };
+      return Object.entries(spec.components.schemas.OperationResponse.properties)
+        .filter(([, schema]) => schema.format === 'date-time')
+        .map(([name]) => name);
+    }
+
+    const camelCase = (wireName: string): string => wireName.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
+
+    function propsMissingFromProjection(wireNames: readonly string[], operation: object): string[] {
+      return wireNames.filter((name) => !(camelCase(name) in operation));
+    }
+
+    it('projects every date-time property of the contract OperationResponse', async () => {
+      const wireNames = dateTimeOperationProps();
+      expect(wireNames.length).toBeGreaterThan(0);
+      const body = { ...baseOperation, ...Object.fromEntries(wireNames.map((n) => [n, '2026-10-14T09:39:06.800Z'])) };
+      const op = (await projectStatus(wireStatus(body))).jobs[0].operations[0];
+      expect(propsMissingFromProjection(wireNames, op)).toEqual([]);
+      for (const name of wireNames) {
+        expect((op as unknown as Record<string, unknown>)[camelCase(name)]).toBe('2026-10-14T09:39:06.800Z');
+      }
+    });
+
+    it('negative control: the drift check names a date-time property the projection drops', async () => {
+      const op = (await projectStatus(wireStatus({ ...baseOperation, queued_at: '2026-10-14T09:39:06.800Z' }))).jobs[0]
+        .operations[0];
+      expect(propsMissingFromProjection(['queued_at', 'archived_at'], op)).toEqual(['archived_at']);
+    });
   });
 
   it('clamps non-finite/negative/tiny pollIntervalMs rather than rejecting (89130e3ea75d)', async () => {

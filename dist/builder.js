@@ -1081,6 +1081,11 @@ export function _projectResult(status, jobDownloads, appliedOptions, transport, 
             artifacts.push(a);
         }
     }
+    // Codex r2 medium 3d229f9bc1fb — generated FromJSON deserializes timestamps
+    // as Date objects. String(date) gives a locale/timezone-dependent toString();
+    // we want canonical ISO-8601 round-trip with the wire shape. Declared before
+    // the jobs projection, which calls it eagerly.
+    const isoIfDate = (v) => (v instanceof Date ? v.toISOString() : String(v));
     const jobs = (status.jobs ?? []).map((j) => ({
         jobId: j.jobId,
         ref: j.ref,
@@ -1092,12 +1097,11 @@ export function _projectResult(status, jobDownloads, appliedOptions, transport, 
             ...(op.progress !== undefined ? { progress: op.progress } : {}),
             ...(op.errorCode !== undefined ? { errorCode: op.errorCode } : {}),
             ...(op.errorMessage !== undefined ? { errorMessage: op.errorMessage } : {}),
+            ...(op.queuedAt !== undefined ? { queuedAt: isoIfDate(op.queuedAt) } : {}),
+            ...(op.startedAt !== undefined ? { startedAt: isoIfDate(op.startedAt) } : {}),
+            ...(op.completedAt !== undefined ? { completedAt: isoIfDate(op.completedAt) } : {}),
         })),
     }));
-    // Codex r2 medium 3d229f9bc1fb — generated FromJSON deserializes timestamps
-    // as Date objects. String(date) gives a locale/timezone-dependent toString();
-    // we want canonical ISO-8601 round-trip with the wire shape.
-    const isoIfDate = (v) => (v instanceof Date ? v.toISOString() : String(v));
     const result = {
         workflowId: status.workflowId,
         status: status.status,
