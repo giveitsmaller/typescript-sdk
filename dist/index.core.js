@@ -134,7 +134,7 @@ export { ENVIRONMENT_ENDPOINTS, ENVIRONMENT_STREAM_ENDPOINTS } from './credentia
 // Ergonomic preset defaults (T4a / VhIj4S7T) — typed leaf DTOs + immutable
 // `PresetDefaults` builder + `presetDefaults()` factory + ergonomic enum
 // re-exports. Resolver wiring (T4b) consumes `PresetDefaults.cellFor()`.
-export { presetDefaults, PresetDefaults, ImageCompressPresetOptions, AudioCompressPresetOptions, VideoCompressPresetOptions, DocumentOfficeCompressPresetOptions, DocumentOdfCompressPresetOptions, DocumentEpubCompressPresetOptions, DocumentPdfCompressPresetOptions, OptimizeFor, ImageMetadataPolicy, ImageFormat, VideoCodec, VideoPreset, VideoFit, AudioBitrate, AudioCodec, AudioSampleRate, } from './ergonomic/presets/index.js';
+export { presetDefaults, PresetDefaults, ImageCompressPresetOptions, AudioCompressPresetOptions, VideoCompressPresetOptions, DocumentOfficeCompressPresetOptions, DocumentOdfCompressPresetOptions, DocumentEpubCompressPresetOptions, DocumentPdfCompressPresetOptions, ImageConvertPresetOptions, VideoConvertPresetOptions, ImageThumbnailPresetOptions, VideoThumbnailPresetOptions, DocumentThumbnailPresetOptions, OptimizeFor, ImageMetadataPolicy, ImageFormat, VideoCodec, VideoPreset, VideoFit, AudioBitrate, AudioCodec, AudioSampleRate, } from './ergonomic/presets/index.js';
 // Operation-builder surface (T2 / xVDTIm8C) — `client.compress/convert/thumbnail`
 // returns an `OperationBuilder`; `.run()` projects to a flat `Result` /
 // `.submit({webhook})` returns a `Handle`. Progress events are the

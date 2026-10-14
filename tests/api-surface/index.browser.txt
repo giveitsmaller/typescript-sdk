@@ -108,6 +108,8 @@ DocumentOfficeCompressPresetOptions	value+type
 DocumentOfficeCompressPresetOptionsInput	type
 DocumentPdfCompressPresetOptions	value+type
 DocumentPdfCompressPresetOptionsInput	type
+DocumentThumbnailPresetOptions	value+type
+DocumentThumbnailPresetOptionsInput	type
 DownloadBundle	type
 Downloader	type
 Environment	type
@@ -189,9 +191,13 @@ handle	value
 Handle	value+type
 ImageCompressPresetOptions	value+type
 ImageCompressPresetOptionsInput	type
+ImageConvertPresetOptions	value+type
+ImageConvertPresetOptionsInput	type
 ImageEncodeCapabilities	type
 ImageFormat	value+type
 ImageMetadataPolicy	value+type
+ImageThumbnailPresetOptions	value+type
+ImageThumbnailPresetOptionsInput	type
 ImageWatermarkImageAnchor	value
 ImageWatermarkImageGifAnchor	value
 ImageWatermarkImageGifOptions	type
@@ -375,6 +381,8 @@ UserTier	value
 VideoCodec	value+type
 VideoCompressPresetOptions	value+type
 VideoCompressPresetOptionsInput	type
+VideoConvertPresetOptions	value+type
+VideoConvertPresetOptionsInput	type
 VideoFit	value+type
 VideoPreset	value+type
 videoTextWatermarkMetadata	value
@@ -382,6 +390,8 @@ VideoTextWatermarkVideoAnchor	value
 VideoTextWatermarkVideoFontFamily	value
 VideoTextWatermarkVideoOptions	type
 VideoTextWatermarkVideoWatermarkMode	value
+VideoThumbnailPresetOptions	value+type
+VideoThumbnailPresetOptionsInput	type
 videoWatermarkMetadata	value
 VideoWatermarkVideoAnchor	value
 VideoWatermarkVideoOptions	type

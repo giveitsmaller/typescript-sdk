@@ -12,6 +12,11 @@ import {
   DocumentOdfCompressPresetOptions,
   DocumentEpubCompressPresetOptions,
   DocumentPdfCompressPresetOptions,
+  ImageConvertPresetOptions,
+  VideoConvertPresetOptions,
+  ImageThumbnailPresetOptions,
+  VideoThumbnailPresetOptions,
+  DocumentThumbnailPresetOptions,
   OptimizeFor,
   ImageMetadataPolicy,
   ImageFormat,
@@ -260,6 +265,63 @@ describe('*PresetOptions.from() — sparse-delta semantics', () => {
 // PresetDefaults builder — immutability + cellFor lookup
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Convert / thumbnail leaves (f5ti3pik) — DRAFT values per contracts v2.234.0
+// ("a coherent ladder, not measured"). Exported only: presetDefaults() and
+// optimize do not consume them until uUSSVNJA.
+// ---------------------------------------------------------------------------
+
+describe('convert / thumbnail leaf DTOs — shipped defaults (f5ti3pik, draft)', () => {
+  const LEVELS = [OptimizeFor.Size, OptimizeFor.Balanced, OptimizeFor.Quality] as const;
+
+  it('ImageConvertPresetOptions — quality 65 / 80 / 92, nothing else', () => {
+    expect(LEVELS.map((l) => ({ ...ImageConvertPresetOptions.shippedDefaultsFor(l) }))).toEqual([
+      { quality: 65 },
+      { quality: 80 },
+      { quality: 92 },
+    ]);
+  });
+
+  it('VideoConvertPresetOptions — crf 30 / 23 / 18, nothing else', () => {
+    expect(LEVELS.map((l) => ({ ...VideoConvertPresetOptions.shippedDefaultsFor(l) }))).toEqual([
+      { crf: 30 },
+      { crf: 23 },
+      { crf: 18 },
+    ]);
+  });
+
+  it.each([
+    ['ImageThumbnailPresetOptions', ImageThumbnailPresetOptions.shippedDefaultsFor],
+    ['VideoThumbnailPresetOptions', VideoThumbnailPresetOptions.shippedDefaultsFor],
+    ['DocumentThumbnailPresetOptions', DocumentThumbnailPresetOptions.shippedDefaultsFor],
+  ] as const)('%s — width 160 / 320 / 640, quality 70 / 85 / 92, no format', (_name, fn) => {
+    expect(LEVELS.map((l) => ({ ...fn(l) }))).toEqual([
+      { width: 160, quality: 70 },
+      { width: 320, quality: 85 },
+      { width: 640, quality: 92 },
+    ]);
+  });
+
+  it('from() keeps a sparse delta sparse and freezes the instance', () => {
+    const convert = VideoConvertPresetOptions.from({});
+    // Declared class fields exist as own properties (useDefineForClassFields), so
+    // sparseness is what serialises: an unset knob emits nothing on the wire.
+    expect(convert.crf).toBeUndefined();
+    expect(JSON.stringify(convert)).toBe('{}');
+    expect(Object.isFrozen(convert)).toBe(true);
+    const thumb = ImageThumbnailPresetOptions.from({ width: 200 });
+    expect({ ...thumb }).toEqual({ width: 200 });
+    expect(Object.isFrozen(thumb)).toBe(true);
+  });
+
+  it('presetDefaults() gains no convert/thumbnail method (wiring is uUSSVNJA)', () => {
+    const builder = presetDefaults() as unknown as Record<string, unknown>;
+    for (const name of ['imageConvert', 'videoConvert', 'imageThumbnail', 'videoThumbnail', 'documentThumbnail']) {
+      expect(builder[name]).toBeUndefined();
+    }
+  });
+});
+
 describe('presetDefaults() / PresetDefaults', () => {
   it('returns a PresetDefaults instance with no registered cells', () => {
     const d = presetDefaults();
@@ -437,6 +499,11 @@ describe('PRESETS regen drift trip-wire', () => {
     { cellKey: 'document_odf_compress', fn: DocumentOdfCompressPresetOptions.shippedDefaultsFor },
     { cellKey: 'document_epub_compress', fn: DocumentEpubCompressPresetOptions.shippedDefaultsFor },
     { cellKey: 'document_pdf_compress', fn: DocumentPdfCompressPresetOptions.shippedDefaultsFor },
+    { cellKey: 'image_convert', fn: ImageConvertPresetOptions.shippedDefaultsFor },
+    { cellKey: 'video_convert', fn: VideoConvertPresetOptions.shippedDefaultsFor },
+    { cellKey: 'image_thumbnail', fn: ImageThumbnailPresetOptions.shippedDefaultsFor },
+    { cellKey: 'video_thumbnail', fn: VideoThumbnailPresetOptions.shippedDefaultsFor },
+    { cellKey: 'document_thumbnail', fn: DocumentThumbnailPresetOptions.shippedDefaultsFor },
   ] as const;
 
   it('every cell key in F3 PRESETS has a corresponding leaf DTO', () => {

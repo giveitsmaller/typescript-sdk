@@ -85,6 +85,29 @@ export {
   DocumentPdfCompressPresetOptions,
   type DocumentPdfCompressPresetOptionsInput,
 } from './document_pdf_compress.js';
+// Convert/thumbnail leaves (f5ti3pik): exported only. NOT part of PresetMedia,
+// PresetOp, CellKey or AnyPresetOptions; cellFor/merge stay compress-only
+// until uUSSVNJA wires them.
+export {
+  ImageConvertPresetOptions,
+  type ImageConvertPresetOptionsInput,
+} from './image_convert.js';
+export {
+  VideoConvertPresetOptions,
+  type VideoConvertPresetOptionsInput,
+} from './video_convert.js';
+export {
+  ImageThumbnailPresetOptions,
+  type ImageThumbnailPresetOptionsInput,
+} from './image_thumbnail.js';
+export {
+  VideoThumbnailPresetOptions,
+  type VideoThumbnailPresetOptionsInput,
+} from './video_thumbnail.js';
+export {
+  DocumentThumbnailPresetOptions,
+  type DocumentThumbnailPresetOptionsInput,
+} from './document_thumbnail.js';
 
 // Re-export ergonomic enums for callers (single canonical path).
 export {

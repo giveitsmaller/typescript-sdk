@@ -13,6 +13,11 @@ export { DocumentOfficeCompressPresetOptions, type DocumentOfficeCompressPresetO
 export { DocumentOdfCompressPresetOptions, type DocumentOdfCompressPresetOptionsInput, } from './document_odf_compress.js';
 export { DocumentEpubCompressPresetOptions, type DocumentEpubCompressPresetOptionsInput, } from './document_epub_compress.js';
 export { DocumentPdfCompressPresetOptions, type DocumentPdfCompressPresetOptionsInput, } from './document_pdf_compress.js';
+export { ImageConvertPresetOptions, type ImageConvertPresetOptionsInput, } from './image_convert.js';
+export { VideoConvertPresetOptions, type VideoConvertPresetOptionsInput, } from './video_convert.js';
+export { ImageThumbnailPresetOptions, type ImageThumbnailPresetOptionsInput, } from './image_thumbnail.js';
+export { VideoThumbnailPresetOptions, type VideoThumbnailPresetOptionsInput, } from './video_thumbnail.js';
+export { DocumentThumbnailPresetOptions, type DocumentThumbnailPresetOptionsInput, } from './document_thumbnail.js';
 export { OptimizeFor, ImageMetadataPolicy, ImageFormat, VideoCodec, VideoPreset, VideoFit, AudioBitrate, AudioCodec, AudioSampleRate, } from '../../generated/sdk_spec/enums.js';
 /** Supported media×op pairs for preset cells in T4a. Compress-only. */
 export type PresetMedia = 'image' | 'audio' | 'video' | 'document_office' | 'document_odf' | 'document_epub' | 'document_pdf';

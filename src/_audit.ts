@@ -205,6 +205,16 @@ import type {
   DocumentEpubCompressPresetOptionsInput,
   DocumentPdfCompressPresetOptions,
   DocumentPdfCompressPresetOptionsInput,
+  ImageConvertPresetOptions,
+  ImageConvertPresetOptionsInput,
+  VideoConvertPresetOptions,
+  VideoConvertPresetOptionsInput,
+  ImageThumbnailPresetOptions,
+  ImageThumbnailPresetOptionsInput,
+  VideoThumbnailPresetOptions,
+  VideoThumbnailPresetOptionsInput,
+  DocumentThumbnailPresetOptions,
+  DocumentThumbnailPresetOptionsInput,
   OptimizeFor,
   ImageMetadataPolicy,
   ImageFormat,
@@ -560,6 +570,16 @@ export function _runAudit(): void {
   accept<DocumentEpubCompressPresetOptionsInput>();
   accept<DocumentPdfCompressPresetOptions>();
   accept<DocumentPdfCompressPresetOptionsInput>();
+  accept<ImageConvertPresetOptions>();
+  accept<ImageConvertPresetOptionsInput>();
+  accept<VideoConvertPresetOptions>();
+  accept<VideoConvertPresetOptionsInput>();
+  accept<ImageThumbnailPresetOptions>();
+  accept<ImageThumbnailPresetOptionsInput>();
+  accept<VideoThumbnailPresetOptions>();
+  accept<VideoThumbnailPresetOptionsInput>();
+  accept<DocumentThumbnailPresetOptions>();
+  accept<DocumentThumbnailPresetOptionsInput>();
   accept<OptimizeFor>();
   accept<ImageMetadataPolicy>();
   accept<ImageFormat>();

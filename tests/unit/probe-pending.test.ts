@@ -9,7 +9,8 @@ import {
   GislProbePendingError,
   GislTimeoutError,
 } from '../../src/errors.js';
-import { Recipe, fileInput } from '../../src/file-first.js';
+import { FilesRecipe, Recipe, fileInput } from '../../src/file-first.js';
+import { MergeBuilder, asset } from '../../src/merge.js';
 import {
   GUEST_BACKOFF_BASE_MS,
   GUEST_BACKOFF_MAX_MS,
@@ -425,6 +426,79 @@ describe('probe_pending recovery through run()', () => {
     await new Recipe(fileInput.path('clip.mp4'), undefined, [], undefined, undefined, m.client).compress().run({ maxWait: '30s' });
     expect(m.createWorkflow).toHaveBeenCalledTimes(2);
     expect(m.waitForProbe.mock.calls[0][0]).toBe('file_up');
+  });
+});
+
+// f5ti3pik (contracts v2.235.0): a probe_pending refusal on a VIDEO merge names
+// the FEEDER job `src_N` — the passthrough job wrapping that upload — not the
+// `merge` job. Recovery must wait on exactly that upload's file id, through
+// both merge entry points. No SDK change: this pins behaviour already shipped.
+// The pre-create probe double returns without waiting (best-effort, never
+// bounces), so the create is what meets the gate; probeBeforeCreate:false would
+// disable the recovery under test (see the opt-out test above).
+function mergeFeederClient() {
+  let creates = 0;
+  const createWorkflow = vi.fn(async (_payload: WorkflowCreatePayload) => {
+    if (++creates === 1) throw refusal('src_1');
+    return { workflowId: 'wf_merge', status: 'running' };
+  });
+  const waitForProbe = vi.fn(async (_fileId: string, _opts?: unknown) => landed('ok'));
+  const client = {
+    // Deterministic per-path ids, independent of upload order.
+    uploadFile: vi.fn(async (input: string | Blob) => ({
+      fileId: `up_${String(input)}`,
+      contentType: 'video/mp4',
+      sizeBytes: 1_000,
+    })),
+    createWorkflow,
+    waitForProbe,
+    maybeWaitForVideoProbe: vi.fn(async () => undefined),
+    getWorkflowStatus: vi.fn(async () => ({ workflowId: 'wf_merge', status: 'completed', jobs: [] })),
+    getWorkflowDownloads: vi.fn(async () => ({ downloads: [] })),
+    streamEvents: vi.fn(async function* () {
+      yield { event: 'workflow.completed', data: { status: 'completed' } };
+    }),
+  } as unknown as GislClient;
+  return { client, createWorkflow, waitForProbe };
+}
+
+type JobShape = { id?: string; source?: { type: string; file_id?: string }; inputs?: unknown[] };
+const jobsOf = (payload: WorkflowCreatePayload): JobShape[] => payload.jobs as unknown as JobShape[];
+
+describe('merge probe_pending: the server names the feeder job src_N (f5ti3pik)', () => {
+  it('files([...]).merge().run() waits on exactly src_1\'s upload, then re-creates', async () => {
+    const m = mergeFeederClient();
+    const inputs = ['a.mp4', 'b.mp4', 'c.mp4'].map((p) => fileInput.path(p));
+    await new FilesRecipe(inputs, [], undefined, undefined, m.client).merge({ mediaKind: 'video' }).run({ maxWait: '30s' });
+
+    expect(m.createWorkflow).toHaveBeenCalledTimes(2);
+    const sent = m.createWorkflow.mock.calls[0][0];
+    const src1 = jobsOf(sent).find((j) => j.id === 'src_1');
+    expect(src1?.source).toEqual({ type: 'upload', file_id: 'up_b.mp4' });
+    expect(m.waitForProbe.mock.calls.map((c) => c[0])).toEqual(['up_b.mp4']);
+    // The SAME payload is re-sent.
+    expect(m.createWorkflow.mock.calls[1][0]).toBe(sent);
+  });
+
+  it('client.merge (MergeBuilder) with a repeated asset: src_1 is the second UNIQUE asset', async () => {
+    const m = mergeFeederClient();
+    const a = asset('a.mp4');
+    const b = asset('b.mp4');
+    const c = asset('c.mp4');
+    // Play order a, a, b, c: MergedRecipe would lower a src job per position
+    // (src_1 = a); MergeBuilder dedups onto one src per asset (src_1 = b).
+    await new MergeBuilder(m.client, [a, b, c], { mediaKind: 'video' }).sequence(a, a, b, c).run({ maxWait: '30s' });
+
+    expect(m.createWorkflow).toHaveBeenCalledTimes(2);
+    const sent = m.createWorkflow.mock.calls[0][0];
+    expect(jobsOf(sent).filter((j) => j.id?.startsWith('src_')).map((j) => [j.id, j.source?.file_id])).toEqual([
+      ['src_0', 'up_a.mp4'],
+      ['src_1', 'up_b.mp4'],
+      ['src_2', 'up_c.mp4'],
+    ]);
+    expect(jobsOf(sent).find((j) => j.id === 'merge')?.inputs).toHaveLength(4);
+    expect(m.waitForProbe.mock.calls.map((c) => c[0])).toEqual(['up_b.mp4']);
+    expect(m.createWorkflow.mock.calls[1][0]).toBe(sent);
   });
 });
 

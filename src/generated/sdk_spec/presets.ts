@@ -116,6 +116,70 @@ export const PRESETS: PresetMatrix = Object.freeze({
       "stripUnusedCss": false,
     } as PresetCell),
   } as Readonly<Record<PresetLevel, PresetCell>>),
+  "image_convert": Object.freeze({
+    Size: Object.freeze({
+      "quality": 65,
+    } as PresetCell),
+    Balanced: Object.freeze({
+      "quality": 80,
+    } as PresetCell),
+    Quality: Object.freeze({
+      "quality": 92,
+    } as PresetCell),
+  } as Readonly<Record<PresetLevel, PresetCell>>),
+  "video_convert": Object.freeze({
+    Size: Object.freeze({
+      "crf": 30,
+    } as PresetCell),
+    Balanced: Object.freeze({
+      "crf": 23,
+    } as PresetCell),
+    Quality: Object.freeze({
+      "crf": 18,
+    } as PresetCell),
+  } as Readonly<Record<PresetLevel, PresetCell>>),
+  "image_thumbnail": Object.freeze({
+    Size: Object.freeze({
+      "width": 160,
+      "quality": 70,
+    } as PresetCell),
+    Balanced: Object.freeze({
+      "width": 320,
+      "quality": 85,
+    } as PresetCell),
+    Quality: Object.freeze({
+      "width": 640,
+      "quality": 92,
+    } as PresetCell),
+  } as Readonly<Record<PresetLevel, PresetCell>>),
+  "video_thumbnail": Object.freeze({
+    Size: Object.freeze({
+      "width": 160,
+      "quality": 70,
+    } as PresetCell),
+    Balanced: Object.freeze({
+      "width": 320,
+      "quality": 85,
+    } as PresetCell),
+    Quality: Object.freeze({
+      "width": 640,
+      "quality": 92,
+    } as PresetCell),
+  } as Readonly<Record<PresetLevel, PresetCell>>),
+  "document_thumbnail": Object.freeze({
+    Size: Object.freeze({
+      "width": 160,
+      "quality": 70,
+    } as PresetCell),
+    Balanced: Object.freeze({
+      "width": 320,
+      "quality": 85,
+    } as PresetCell),
+    Quality: Object.freeze({
+      "width": 640,
+      "quality": 92,
+    } as PresetCell),
+  } as Readonly<Record<PresetLevel, PresetCell>>),
 } as PresetMatrix);
 
 /** Lookup the shipped preset cell for (mediaOp, level). Throws on unknown keys. */

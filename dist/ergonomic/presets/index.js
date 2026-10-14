@@ -40,6 +40,14 @@ export { DocumentOfficeCompressPresetOptions, } from './document_office_compress
 export { DocumentOdfCompressPresetOptions, } from './document_odf_compress.js';
 export { DocumentEpubCompressPresetOptions, } from './document_epub_compress.js';
 export { DocumentPdfCompressPresetOptions, } from './document_pdf_compress.js';
+// Convert/thumbnail leaves (f5ti3pik): exported only. NOT part of PresetMedia,
+// PresetOp, CellKey or AnyPresetOptions; cellFor/merge stay compress-only
+// until uUSSVNJA wires them.
+export { ImageConvertPresetOptions, } from './image_convert.js';
+export { VideoConvertPresetOptions, } from './video_convert.js';
+export { ImageThumbnailPresetOptions, } from './image_thumbnail.js';
+export { VideoThumbnailPresetOptions, } from './video_thumbnail.js';
+export { DocumentThumbnailPresetOptions, } from './document_thumbnail.js';
 // Re-export ergonomic enums for callers (single canonical path).
 export { OptimizeFor, ImageMetadataPolicy, ImageFormat, VideoCodec, VideoPreset, VideoFit, AudioBitrate, AudioCodec, AudioSampleRate, } from '../../generated/sdk_spec/enums.js';
 function cellKeyOf(media, op) {

@@ -109,6 +109,70 @@ export const PRESETS = Object.freeze({
             "stripUnusedCss": false,
         }),
     }),
+    "image_convert": Object.freeze({
+        Size: Object.freeze({
+            "quality": 65,
+        }),
+        Balanced: Object.freeze({
+            "quality": 80,
+        }),
+        Quality: Object.freeze({
+            "quality": 92,
+        }),
+    }),
+    "video_convert": Object.freeze({
+        Size: Object.freeze({
+            "crf": 30,
+        }),
+        Balanced: Object.freeze({
+            "crf": 23,
+        }),
+        Quality: Object.freeze({
+            "crf": 18,
+        }),
+    }),
+    "image_thumbnail": Object.freeze({
+        Size: Object.freeze({
+            "width": 160,
+            "quality": 70,
+        }),
+        Balanced: Object.freeze({
+            "width": 320,
+            "quality": 85,
+        }),
+        Quality: Object.freeze({
+            "width": 640,
+            "quality": 92,
+        }),
+    }),
+    "video_thumbnail": Object.freeze({
+        Size: Object.freeze({
+            "width": 160,
+            "quality": 70,
+        }),
+        Balanced: Object.freeze({
+            "width": 320,
+            "quality": 85,
+        }),
+        Quality: Object.freeze({
+            "width": 640,
+            "quality": 92,
+        }),
+    }),
+    "document_thumbnail": Object.freeze({
+        Size: Object.freeze({
+            "width": 160,
+            "quality": 70,
+        }),
+        Balanced: Object.freeze({
+            "width": 320,
+            "quality": 85,
+        }),
+        Quality: Object.freeze({
+            "width": 640,
+            "quality": 92,
+        }),
+    }),
 });
 /** Lookup the shipped preset cell for (mediaOp, level). Throws on unknown keys. */
 export function shippedDefaultsFor(mediaOp, level) {
