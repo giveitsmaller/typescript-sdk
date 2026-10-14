@@ -283,3 +283,181 @@ describe('GislClient.waitForProbe', () => {
     });
   });
 });
+
+// --- patient polling (Hal5c41E) ---------------------------------------------
+// A signed-in probe_pending recovery may wait up to 900 s; at the default
+// 250 ms jitter cadence a Free account's 10/min probe bucket is spent in the
+// first seconds. `patient` spaces polls and waits a probe 429 out.
+
+function rateLimited(retryAfter?: string): Response {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (retryAfter !== undefined) headers['Retry-After'] = retryAfter;
+  return new Response(
+    JSON.stringify({ success: false, error: 'TOO_MANY_REQUESTS', message: 'Too many requests' }),
+    { status: 429, headers },
+  );
+}
+
+describe('a probe 429 off the wire', () => {
+  let client: GislClient;
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    client = new GislClient({ baseUrl: 'https://api.example.com', apiKey: 'test-key' });
+    fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('is a base GislApiError (429, TOO_MANY_REQUESTS) and, without patient, still propagates', async () => {
+    fetchSpy.mockResolvedValueOnce(rateLimited('5'));
+    const err = await client.waitForProbe(FID, { timeoutMs: 60_000 }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(GislApiError);
+    expect(Object.getPrototypeOf(err)).toBe(GislApiError.prototype);
+    expect((err as GislApiError).statusCode).toBe(429);
+    expect((err as GislApiError).errorCode).toBe('TOO_MANY_REQUESTS');
+    expect((err as GislApiError).responseHeaders?.['retry-after']).toBe('5');
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+/** A not-landed probe answer (`422 probe_not_ready`), as probeUpload throws it. */
+function notReadyError(retryAfter?: string): GislApiError {
+  return new GislApiError(422, 'no probe result', undefined, undefined, {
+    payload: { error_type: 'probe_not_ready' },
+    errorCode: 'UNPROCESSABLE_ENTITY',
+    responseHeaders: retryAfter === undefined ? {} : { 'retry-after': retryAfter },
+  });
+}
+
+/** A probe-bucket rate limit, as probeUpload throws it. */
+function rateLimitedError(retryAfter?: string): GislApiError {
+  return new GislApiError(429, 'Too many requests', undefined, undefined, {
+    errorCode: 'TOO_MANY_REQUESTS',
+    responseHeaders: retryAfter === undefined ? {} : { 'retry-after': retryAfter },
+  });
+}
+
+const LANDED_PROBE = { fileId: FID, probeStatus: 'ok' } as unknown as Awaited<ReturnType<GislClient['probeUpload']>>;
+
+describe('GislClient.waitForProbe({ patient: true })', () => {
+  let client: GislClient;
+
+  // probeUpload is stubbed (no fetch, no body parsing) so fake timers drive
+  // only the wait loop's own sleeps.
+  beforeEach(() => {
+    vi.useFakeTimers();
+    client = new GislClient({ baseUrl: 'https://api.example.com', apiKey: 'test-key' });
+  });
+
+  const spyProbe = () => vi.spyOn(client, 'probeUpload');
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  /** Runs one wait to completion under fake timers, recording each poll's elapsed ms. */
+  async function run(options: { timeoutMs: number; patient?: boolean }, advanceMs: number) {
+    const elapsed: number[] = [];
+    const done = client.waitForProbe(FID, { ...options, onPoll: (i) => elapsed.push(i.elapsedMs) });
+    await vi.advanceTimersByTimeAsync(advanceMs);
+    return { result: await done, elapsed };
+  }
+
+  it('spaces polls 3 s doubling to a 30 s cap, from each poll start', async () => {
+    const probeSpy = spyProbe();
+    probeSpy.mockRejectedValue(notReadyError());
+    const { result, elapsed } = await run({ timeoutMs: 120_000, patient: true }, 120_000);
+    expect(result).toEqual({ landed: false, reason: 'timeout' });
+    // Gaps 3, 6, 12, 24, then 30, 30 s.
+    expect(elapsed).toEqual([0, 3_000, 9_000, 21_000, 45_000, 75_000, 105_000]);
+  });
+
+  it('stays inside the 10/min probe bucket in every 60 s window of a 900 s wait', async () => {
+    const probeSpy = spyProbe();
+    probeSpy.mockRejectedValue(notReadyError());
+    const { result, elapsed } = await run({ timeoutMs: 900_000, patient: true }, 900_000);
+    expect(result).toEqual({ landed: false, reason: 'timeout' });
+    for (const from of elapsed) {
+      expect(elapsed.filter((t) => t >= from && t < from + 60_000).length).toBeLessThanOrEqual(10);
+    }
+    // ...and inside the 100/h bucket in total.
+    expect(elapsed.length).toBeLessThanOrEqual(100);
+  });
+
+  it('a Retry-After longer than the backoff sets the gap', async () => {
+    const probeSpy = spyProbe();
+    probeSpy.mockRejectedValueOnce(notReadyError('10')).mockResolvedValueOnce(LANDED_PROBE);
+    const { result, elapsed } = await run({ timeoutMs: 60_000, patient: true }, 10_000);
+    expect(result.landed).toBe(true);
+    expect(elapsed).toEqual([0, 10_000]);
+  });
+
+  it('a Retry-After shorter than the backoff does not shorten the gap', async () => {
+    const probeSpy = spyProbe();
+    probeSpy.mockRejectedValueOnce(notReadyError('1')).mockResolvedValueOnce(LANDED_PROBE);
+    const { result, elapsed } = await run({ timeoutMs: 60_000, patient: true }, 3_000);
+    expect(result.landed).toBe(true);
+    expect(elapsed).toEqual([0, 3_000]);
+  });
+
+  it('waits a probe 429 out for its Retry-After, then lands', async () => {
+    const probeSpy = spyProbe();
+    probeSpy.mockRejectedValueOnce(rateLimitedError('20')).mockResolvedValueOnce(LANDED_PROBE);
+    const { result, elapsed } = await run({ timeoutMs: 60_000, patient: true }, 20_000);
+    expect(result).toEqual({ landed: true, probe: LANDED_PROBE });
+    expect(elapsed).toEqual([0, 20_000]);
+  });
+
+  it('waits a probe 429 with NO Retry-After out with the patient backoff', async () => {
+    const probeSpy = spyProbe();
+    probeSpy.mockRejectedValueOnce(rateLimitedError()).mockResolvedValueOnce(LANDED_PROBE);
+    const { result, elapsed } = await run({ timeoutMs: 60_000, patient: true }, 3_000);
+    expect(result.landed).toBe(true);
+    expect(elapsed).toEqual([0, 3_000]);
+  });
+
+  it('clamps a probe 429 wait to the budget: gives up with "timeout" at timeoutMs, no second poll', async () => {
+    const probeSpy = spyProbe();
+    probeSpy.mockRejectedValue(rateLimitedError('3600'));
+    const done = client.waitForProbe(FID, { timeoutMs: 10_000, patient: true });
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(probeSpy).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(done).resolves.toEqual({ landed: false, reason: 'timeout' });
+    expect(probeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('without patient a probe 429 still propagates (unchanged)', async () => {
+    const probeSpy = spyProbe();
+    const limited = rateLimitedError('5');
+    probeSpy.mockRejectedValueOnce(limited);
+    await expect(client.waitForProbe(FID, { timeoutMs: 60_000 })).rejects.toBe(limited);
+    expect(probeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('without patient the cadence is the sub-second jitter backoff (unchanged)', async () => {
+    const probeSpy = spyProbe();
+    probeSpy.mockRejectedValueOnce(notReadyError()).mockResolvedValueOnce(LANDED_PROBE);
+    // The attempt-1 full-jitter backoff is under 250 ms; a patient wait would need 3 s.
+    const { result, elapsed } = await run({ timeoutMs: 60_000 }, 250);
+    expect(result.landed).toBe(true);
+    expect(elapsed).toHaveLength(2);
+    expect(elapsed[1]).toBeLessThan(250);
+  });
+
+  it('patient still gives up on repeated 5xx and still propagates a 404', async () => {
+    const probeSpy = spyProbe();
+    probeSpy.mockRejectedValue(new GislApiError(500, 'boom'));
+    const { result } = await run({ timeoutMs: 900_000, patient: true }, 60_000);
+    expect(result).toEqual({ landed: false, reason: 'prober_error' });
+    probeSpy.mockReset();
+    const notFound = new GislApiError(404, 'upload not found');
+    probeSpy.mockRejectedValueOnce(notFound);
+    await expect(client.waitForProbe(FID, { timeoutMs: 60_000, patient: true })).rejects.toBe(notFound);
+  });
+});

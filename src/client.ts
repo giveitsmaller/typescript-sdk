@@ -241,6 +241,16 @@ const S3_MAX_MULTIPART_PARTS = 10_000;
 const RECOMMENDED_CHUNK_SIZE_MAX_BYTES = 104_857_600; // 100 MiB
 
 const DEFAULT_POLL_INTERVAL_MS = 2_000;
+
+/**
+ * Patient `waitForProbe` (Hal5c41E): polls start at least
+ * max(Retry-After, min(3 s * 2^(n-1), 30 s)) apart. The API's probe bucket
+ * allows 10/min and 100/h on Free (TieredRateLimiterService.php, an API
+ * implementation fact, not contract); this cadence makes 5 polls in the first
+ * minute and about 33 in 900 s.
+ */
+const PATIENT_PROBE_BACKOFF_BASE_MS = 3_000;
+const PATIENT_PROBE_BACKOFF_MAX_MS = 30_000;
 /**
  * THE ONE DEADLINE DEFAULT (36AZ98FV). One wall-clock deadline covers the whole
  * operation — upload, create, wait, downloads. Every entry point that takes a
@@ -3553,7 +3563,15 @@ export class GislClient {
    *   the server + fan-out gate decide split-vs-single from the landed
    *   metadata; the SDK does not interpret it.
    * - `5xx` (prober crash) → retry a couple of times, then give up.
+   * - `429` → propagates by default; with `patient: true` it is waited out
+   *   (its Retry-After, else the patient backoff, clamped to `timeoutMs`).
    * - timeout → give up.
+   *
+   * `patient: true` is for a LONG wait (Hal5c41E): polls start at least
+   * max(Retry-After, 3 s doubling per poll up to 30 s) apart instead of the
+   * 250 ms jitter backoff, so a 900 s wait stays inside the per-user probe
+   * rate limit. The spacing is per call; parallel calls share the server's
+   * bucket, and the overflow is absorbed by the 429 wait-out above.
    *
    * **Never bounces:** on give-up (timeout / repeated 5xx / transport /
    * not applicable) it resolves `{ landed: false, reason }` rather than throwing, so the caller
@@ -3571,6 +3589,7 @@ export class GislClient {
   async waitForProbe(fileId: string, options: ProbeWaitOptions = {}): Promise<ProbeWaitResult> {
     const timeoutMs = sanitiseBaseMs(options.timeoutMs, 30_000);
     const signal = options.signal;
+    const patient = options.patient === true;
     const start = Date.now();
     const deadline = start + timeoutMs;
     const BASE_BACKOFF_MS = 250;
@@ -3586,7 +3605,8 @@ export class GislClient {
       const remainingBeforeAttempt = deadline - Date.now();
       if (remainingBeforeAttempt <= 0) return { landed: false, reason: 'timeout' };
       attempt += 1;
-      options.onPoll?.({ attempt, elapsedMs: Date.now() - start });
+      const attemptStartedAt = Date.now();
+      options.onPoll?.({ attempt, elapsedMs: attemptStartedAt - start });
 
       let retryAfterMs: number | undefined;
       try {
@@ -3602,6 +3622,16 @@ export class GislClient {
           // Not landed yet — keep polling. `feature_not_available` is the
           // transitional arm (either cause); `timeoutMs` is its ceiling.
           retryAfterMs = parseRetryAfterMs((err as GislApiError).responseHeaders?.['retry-after']);
+        } else if (
+          patient &&
+          err instanceof GislApiError &&
+          !(err instanceof GislLongFormConcurrencyError) &&
+          err.statusCode === 429
+        ) {
+          // Patient: the per-user probe bucket is spent (another call's polls
+          // share it). Wait it out rather than end the wait; the spacing below
+          // takes the Retry-After, else the patient backoff, clamped to the budget.
+          retryAfterMs = parseRetryAfterMs(err.responseHeaders?.['retry-after']);
         } else if (probe422 === 'probe_not_applicable') {
           // Terminal: this upload's type is never probed, so polling cannot
           // change the answer. Never-bounce: the caller creates anyway.
@@ -3631,6 +3661,16 @@ export class GislClient {
 
       const remaining = deadline - Date.now();
       if (remaining <= 0) return { landed: false, reason: 'timeout' };
+      if (patient) {
+        // Spaced from this poll's START, so a slow answer counts toward the gap.
+        const gap = Math.max(
+          retryAfterMs ?? 0,
+          Math.min(PATIENT_PROBE_BACKOFF_BASE_MS * 2 ** Math.min(attempt - 1, 15), PATIENT_PROBE_BACKOFF_MAX_MS),
+        );
+        await cancellableSleep(Math.min(attemptStartedAt + gap - Date.now(), remaining), signal);
+        if (Date.now() >= deadline) return { landed: false, reason: 'timeout' };
+        continue;
+      }
       const backoff = retryAfterMs ?? fullJitterDelay(BASE_BACKOFF_MS, attempt - 1);
       await cancellableSleep(Math.min(backoff, remaining), signal);
       if (Date.now() >= deadline) return { landed: false, reason: 'timeout' };
@@ -3666,23 +3706,36 @@ export class GislClient {
    * e.g. an image input) is skipped rather than waited on. It is a no-op when
    * the server never returns `probe_pending`.
    *
+   * The default budget is the contract's `video.probe_wait_bound_seconds`
+   * (900 s) for every caller; past it the server stops answering
+   * `probe_pending`. There is no create-count cap: the budget alone ends a
+   * recovery (Hal5c41E).
+   *
+   * Signed in, it polls with `waitForProbe({ patient: true })`, starts each
+   * re-create at least max(Retry-After, 1 s doubling per create up to 30 s)
+   * after the previous create started (a refusal costs a `workflow_create`
+   * token), and waits out a re-create refused with a plain `429
+   * TOO_MANY_REQUESTS` the same way. `DUPLICATE_IN_PROGRESS` and the long-form
+   * concurrency 429 are rethrown at once. When the probe still has not landed
+   * at the end of a budget of at least 900 s, it makes ONE last create at the
+   * boundary, which the server should then accept.
+   *
    * On a guest client (`gisl.anonymous()`) the probe endpoint is sign-in only, so
    * it does NOT poll: it re-creates on the refusal's Retry-After, else a doubling
-   * backoff from 1 s capped at 30 s, with no count cap, until the budget runs out
-   * (default 900 s, anonymous-policy `probe_wait_bound_seconds`), making one last
-   * create at the boundary (5dJrOdVC, fNSQUeDS).
+   * backoff from 1 s capped at 30 s, until the budget runs out, making one last
+   * create at the boundary (5dJrOdVC, fNSQUeDS). A guest's 429 is rethrown.
    *
    * Gives up by rethrowing the ORIGINAL typed error when:
    * - recovery is disabled (`enabled: false`), or the ONE recovery budget
-   *   `timeoutMs` (default 30 s, 900 s for a guest; capped by `deadline`) -
-   *   covering the refusal's Retry-After and every probe wait - runs out;
+   *   `timeoutMs` (default 900 s; capped by `deadline`) - covering the
+   *   refusal's Retry-After, every probe wait and every create gap - runs out;
    * - the probe landed `corrupt` / `unsupported_codec` (the contract says do not
    *   retry: call {@link probeUpload} for the reason);
-   * - the error names no job whose upload the SDK can find (signed-in only);
-   * - three creates were all refused (signed-in only).
+   * - the error names no job whose upload the SDK can find (signed-in only).
    *
    * `deadline` (epoch ms) is the caller's whole-run budget: a retry that would
-   * start past it throws {@link GislTimeoutError} instead.
+   * start past it, or a probe wait that ends past it, throws
+   * {@link GislTimeoutError} instead.
    */
   async createWorkflowAwaitingProbe(
     payload: WorkflowCreatePayload,

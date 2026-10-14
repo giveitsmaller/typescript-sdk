@@ -1,14 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { OperationBuilder } from '../../src/builder.js';
-import { _markAnonymousClient, type GislClient } from '../../src/client.js';
-import { GislAbortError, GislApiError, GislProbePendingError, GislTimeoutError } from '../../src/errors.js';
+import { GislClient, _markAnonymousClient } from '../../src/client.js';
+import {
+  GislAbortError,
+  GislApiError,
+  GislLongFormConcurrencyError,
+  GislProbePendingError,
+  GislTimeoutError,
+} from '../../src/errors.js';
 import { Recipe, fileInput } from '../../src/file-first.js';
 import {
   GUEST_BACKOFF_BASE_MS,
   GUEST_BACKOFF_MAX_MS,
-  GUEST_PROBE_WAIT_BOUND_MS,
-  PROBE_PENDING_MAX_CREATE_ATTEMPTS,
+  PROBE_WAIT_BOUND_MS,
   createWorkflowAwaitingProbe,
   uploadFileIdsForJob,
 } from '../../src/probe-pending.js';
@@ -34,7 +39,35 @@ function refusal(jobRef: string, retryAfter?: string): GislProbePendingError {
   );
 }
 
+/** A plain rate-limit 429 on create: a base GislApiError carrying TOO_MANY_REQUESTS. */
+function tooManyRequests(retryAfter?: string): GislApiError {
+  return new GislApiError(429, 'Too many requests', '/api/workflows', undefined, {
+    errorCode: 'TOO_MANY_REQUESTS',
+    responseHeaders: retryAfter === undefined ? {} : { 'retry-after': retryAfter },
+  });
+}
+
 const landed = (probeStatus: string) => ({ landed: true, probe: { fileId: 'f', probeStatus } });
+
+/** The test-side mirror of the SDK's (private) boundary margin. */
+const BOUNDARY_MARGIN_MS = 2_000;
+
+/**
+ * The API's probe gate (compression_api CreateWorkflowCommandHandler.php:3095-3096):
+ * it stops refusing only when `waitedSeconds > 900`, STRICT, in whole seconds from
+ * the upload. The upload is taken to be the first create's instant, the worst case
+ * (an upload and first refusal in the same second). Records every create's clock.
+ */
+function boundServer() {
+  const createdAt: number[] = [];
+  const createImpl = async (): Promise<unknown> => {
+    createdAt.push(Date.now());
+    const waitedSeconds = Math.floor((Date.now() - createdAt[0]) / 1000);
+    if (waitedSeconds > PROBE_WAIT_BOUND_MS / 1000) return { workflowId: 'wf' };
+    throw refusal('op');
+  };
+  return { createImpl, createdAt };
+}
 
 function doubles(createImpl: (payload: unknown) => Promise<unknown>, waitResult: unknown = landed('ok')) {
   const createWorkflow = vi.fn(createImpl);
@@ -158,7 +191,7 @@ describe('createWorkflowAwaitingProbe', () => {
     expect(d.createWorkflow).toHaveBeenCalledTimes(2);
   });
 
-  it('re-creates at once when the only upload is not_applicable (nothing to wait for)', async () => {
+  it('re-creates without a probe wait when the only upload is not_applicable (nothing to wait for)', async () => {
     let calls = 0;
     const d = doubles(async () => {
       if (++calls === 1) throw refusal('op');
@@ -168,11 +201,20 @@ describe('createWorkflowAwaitingProbe', () => {
     expect(d.createWorkflow).toHaveBeenCalledTimes(2);
   });
 
-  it(`a not_applicable upload the server keeps refusing still stops after ${PROBE_PENDING_MAX_CREATE_ATTEMPTS} creates`, async () => {
-    const original = refusal('op');
-    const d = doubles(async () => { throw original; }, { landed: false, reason: 'not_applicable' });
-    await expect(createWorkflowAwaitingProbe(d.client, single)).rejects.toBe(original);
-    expect(d.createWorkflow).toHaveBeenCalledTimes(PROBE_PENDING_MAX_CREATE_ATTEMPTS);
+  it('a not_applicable upload the server keeps refusing: the budget ends it, not a create count (Hal5c41E)', async () => {
+    vi.useFakeTimers();
+    try {
+      const original = refusal('op');
+      const d = doubles(async () => { throw original; }, { landed: false, reason: 'not_applicable' });
+      const created = createWorkflowAwaitingProbe(d.client, single, { timeoutMs: 60_000 });
+      const outcome = expect(created).rejects.toBe(original);
+      await vi.advanceTimersByTimeAsync(61_000);
+      await outcome;
+      // Paced creates at 0, 1, 3, 7, 15, 31 s; the next (61 s) is past the 60 s budget.
+      expect(d.createWorkflow).toHaveBeenCalledTimes(6);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   describe('a not_applicable answer that arrives late (codex ab487dee4814)', () => {
@@ -237,10 +279,20 @@ describe('createWorkflowAwaitingProbe', () => {
     expect(d.waitForProbe).not.toHaveBeenCalled();
   });
 
-  it(`stops after ${PROBE_PENDING_MAX_CREATE_ATTEMPTS} refused creates`, async () => {
-    const d = doubles(async () => { throw refusal('op'); });
-    await expect(createWorkflowAwaitingProbe(d.client, single)).rejects.toBeInstanceOf(GislProbePendingError);
-    expect(d.createWorkflow).toHaveBeenCalledTimes(PROBE_PENDING_MAX_CREATE_ATTEMPTS);
+  it('refused creates go on past three until the budget ends them (Hal5c41E: no count cap)', async () => {
+    vi.useFakeTimers();
+    try {
+      const original = refusal('op');
+      const d = doubles(async () => { throw original; });
+      const created = createWorkflowAwaitingProbe(d.client, single, { timeoutMs: 20_000 });
+      const outcome = expect(created).rejects.toBe(original);
+      await vi.advanceTimersByTimeAsync(21_000);
+      await outcome;
+      // Paced creates at 0, 1, 3, 7, 15 s; the next (31 s) is past the 20 s budget.
+      expect(d.createWorkflow).toHaveBeenCalledTimes(5);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does not wait or re-create past the deadline', async () => {
@@ -471,7 +523,7 @@ describe('createWorkflowAwaitingProbe on a guest client', () => {
     });
     const created = createWorkflowAwaitingProbe(d.client, single);
     const outcome = expect(created).rejects.toBe(original);
-    await vi.advanceTimersByTimeAsync(GUEST_PROBE_WAIT_BOUND_MS - 60_000);
+    await vi.advanceTimersByTimeAsync(PROBE_WAIT_BOUND_MS - 60_000);
     // Still re-creating well inside the bound.
     const before = d.createWorkflow.mock.calls.length;
     expect(before).toBeGreaterThan(3);
@@ -480,16 +532,30 @@ describe('createWorkflowAwaitingProbe on a guest client', () => {
     expect(d.waitForProbe).not.toHaveBeenCalled();
   });
 
-  it('makes one last create AT the budget boundary, which the server may accept', async () => {
-    // Headerless refusals until exactly the bound, then accepted (codex 781cae520a36).
-    const start = Date.now();
-    const d = guest(async () => {
-      if (Date.now() - start < GUEST_PROBE_WAIT_BOUND_MS) throw refusal('op');
-      return { workflowId: 'wf' };
-    });
+  it('makes one last create just past the budget boundary, which the strict server gate accepts', async () => {
+    // Headerless refusals until the server's `waitedSeconds > 900` (codex 781cae520a36, Hal5c41E).
+    const server = boundServer();
+    const d = guest(server.createImpl);
     const created = createWorkflowAwaitingProbe(d.client, single);
-    await vi.advanceTimersByTimeAsync(GUEST_PROBE_WAIT_BOUND_MS + 1_000);
+    await vi.advanceTimersByTimeAsync(PROBE_WAIT_BOUND_MS + BOUNDARY_MARGIN_MS);
     await expect(created).resolves.toEqual({ workflowId: 'wf' });
+    const last = server.createdAt[server.createdAt.length - 1] - server.createdAt[0];
+    // budgetEnd = first refusal + bound; the boundary create starts at least the margin past it.
+    expect(last).toBeGreaterThanOrEqual(PROBE_WAIT_BOUND_MS + BOUNDARY_MARGIN_MS);
+    expect(last).toBeLessThanOrEqual(PROBE_WAIT_BOUND_MS + BOUNDARY_MARGIN_MS + 1_000);
+  });
+
+  it('a deadline before the boundary margin is a GislTimeoutError, with no boundary create', async () => {
+    const server = boundServer();
+    const d = guest(server.createImpl);
+    const created = createWorkflowAwaitingProbe(d.client, single, {
+      deadline: Date.now() + PROBE_WAIT_BOUND_MS + 1_000,
+    });
+    const outcome = expect(created).rejects.toBeInstanceOf(GislTimeoutError);
+    await vi.advanceTimersByTimeAsync(PROBE_WAIT_BOUND_MS + 1_000);
+    await outcome;
+    const last = server.createdAt[server.createdAt.length - 1] - server.createdAt[0];
+    expect(last).toBeLessThan(PROBE_WAIT_BOUND_MS);
   });
 
   it('does not make the boundary create when the wake-up overshot the budget', async () => {
@@ -557,7 +623,399 @@ describe('createWorkflowAwaitingProbe on a guest client', () => {
       if (++calls === 1) throw refusal('op');
       return { workflowId: 'wf' };
     });
-    await expect(createWorkflowAwaitingProbe(d.client, single)).resolves.toEqual({ workflowId: 'wf' });
+    const created = createWorkflowAwaitingProbe(d.client, single);
+    // The signed-in re-create is paced GUEST_BACKOFF_BASE_MS from the first create (Hal5c41E).
+    await vi.advanceTimersByTimeAsync(GUEST_BACKOFF_BASE_MS);
+    await expect(created).resolves.toEqual({ workflowId: 'wf' });
     expect(d.waitForProbe).toHaveBeenCalledWith('file_a', expect.anything());
+  });
+
+  it('a guest create 429 TOO_MANY_REQUESTS mid-recovery is rethrown at once, not waited out', async () => {
+    const limited = tooManyRequests('5');
+    let calls = 0;
+    const d = guest(async () => {
+      if (++calls === 1) throw refusal('op');
+      throw limited;
+    });
+    const created = createWorkflowAwaitingProbe(d.client, single);
+    const outcome = expect(created).rejects.toBe(limited);
+    await vi.advanceTimersByTimeAsync(GUEST_BACKOFF_BASE_MS);
+    await outcome;
+    expect(d.createWorkflow).toHaveBeenCalledTimes(2);
+    expect(d.waitForProbe).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Hal5c41E: a signed-in recovery's default budget is the contract's
+// video.probe_wait_bound_seconds (900 s), with no create-count cap, paced
+// creates, a waited-out create 429, and one precise boundary create.
+// ---------------------------------------------------------------------------
+
+describe('createWorkflowAwaitingProbe signed in: the 900 s budget (Hal5c41E)', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  /** A probe wait that takes its whole `timeoutMs` (plus `overshootMs`) and does not land. */
+  function neverLands(d: ReturnType<typeof doubles>, reason: 'timeout' | 'prober_error' = 'timeout', overshootMs = 0) {
+    d.waitForProbe.mockImplementation(async (_fileId: string, opts?: unknown) => {
+      const { timeoutMs } = opts as { timeoutMs: number };
+      await new Promise((resolve) => setTimeout(resolve, timeoutMs + overshootMs));
+      return { landed: false, reason };
+    });
+  }
+
+  /** Records the clock at every create, relative to the first. */
+  function createClock(d: ReturnType<typeof doubles>): number[] {
+    const at: number[] = [];
+    const impl = d.createWorkflow.getMockImplementation();
+    d.createWorkflow.mockImplementation(async (payload: unknown) => {
+      at.push(Date.now());
+      return impl === undefined ? undefined : impl(payload);
+    });
+    return at;
+  }
+
+  const relative = (at: number[]) => at.map((t) => t - at[0]);
+
+  it('defaults the budget to PROBE_WAIT_BOUND_MS and polls patiently', async () => {
+    const original = refusal('op');
+    const d = doubles(async () => { throw original; }, { landed: false, reason: 'prober_error' });
+    await expect(createWorkflowAwaitingProbe(d.client, single)).rejects.toBe(original);
+    expect(PROBE_WAIT_BOUND_MS).toBe(900_000);
+    expect(d.waitForProbe.mock.calls[0][1]).toMatchObject({ timeoutMs: PROBE_WAIT_BOUND_MS, patient: true });
+  });
+
+  it('a recovery longer than 30 s succeeds by default', async () => {
+    let calls = 0;
+    const d = doubles(async () => {
+      if (++calls === 1) throw refusal('op');
+      return { workflowId: 'wf' };
+    });
+    d.waitForProbe.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 120_000));
+      return landed('ok');
+    });
+    const created = createWorkflowAwaitingProbe(d.client, single);
+    await vi.advanceTimersByTimeAsync(120_000);
+    await expect(created).resolves.toEqual({ workflowId: 'wf' });
+    expect(d.createWorkflow).toHaveBeenCalledTimes(2);
+  });
+
+  it('an explicit short timeoutMs is honoured: exactly 1 create, no boundary create', async () => {
+    const original = refusal('op');
+    const d = doubles(async () => { throw original; });
+    neverLands(d);
+    const created = createWorkflowAwaitingProbe(d.client, single, { timeoutMs: 5_000 });
+    const outcome = expect(created).rejects.toBe(original);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await outcome;
+    expect(d.createWorkflow).toHaveBeenCalledOnce();
+    expect(d.waitForProbe.mock.calls[0][1]).toMatchObject({ timeoutMs: 5_000 });
+  });
+
+  it('a probe that does not land by the deadline is a GislTimeoutError, not the refusal', async () => {
+    const d = doubles(async () => { throw refusal('op'); });
+    neverLands(d);
+    const created = createWorkflowAwaitingProbe(d.client, single, { deadline: Date.now() + 20_000 });
+    const outcome = expect(created).rejects.toBeInstanceOf(GislTimeoutError);
+    await vi.advanceTimersByTimeAsync(20_000);
+    await outcome;
+    expect(d.createWorkflow).toHaveBeenCalledOnce();
+    expect(d.waitForProbe.mock.calls[0][1]).toMatchObject({ timeoutMs: 20_000 });
+  });
+
+  describe('the boundary create', () => {
+    it('is made once, the margin past the default budget, and the strict server gate accepts it', async () => {
+      const server = boundServer();
+      const d = doubles(server.createImpl);
+      neverLands(d);
+      const created = createWorkflowAwaitingProbe(d.client, single);
+      await vi.advanceTimersByTimeAsync(PROBE_WAIT_BOUND_MS + BOUNDARY_MARGIN_MS);
+      await expect(created).resolves.toEqual({ workflowId: 'wf' });
+      // budgetEnd = first refusal + bound, and the boundary create starts >= budgetEnd + margin.
+      expect(relative(server.createdAt)).toEqual([0, PROBE_WAIT_BOUND_MS + BOUNDARY_MARGIN_MS]);
+    });
+
+    it('a create AT the bound would still be refused by the strict server gate (the model is not lax)', async () => {
+      // Positive control on boundServer: at exactly 900 s waitedSeconds is 900, not > 900.
+      const server = boundServer();
+      await expect(server.createImpl()).rejects.toBeInstanceOf(GislProbePendingError);
+      vi.setSystemTime(Date.now() + PROBE_WAIT_BOUND_MS + 999);
+      await expect(server.createImpl()).rejects.toBeInstanceOf(GislProbePendingError);
+      vi.setSystemTime(Date.now() + 1);
+      await expect(server.createImpl()).resolves.toEqual({ workflowId: 'wf' });
+    });
+
+    it('a deadline before the boundary margin is a GislTimeoutError, with no boundary create', async () => {
+      const server = boundServer();
+      const d = doubles(server.createImpl);
+      neverLands(d);
+      const created = createWorkflowAwaitingProbe(d.client, single, {
+        deadline: Date.now() + PROBE_WAIT_BOUND_MS + 1_000,
+      });
+      const outcome = expect(created).rejects.toBeInstanceOf(GislTimeoutError);
+      await vi.advanceTimersByTimeAsync(PROBE_WAIT_BOUND_MS + 1_000);
+      await outcome;
+      expect(server.createdAt).toHaveLength(1);
+    });
+
+    it('a refused boundary create is the last: the FIRST refusal comes back, 2 creates in all', async () => {
+      const original = refusal('op');
+      let calls = 0;
+      const d = doubles(async () => {
+        throw ++calls === 1 ? original : refusal('op');
+      });
+      neverLands(d);
+      const created = createWorkflowAwaitingProbe(d.client, single);
+      const outcome = expect(created).rejects.toBe(original);
+      await vi.advanceTimersByTimeAsync(PROBE_WAIT_BOUND_MS + 60_000);
+      await outcome;
+      expect(d.createWorkflow).toHaveBeenCalledTimes(2);
+      expect(d.waitForProbe).toHaveBeenCalledOnce();
+    });
+
+    it('is not made after a late probe answer past the timer slack', async () => {
+      const original = refusal('op');
+      const d = doubles(async () => { throw original; });
+      // 2 s past the budget: beyond the 1 s timer slack but INSIDE paceCreate's
+      // own margin + slack (3 s), so only the boundary's slack check refuses it.
+      neverLands(d, 'timeout', 2_000);
+      const created = createWorkflowAwaitingProbe(d.client, single);
+      const outcome = expect(created).rejects.toBe(original);
+      await vi.advanceTimersByTimeAsync(PROBE_WAIT_BOUND_MS + 5_000);
+      await outcome;
+      expect(d.createWorkflow).toHaveBeenCalledOnce();
+    });
+
+    it('is not made when the budget is shorter than the contract bound', async () => {
+      const original = refusal('op');
+      const d = doubles(async () => { throw original; });
+      neverLands(d);
+      const created = createWorkflowAwaitingProbe(d.client, single, { timeoutMs: PROBE_WAIT_BOUND_MS - 1 });
+      const outcome = expect(created).rejects.toBe(original);
+      await vi.advanceTimersByTimeAsync(PROBE_WAIT_BOUND_MS);
+      await outcome;
+      expect(d.createWorkflow).toHaveBeenCalledOnce();
+    });
+
+    it('is not made when the probe wait gave up for another reason (prober_error)', async () => {
+      const original = refusal('op');
+      const d = doubles(async () => { throw original; });
+      neverLands(d, 'prober_error');
+      const created = createWorkflowAwaitingProbe(d.client, single);
+      const outcome = expect(created).rejects.toBe(original);
+      await vi.advanceTimersByTimeAsync(PROBE_WAIT_BOUND_MS);
+      await outcome;
+      expect(d.createWorkflow).toHaveBeenCalledOnce();
+    });
+
+    it('is not made when the probe wait timed out early, before the budget ended', async () => {
+      const original = refusal('op');
+      const d = doubles(async () => { throw original; }, { landed: false, reason: 'timeout' });
+      await expect(createWorkflowAwaitingProbe(d.client, single)).rejects.toBe(original);
+      expect(d.createWorkflow).toHaveBeenCalledOnce();
+    });
+
+    it('is not made when the deadline, not the budget, ended the wait', async () => {
+      const d = doubles(async () => { throw refusal('op'); });
+      neverLands(d);
+      const created = createWorkflowAwaitingProbe(d.client, single, { deadline: Date.now() + PROBE_WAIT_BOUND_MS });
+      const outcome = expect(created).rejects.toBeInstanceOf(GislTimeoutError);
+      await vi.advanceTimersByTimeAsync(PROBE_WAIT_BOUND_MS);
+      await outcome;
+      expect(d.createWorkflow).toHaveBeenCalledOnce();
+    });
+
+    it('a 429 on the boundary create is not waited out past the budget: the first refusal, no third create', async () => {
+      const original = refusal('op');
+      let calls = 0;
+      const d = doubles(async () => {
+        if (++calls === 1) throw original;
+        throw tooManyRequests('60');
+      });
+      neverLands(d);
+      const created = createWorkflowAwaitingProbe(d.client, single);
+      const outcome = expect(created).rejects.toBe(original);
+      await vi.advanceTimersByTimeAsync(PROBE_WAIT_BOUND_MS + 120_000);
+      await outcome;
+      expect(d.createWorkflow).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it('paces creates inside the Free workflow_create limits: <= 10 in any 60 s, <= 50 in all', async () => {
+    const original = refusal('op');
+    // The probe lands at once every time, so the pacing is the only gap.
+    const d = doubles(async () => { throw original; });
+    const at = createClock(d);
+    const created = createWorkflowAwaitingProbe(d.client, single);
+    const outcome = expect(created).rejects.toBe(original);
+    await vi.advanceTimersByTimeAsync(PROBE_WAIT_BOUND_MS + 60_000);
+    await outcome;
+    const t = relative(at);
+    for (const from of t) {
+      expect(t.filter((x) => x >= from && x < from + 60_000).length).toBeLessThanOrEqual(10);
+    }
+    expect(t.length).toBeLessThanOrEqual(50);
+    // No count cap: it kept going, and the budget is what ended it.
+    expect(t.length).toBeGreaterThan(3);
+    expect(t[t.length - 1]).toBeLessThanOrEqual(PROBE_WAIT_BOUND_MS);
+    expect(t[t.length - 1]).toBeGreaterThan(PROBE_WAIT_BOUND_MS - 30_000);
+    // Doubling from 1 s, capped at 30 s, from each create's start.
+    expect(t.slice(0, 8)).toEqual([0, 1_000, 3_000, 7_000, 15_000, 31_000, 61_000, 91_000]);
+  });
+
+  it('the refusal Retry-After paces the next create when it is longer than the backoff', async () => {
+    let calls = 0;
+    const d = doubles(async () => {
+      if (++calls === 1) throw refusal('op', '5');
+      return { workflowId: 'wf' };
+    });
+    const at = createClock(d);
+    const created = createWorkflowAwaitingProbe(d.client, single);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(created).resolves.toEqual({ workflowId: 'wf' });
+    expect(relative(at)).toEqual([0, 5_000]);
+  });
+
+  describe('a create refused with 429 mid-recovery', () => {
+    it('TOO_MANY_REQUESTS is waited out for its Retry-After, then re-created', async () => {
+      let calls = 0;
+      const d = doubles(async () => {
+        calls++;
+        if (calls === 1) throw refusal('op');
+        if (calls === 2) throw tooManyRequests('20');
+        return { workflowId: 'wf' };
+      });
+      const at = createClock(d);
+      const created = createWorkflowAwaitingProbe(d.client, single);
+      await vi.advanceTimersByTimeAsync(21_000);
+      await expect(created).resolves.toEqual({ workflowId: 'wf' });
+      expect(relative(at)).toEqual([0, 1_000, 21_000]);
+      expect(d.waitForProbe).toHaveBeenCalledOnce();
+    });
+
+    it('TOO_MANY_REQUESTS with no Retry-After is waited out with the create backoff', async () => {
+      let calls = 0;
+      const d = doubles(async () => {
+        calls++;
+        if (calls === 1) throw refusal('op');
+        if (calls === 2) throw tooManyRequests();
+        return { workflowId: 'wf' };
+      });
+      const at = createClock(d);
+      const created = createWorkflowAwaitingProbe(d.client, single);
+      await vi.advanceTimersByTimeAsync(3_000);
+      await expect(created).resolves.toEqual({ workflowId: 'wf' });
+      expect(relative(at)).toEqual([0, 1_000, 3_000]);
+    });
+
+    it('TOO_MANY_REQUESTS whose Retry-After outlasts the budget rethrows the first refusal at once', async () => {
+      const original = refusal('op');
+      let calls = 0;
+      const d = doubles(async () => {
+        if (++calls === 1) throw original;
+        throw tooManyRequests('600');
+      });
+      const created = createWorkflowAwaitingProbe(d.client, single, { timeoutMs: 60_000 });
+      const outcome = expect(created).rejects.toBe(original);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await outcome;
+      expect(d.createWorkflow).toHaveBeenCalledTimes(2);
+    });
+
+    it('TOO_MANY_REQUESTS whose Retry-After outlasts the deadline is a GislTimeoutError', async () => {
+      let calls = 0;
+      const d = doubles(async () => {
+        if (++calls === 1) throw refusal('op');
+        throw tooManyRequests('600');
+      });
+      const created = createWorkflowAwaitingProbe(d.client, single, { deadline: Date.now() + 60_000 });
+      const outcome = expect(created).rejects.toBeInstanceOf(GislTimeoutError);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await outcome;
+      expect(d.createWorkflow).toHaveBeenCalledTimes(2);
+    });
+
+    it('DUPLICATE_IN_PROGRESS (also a 429) is rethrown at once', async () => {
+      const duplicate = new GislApiError(429, 'duplicate in progress', '/api/workflows', undefined, {
+        errorCode: 'DUPLICATE_IN_PROGRESS',
+        responseHeaders: { 'retry-after': '1' },
+      });
+      let calls = 0;
+      const d = doubles(async () => {
+        if (++calls === 1) throw refusal('op');
+        throw duplicate;
+      });
+      const created = createWorkflowAwaitingProbe(d.client, single);
+      const outcome = expect(created).rejects.toBe(duplicate);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await outcome;
+      expect(d.createWorkflow).toHaveBeenCalledTimes(2);
+    });
+
+    it('the long-form concurrency 429 is rethrown at once, even carrying TOO_MANY_REQUESTS', async () => {
+      // The code is set to TOO_MANY_REQUESTS so only the CLASS check can exclude it.
+      const longForm = new GislLongFormConcurrencyError(
+        429,
+        'long-form limit',
+        { error: 'LONG_FORM_CONCURRENCY_LIMIT_EXCEEDED' } as unknown as ConstructorParameters<
+          typeof GislLongFormConcurrencyError
+        >[2],
+        '/api/workflows',
+        { errorCode: 'TOO_MANY_REQUESTS' },
+      );
+      let calls = 0;
+      const d = doubles(async () => {
+        if (++calls === 1) throw refusal('op');
+        throw longForm;
+      });
+      const created = createWorkflowAwaitingProbe(d.client, single);
+      const outcome = expect(created).rejects.toBe(longForm);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await outcome;
+      expect(d.createWorkflow).toHaveBeenCalledTimes(2);
+    });
+
+    it('a 429 on the FIRST create, before any probe_pending, is not ours to wait out', async () => {
+      const limited = tooManyRequests('5');
+      const d = doubles(async () => { throw limited; });
+      await expect(createWorkflowAwaitingProbe(d.client, single)).rejects.toBe(limited);
+      expect(d.createWorkflow).toHaveBeenCalledOnce();
+    });
+  });
+
+  it('a probe 429 mid-recovery on a multi-file job is waited out, not fatal (real client, patient polling)', async () => {
+    // Two uploads in one job: the second's probe hits the shared per-user
+    // probe bucket. Through the real waitForProbe, `patient: true` waits it out.
+    const client = new GislClient({ baseUrl: 'https://api.example.com', apiKey: 'test-key' });
+    const twoUploads = {
+      jobs: [
+        {
+          id: 'wm',
+          inputs: [
+            { source: { type: 'upload', file_id: 'clip_a' } },
+            { source: { type: 'upload', file_id: 'clip_b' } },
+          ],
+          operations: [{ type: 'watermark', options: {} }],
+        },
+      ],
+    } as unknown as WorkflowCreatePayload;
+    let creates = 0;
+    const createSpy = vi.spyOn(client, 'createWorkflow').mockImplementation(async () => {
+      if (++creates === 1) throw refusal('wm');
+      return { workflowId: 'wf' } as unknown as Awaited<ReturnType<GislClient['createWorkflow']>>;
+    });
+    const probeAnswer = { fileId: 'x', probeStatus: 'ok' } as unknown as Awaited<ReturnType<GislClient['probeUpload']>>;
+    let clipBPolls = 0;
+    const probeSpy = vi.spyOn(client, 'probeUpload').mockImplementation(async (fileId: string) => {
+      if (fileId === 'clip_b' && ++clipBPolls === 1) throw tooManyRequests('15');
+      return probeAnswer;
+    });
+    const created = createWorkflowAwaitingProbe(client, twoUploads);
+    await vi.advanceTimersByTimeAsync(15_000);
+    await expect(created).resolves.toEqual({ workflowId: 'wf' });
+    expect(probeSpy.mock.calls.map((c) => c[0])).toEqual(['clip_a', 'clip_b', 'clip_b']);
+    expect(createSpy).toHaveBeenCalledTimes(2);
   });
 });

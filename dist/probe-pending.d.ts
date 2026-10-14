@@ -1,28 +1,37 @@
 import type { WorkflowCreateResponse } from '@giveitsmaller/contracts/openapi';
 import { type GislClient } from './client.js';
 import type { WorkflowCreatePayload } from './types.js';
-/** A landed probe ends the gate server-side, so 3 creates is headroom, not a retry policy. */
-export declare const PROBE_PENDING_MAX_CREATE_ATTEMPTS = 3;
-/** A guest's first re-create delay when the refusal carries no Retry-After; doubles per attempt. */
+/**
+ * The first gap between two creates of one recovery when no Retry-After asks
+ * for more; doubles per create. Paces a guest's re-creates and, since Hal5c41E,
+ * a signed-in caller's: a signed-in `probe_pending` refusal costs a
+ * `workflow_create` token (compression_api WorkflowController.php:264-270), and
+ * the Free tier allows 10/min, 50/h and 200/day (TieredRateLimiterService.php,
+ * an API implementation fact, not contract). Measured from the previous
+ * create's START, this schedule makes at most 6 creates in any 60 s and about
+ * 36 in 900 s.
+ */
 export declare const GUEST_BACKOFF_BASE_MS = 1000;
-/** The longest a guest's doubling backoff grows to between re-creates. */
+/** The longest the doubling create backoff grows to (guest and signed-in). */
 export declare const GUEST_BACKOFF_MAX_MS = 30000;
 /**
- * A guest's default recovery budget: anonymous-policy 2.2.0
- * `video.probe_wait_bound_seconds` (900 s). Past that bound after the upload the
- * API stops answering `probe_pending` and proceeds, so waiting longer is
- * pointless and giving up sooner fails a run the server would accept (fNSQUeDS).
- * A guest re-creates without a count cap: under 2.1.0 a `probe_pending` refusal
- * does not count against `per_minute.workflow_create`. The caller's `timeoutMs`
- * and `deadline` still win. Pinned to the policy by
- * scripts/tests/test_guest_create_cap.py.
+ * The default recovery budget for EVERY caller: the contract's
+ * `video.probe_wait_bound_seconds` (900 s; anonymous-policy.yaml, api.yaml's
+ * probe_pending description, and the API's PROBE_PENDING_MAX_WAIT_SECONDS).
+ * Past that bound after the upload the API stops answering `probe_pending` and
+ * proceeds, so waiting longer is pointless and giving up sooner fails a run the
+ * server would accept (fNSQUeDS, Hal5c41E). No generated runtime constant
+ * carries it, so it is a literal pinned to the policy by
+ * scripts/tests/test_guest_create_cap.py. The caller's `timeoutMs` and
+ * `deadline` still win.
  */
-export declare const GUEST_PROBE_WAIT_BOUND_MS = 900000;
+export declare const PROBE_WAIT_BOUND_MS = 900000;
 export interface CreateAwaitingProbeOptions {
     /**
      * ONE budget (ms) for the whole recovery - the refusal's Retry-After plus
-     * every probe wait. Default 30 s; 900 s for a guest (GUEST_PROBE_WAIT_BOUND_MS). Past it
-     * the original refusal is rethrown.
+     * every probe wait and create gap. Default {@link PROBE_WAIT_BOUND_MS}
+     * (900 s), for guests and signed-in callers alike. Past it the original
+     * refusal is rethrown.
      */
     timeoutMs?: number;
     /** Whole-run deadline (epoch ms): nothing starts past it (GislTimeoutError). */
@@ -42,12 +51,16 @@ export interface CreateAwaitingProbeOptions {
  * probe is `not_applicable` (never probed) is skipped, not waited on. A no-op
  * when the server never refuses.
  *
+ * A signed-in recovery has no create-count cap: the budget alone ends it. It
+ * polls the probe patiently (`waitForProbe({ patient: true })`), spaces its
+ * creates by the doubling backoff above, and waits out a create refused with a
+ * plain `429 TOO_MANY_REQUESTS` (Hal5c41E).
+ *
  * Rethrows the ORIGINAL typed refusal when recovery is disabled, the budget
- * (`timeoutMs`) cannot fit the Retry-After or the probe does not land within
+ * (`timeoutMs`) cannot fit the next wait or the probe does not land within
  * it, the probe lands `corrupt` / `unsupported_codec` (the contract says do
- * not retry), the refusal names no job whose upload is in the payload, or
- * {@link PROBE_PENDING_MAX_CREATE_ATTEMPTS} creates were all refused. Throws
- * {@link GislTimeoutError} when `deadline` would pass first.
+ * not retry), or the refusal names no job whose upload is in the payload.
+ * Throws {@link GislTimeoutError} when `deadline` would pass first.
  */
 export declare function createWorkflowAwaitingProbe(client: Pick<GislClient, 'createWorkflow' | 'waitForProbe'>, payload: WorkflowCreatePayload, options?: CreateAwaitingProbeOptions): Promise<WorkflowCreateResponse>;
 /**

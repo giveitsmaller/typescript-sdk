@@ -528,7 +528,15 @@ export declare class GislClient {
      *   the server + fan-out gate decide split-vs-single from the landed
      *   metadata; the SDK does not interpret it.
      * - `5xx` (prober crash) → retry a couple of times, then give up.
+     * - `429` → propagates by default; with `patient: true` it is waited out
+     *   (its Retry-After, else the patient backoff, clamped to `timeoutMs`).
      * - timeout → give up.
+     *
+     * `patient: true` is for a LONG wait (Hal5c41E): polls start at least
+     * max(Retry-After, 3 s doubling per poll up to 30 s) apart instead of the
+     * 250 ms jitter backoff, so a 900 s wait stays inside the per-user probe
+     * rate limit. The spacing is per call; parallel calls share the server's
+     * bucket, and the overflow is absorbed by the 429 wait-out above.
      *
      * **Never bounces:** on give-up (timeout / repeated 5xx / transport /
      * not applicable) it resolves `{ landed: false, reason }` rather than throwing, so the caller
@@ -571,23 +579,36 @@ export declare class GislClient {
      * e.g. an image input) is skipped rather than waited on. It is a no-op when
      * the server never returns `probe_pending`.
      *
+     * The default budget is the contract's `video.probe_wait_bound_seconds`
+     * (900 s) for every caller; past it the server stops answering
+     * `probe_pending`. There is no create-count cap: the budget alone ends a
+     * recovery (Hal5c41E).
+     *
+     * Signed in, it polls with `waitForProbe({ patient: true })`, starts each
+     * re-create at least max(Retry-After, 1 s doubling per create up to 30 s)
+     * after the previous create started (a refusal costs a `workflow_create`
+     * token), and waits out a re-create refused with a plain `429
+     * TOO_MANY_REQUESTS` the same way. `DUPLICATE_IN_PROGRESS` and the long-form
+     * concurrency 429 are rethrown at once. When the probe still has not landed
+     * at the end of a budget of at least 900 s, it makes ONE last create at the
+     * boundary, which the server should then accept.
+     *
      * On a guest client (`gisl.anonymous()`) the probe endpoint is sign-in only, so
      * it does NOT poll: it re-creates on the refusal's Retry-After, else a doubling
-     * backoff from 1 s capped at 30 s, with no count cap, until the budget runs out
-     * (default 900 s, anonymous-policy `probe_wait_bound_seconds`), making one last
-     * create at the boundary (5dJrOdVC, fNSQUeDS).
+     * backoff from 1 s capped at 30 s, until the budget runs out, making one last
+     * create at the boundary (5dJrOdVC, fNSQUeDS). A guest's 429 is rethrown.
      *
      * Gives up by rethrowing the ORIGINAL typed error when:
      * - recovery is disabled (`enabled: false`), or the ONE recovery budget
-     *   `timeoutMs` (default 30 s, 900 s for a guest; capped by `deadline`) -
-     *   covering the refusal's Retry-After and every probe wait - runs out;
+     *   `timeoutMs` (default 900 s; capped by `deadline`) - covering the
+     *   refusal's Retry-After, every probe wait and every create gap - runs out;
      * - the probe landed `corrupt` / `unsupported_codec` (the contract says do not
      *   retry: call {@link probeUpload} for the reason);
-     * - the error names no job whose upload the SDK can find (signed-in only);
-     * - three creates were all refused (signed-in only).
+     * - the error names no job whose upload the SDK can find (signed-in only).
      *
      * `deadline` (epoch ms) is the caller's whole-run budget: a retry that would
-     * start past it throws {@link GislTimeoutError} instead.
+     * start past it, or a probe wait that ends past it, throws
+     * {@link GislTimeoutError} instead.
      */
     createWorkflowAwaitingProbe(payload: WorkflowCreatePayload, options?: CreateAwaitingProbeOptions): Promise<WorkflowCreateResponse>;
     /**

@@ -645,6 +645,15 @@ export interface ProbeWaitOptions {
    * `elapsedMs` is wall-clock since the wait started.
    */
   onPoll?: (info: { attempt: number; elapsedMs: number }) => void;
+  /**
+   * Poll for a LONG wait without exhausting the per-user probe rate limit
+   * (default `false`). Polls start at least max(Retry-After, a backoff of 3 s
+   * doubling per poll up to 30 s) apart, and a `429` from the probe endpoint is
+   * waited out (its Retry-After, else that backoff, clamped to `timeoutMs`)
+   * instead of thrown. The spacing is per call: each call restarts its schedule.
+   * `createWorkflowAwaitingProbe` passes `true` for its signed-in recovery.
+   */
+  patient?: boolean;
 }
 
 export interface ProbeWaitResult {
