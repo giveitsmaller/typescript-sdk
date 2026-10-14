@@ -2396,7 +2396,7 @@ export class ArchivedRecipe {
  * `position` when the server provides it. `toFile()` on a multi-output result
  * throws `not_single_output`; use `downloadTo(dir)` or iterate `artifacts`.
  *
- * The PHP half lands with card aRmwBrLX.
+ * The PHP split verb is card DflFw0j1.
  */
 export class SplitRecipe {
     recipe;

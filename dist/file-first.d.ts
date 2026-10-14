@@ -50,8 +50,7 @@ export interface Downloader {
  * flat output type. Leaner than the operation-first `Artifact`: just the
  * four fields a caller needs to identify + fetch an output.
  *
- * Mirrors the PHP `OutputFile`, except {@link pageIndex} and
- * {@link position}, which are TS-only until card aRmwBrLX lands the PHP half.
+ * Mirrors the PHP `OutputFile`.
  */
 export interface OutputFile {
     readonly url: string;
@@ -114,8 +113,7 @@ export interface OutputFile {
      * undefined (omitted) on non-page-indexed outputs. Mutually exclusive with
      * {@link position}.
      *
-     * TS-only until card aRmwBrLX lands the PHP half; the PHP `OutputFile`
-     * does not carry it yet.
+     * Mirrored by the PHP `OutputFile`.
      */
     readonly pageIndex?: number;
     /**
@@ -126,7 +124,7 @@ export interface OutputFile {
      * {@link OperationDownload.position}; undefined (omitted) otherwise.
      * Mutually exclusive with {@link pageIndex}.
      *
-     * TS-only until card aRmwBrLX lands the PHP half.
+     * Mirrored by the PHP `OutputFile`.
      */
     readonly position?: number;
 }
@@ -1130,7 +1128,7 @@ export declare class ArchivedRecipe {
  * `position` when the server provides it. `toFile()` on a multi-output result
  * throws `not_single_output`; use `downloadTo(dir)` or iterate `artifacts`.
  *
- * The PHP half lands with card aRmwBrLX.
+ * The PHP split verb is card DflFw0j1.
  */
 export declare class SplitRecipe {
     private readonly recipe;
