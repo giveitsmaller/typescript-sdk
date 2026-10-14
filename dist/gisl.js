@@ -251,7 +251,7 @@ function wrapErgonomic(client, presetDefaults, scopedPresetDefaults) {
                     return new OperationBuilder(target, prop, input, { ...options, output_format: to }, presetDefaults, scopedPresetDefaults);
                 };
             }
-            if (prop === 'compress' || prop === 'thumbnail' || prop === 'transform') {
+            if (prop === 'compress' || prop === 'thumbnail' || prop === 'transform' || prop === 'split') {
                 return (input, options = {}) => {
                     // ExVcchMz — validate the option bag pre-upload for the exported
                     // single-op builder so a bad bag (unknown key / null thumbnail dim /
@@ -269,6 +269,11 @@ function wrapErgonomic(client, presetDefaults, scopedPresetDefaults) {
                     // and no required dims — just the generic key-validation.
                     if (prop === 'transform')
                         validateVerbOptions('transform', options);
+                    // `split` (x1nYxBQx) is the same: generic key-validation only. The
+                    // planned `precision: 'exact'` is refused by the builder's planned-value
+                    // gate at run()/submit(), before upload.
+                    if (prop === 'split')
+                        validateVerbOptions('split', options);
                     // T4b — pass client-scope presetDefaults into the builder so
                     // .run()/.submit() consult the preset resolver. The Proxy's
                     // closure carries the same reference for every per-call
@@ -357,8 +362,8 @@ function wrapErgonomic(client, presetDefaults, scopedPresetDefaults) {
             if (prop === 'operation') {
                 // qUhxfDA5 — generic escape-hatch sibling of the single-op verbs
                 // (compress/convert/thumbnail). Builds a SINGLE-input, SINGLE-operation
-                // job for an op type with no typed verb (e.g. `text_watermark`, `split`,
-                // or a not-yet-in-contract op). Options ride through to the wire
+                // job for an op type with no typed verb (e.g. `text_watermark`, or a
+                // not-yet-in-contract op). Options ride through to the wire
                 // unchanged (no preset resolution unless opType is 'compress'); the only
                 // pre-upload check is the planned-everywhere value gate (99Da2uyx) — the
                 // server validates everything else.

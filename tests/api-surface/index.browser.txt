@@ -305,11 +305,14 @@ SingleInputOperationType	type
 SplitAudioMode	value
 SplitAudioOptions	type
 SplitAudioPrecision	value
+SplitAudioSilenceHandling	value
 SplitDocumentPdfMode	value
 SplitDocumentPdfOptions	type
 SplitImageGifOptions	type
 SplitImageGifOutputFormat	value
 splitMetadata	value
+SplitOptions	type
+SplitRecipe	value+type
 SplitVideoMode	value
 SplitVideoOptions	type
 SplitVideoPrecision	value

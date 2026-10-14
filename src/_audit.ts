@@ -226,6 +226,8 @@ import type {
   CompressOptions,
   CompressPresetOverrides,
   TransformOptions,
+  // x1nYxBQx — the typed split option bag.
+  SplitOptions,
 } from './index.js';
 import { ANONYMOUS_ALLOWLIST } from './gisl.js';
 import type { GislClient } from './client.js';
@@ -247,6 +249,7 @@ import {
   MergeBuilder,
   MergedRecipe,
   ArchivedRecipe,
+  SplitRecipe,
   MapEachBuilder,
   asset,
   handle,
@@ -419,12 +422,15 @@ export function _runAudit(): void {
   accept<typeof MergedRecipe>();
   accept<ArchivedRecipe>();
   accept<typeof ArchivedRecipe>();
+  // x1nYxBQx — the terminal split recipe.
+  accept<SplitRecipe>();
+  accept<typeof SplitRecipe>();
   accept<MapEachBuilder>();
   accept<typeof MapEachBuilder>();
 
-  // ── Execution-method signatures: sixteen pins across nine classes ─────────────
+  // ── Execution-method signatures: eighteen pins across ten classes ─────────────
   //
-  // `run()` AND `submit()` on the seven that have both; `run()` ONLY on BatchRecipe
+  // `run()` AND `submit()` on the eight that have both; `run()` ONLY on BatchRecipe
   // and MapEachBuilder, which deliberately have no `submit()`. ⚠️ Pinning a
   // `submit()` they do not have would INVENT API, so the asymmetry is the point.
   // Each uses `Equal<>`, not assignment — see the note above.
@@ -462,6 +468,9 @@ export function _runAudit(): void {
   const _watermarkedRun: Equal<WatermarkedRecipe['run'], FileFirstRun<RunResult>> = true;
   const _watermarkedSubmit: Equal<WatermarkedRecipe['submit'], FileFirstSubmit> = true;
   const _batchRun: Equal<BatchRecipe['run'], FileFirstRun<RunResult>> = true;
+  // x1nYxBQx — SplitRecipe delegates to a Recipe, so it carries the same shapes.
+  const _splitRun: Equal<SplitRecipe['run'], FileFirstRun<RunResult>> = true;
+  const _splitSubmit: Equal<SplitRecipe['submit'], FileFirstSubmit> = true;
 
   const _opRun: Equal<OperationBuilder['run'], (options?: RunOptions) => Promise<Result>> = true;
   const _opSubmit: Equal<OperationBuilder['submit'], (options?: SubmitOptions) => Promise<Handle>> =
@@ -477,7 +486,7 @@ export function _runAudit(): void {
 
   void _recipeRun; void _recipeSubmit; void _filesRun; void _filesSubmit;
   void _mergedRun; void _mergedSubmit; void _archivedRun; void _archivedSubmit;
-  void _watermarkedRun; void _watermarkedSubmit; void _batchRun;
+  void _watermarkedRun; void _watermarkedSubmit; void _batchRun; void _splitRun; void _splitSubmit;
   void _opRun; void _opSubmit; void _mergeRun; void _mergeSubmit; void _mapEachRun;
 
   // ── YdxagJOI — option-bag signatures of compress() and transform() ────────────
@@ -506,6 +515,15 @@ export function _runAudit(): void {
   > = true;
   void _opFirstCompress; void _opFirstTransform; void _recipeCompress; void _filesCompress;
   void _mergedCompress; void _watermarkedCompress;
+  // x1nYxBQx — split's typed bag is REQUIRED on both surfaces, and the file-first
+  // verb returns the terminal SplitRecipe (not a chainable Recipe).
+  const _recipeSplit: Equal<Recipe['split'], (options: SplitOptions) => SplitRecipe> = true;
+  const _opFirstSplit: Equal<
+    ErgonomicClient['split'],
+    (input: string | Blob, options: SplitOptions) => OperationBuilder
+  > = true;
+  void _recipeSplit; void _opFirstSplit;
+  accept<SplitOptions>();
   accept<CompressOptions>();
   accept<CompressPresetOverrides>();
   accept<Artifact>();

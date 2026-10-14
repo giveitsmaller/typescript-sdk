@@ -22,6 +22,10 @@ const THUMBNAIL_OPTION_KEYS = [
     'width', 'height', 'fit', 'format', 'quality', 'background', 'timestamp', 'source', 'page',
 ];
 const TRANSFORM_OPTION_KEYS = ['rotate', 'flip'];
+const SPLIT_OPTION_KEYS = [
+    'frame_range', 'output_format', 'mode', 'page_range', 'page_groups', 'interval', 'count', 'cut_points',
+    'silence_threshold_db', 'silence_min_duration', 'silence_handling', 'precision',
+];
 /**
  * The {@link CompressOptions} key set as a runtime tuple, for the conformance test
  * that ties it to the resolver's tables.
@@ -54,6 +58,10 @@ const OUTPUT_OPTION_KEYS = [
 const _convertKeysMatch = true;
 const _thumbnailKeysMatch = true;
 const _transformKeysMatch = true;
+// Compile-time arm only: ties `keyof SplitOptions` to SPLIT_OPTION_KEYS. The
+// tie of that tuple to `operationOptionKeys(splitMetadata)` is the runtime
+// wire-key conformance arm (`wire-key-conformance.test.ts`).
+const _splitKeysMatch = true;
 const _textWatermarkKeysMatch = true;
 const _watermarkKeysMatch = true;
 const _outputKeysMatch = true;
@@ -62,6 +70,7 @@ const _compressKeysMatch = true;
 void _convertKeysMatch;
 void _thumbnailKeysMatch;
 void _transformKeysMatch;
+void _splitKeysMatch;
 void _textWatermarkKeysMatch;
 void _watermarkKeysMatch;
 void _outputKeysMatch;
@@ -75,6 +84,7 @@ export const VERB_OPTION_KEYS = {
     convert: CONVERT_OPTION_KEYS,
     thumbnail: THUMBNAIL_OPTION_KEYS,
     transform: TRANSFORM_OPTION_KEYS,
+    split: SPLIT_OPTION_KEYS,
     textWatermark: TEXT_WATERMARK_OPTION_KEYS,
     watermark: WATERMARK_OPTION_KEYS,
     output: OUTPUT_OPTION_KEYS,

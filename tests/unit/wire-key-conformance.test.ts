@@ -4,6 +4,7 @@ import {
   convertMetadata,
   imageWatermarkMetadata,
   mergeMetadata,
+  splitMetadata,
   textWatermarkMetadata,
   thumbnailMetadata,
   transformMetadata,
@@ -161,6 +162,77 @@ describe('wire-key conformance — transform', () => {
   });
 });
 
+describe('wire-key conformance — split', () => {
+  it('emitted keys (passthrough, every mime group) conform to the split contract', () => {
+    const contract = operationOptionKeys(splitMetadata);
+    const bags = [
+      { frame_range: '1-10', output_format: 'png' },
+      { mode: 'page_groups', page_groups: 3 },
+      { mode: 'page_range', page_range: '1-2' },
+      { mode: 'cut_points', cut_points: [1, 2], precision: 'fast' },
+      { mode: 'silence', silence_threshold_db: -50, silence_min_duration: 0.75, silence_handling: 'keep_at_end' },
+      { mode: 'interval', interval: 5 },
+      { mode: 'count', count: 2 },
+    ] as const;
+    for (const bag of bags) {
+      const wire = new Recipe(fileInput.path('input.bin')).split(bag).toWorkflowPayload(FILE_ID);
+      assertKeysConform('split', optionKeysOf(wire.jobs[0].operations, 'split'), contract);
+    }
+  });
+
+  // Non-tautological key pin: the contract's split option-key set, written out.
+  // A contract key add/remove fails here and forces SplitOptions to be revisited
+  // (the `verbs` arm below ties SPLIT_OPTION_KEYS to the same metadata).
+  it('exposes exactly the 12 contract keys', () => {
+    expect([...operationOptionKeys(splitMetadata)].sort()).toEqual([
+      'count',
+      'cut_points',
+      'frame_range',
+      'interval',
+      'mode',
+      'output_format',
+      'page_groups',
+      'page_range',
+      'precision',
+      'silence_handling',
+      'silence_min_duration',
+      'silence_threshold_db',
+    ]);
+  });
+
+  // Availability tripwire: the SDK passes beta groups/values through with no gate
+  // and relies on the shared planned-value gate for `precision: 'exact'`. If a
+  // re-vendor moves any of these, this fails and forces a re-review of that
+  // decision and of the SplitOptions / Recipe.split docstrings.
+  it('availability is unchanged since the verb was exposed', () => {
+    const groups = splitMetadata.mime_groups;
+    expect({
+      op: splitMetadata.availability,
+      soleOp: splitMetadata.sole_op,
+      gif: groups.image_gif?.availability,
+      pdf: groups.document_pdf?.availability,
+      audio: groups.audio?.availability,
+      video: groups.video?.availability,
+      silenceFeature: splitMetadata.features.silence_mode_audio?.availability,
+      audioSilence: groups.audio?.options.mode?.per_value_availability.silence?.availability,
+      audioExact: groups.audio?.options.precision?.per_value_availability.exact?.availability,
+      videoExact: groups.video?.options.precision?.per_value_availability.exact?.availability,
+    }).toEqual({
+      op: 'stable',
+      soleOp: true,
+      // image_gif declares no group-level availability, so it resolves to the op's.
+      gif: undefined,
+      pdf: 'stable',
+      audio: 'beta',
+      video: 'beta',
+      silenceFeature: 'beta',
+      audioSilence: 'beta',
+      audioExact: 'planned',
+      videoExact: 'planned',
+    });
+  });
+});
+
 describe('wire-key conformance — text_watermark', () => {
   it('injected text key + passthrough options conform to the text_watermark contract', () => {
     const contract = operationOptionKeys(textWatermarkMetadata);
@@ -301,6 +373,7 @@ describe('option-key validation conformance — validator + typed interfaces vs 
     convert: operationOptionKeys(convertMetadata),
     thumbnail: operationOptionKeys(thumbnailMetadata),
     transform: operationOptionKeys(transformMetadata),
+    split: operationOptionKeys(splitMetadata),
     textWatermark: operationOptionKeys(textWatermarkMetadata),
     // watermark routes image_watermark | video_watermark; the base media may be
     // undetectable at the verb call, so the validator accepts the UNION.
@@ -318,7 +391,7 @@ describe('option-key validation conformance — validator + typed interfaces vs 
     textWatermark: ['text'],
   };
 
-  const verbs: MetadataVerb[] = ['convert', 'thumbnail', 'transform', 'textWatermark', 'watermark'];
+  const verbs: MetadataVerb[] = ['convert', 'thumbnail', 'transform', 'split', 'textWatermark', 'watermark'];
 
   it.each(verbs)('%s: runtime validator allowed-key set equals the contract option set', (verb) => {
     expect([...allowedKeysFor(verb)].sort()).toEqual([...expectedContract[verb]].sort());

@@ -133,6 +133,9 @@ export function _runAudit() {
     accept();
     accept();
     accept();
+    // x1nYxBQx — the terminal split recipe.
+    accept();
+    accept();
     accept();
     accept();
     const _recipeRun = true;
@@ -146,6 +149,9 @@ export function _runAudit() {
     const _watermarkedRun = true;
     const _watermarkedSubmit = true;
     const _batchRun = true;
+    // x1nYxBQx — SplitRecipe delegates to a Recipe, so it carries the same shapes.
+    const _splitRun = true;
+    const _splitSubmit = true;
     const _opRun = true;
     const _opSubmit = true;
     const _mergeRun = true;
@@ -166,6 +172,8 @@ export function _runAudit() {
     void _watermarkedRun;
     void _watermarkedSubmit;
     void _batchRun;
+    void _splitRun;
+    void _splitSubmit;
     void _opRun;
     void _opSubmit;
     void _mergeRun;
@@ -183,6 +191,13 @@ export function _runAudit() {
     void _filesCompress;
     void _mergedCompress;
     void _watermarkedCompress;
+    // x1nYxBQx — split's typed bag is REQUIRED on both surfaces, and the file-first
+    // verb returns the terminal SplitRecipe (not a chainable Recipe).
+    const _recipeSplit = true;
+    const _opFirstSplit = true;
+    void _recipeSplit;
+    void _opFirstSplit;
+    accept();
     accept();
     accept();
     accept();

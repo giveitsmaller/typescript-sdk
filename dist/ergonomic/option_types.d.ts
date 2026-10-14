@@ -82,6 +82,54 @@ export interface TransformOptions {
     /** Mirror axis (applied after `rotate`). Not honored on document_pdf input. */
     flip?: 'none' | 'horizontal' | 'vertical' | 'both';
 }
+export interface SplitOptions {
+    /**
+     * GIF (`image_gif`) only: the 1-based inclusive frame range, `'start-end'`
+     * (e.g. `'1-100'`). REQUIRED for a GIF input; omitting it is a server 422.
+     * At most 200 frames.
+     */
+    frame_range?: string;
+    /** GIF only: the image format of each extracted frame. Default `'png'`. */
+    output_format?: 'png' | 'webp' | 'jpg';
+    /**
+     * Split strategy. PDF: `'page_range'` (default) or `'page_groups'`. Audio and
+     * video: `'interval'` (default), `'count'` or `'cut_points'`. Audio only:
+     * `'silence'` (beta). Not used for GIF.
+     */
+    mode?: 'page_range' | 'page_groups' | 'interval' | 'count' | 'cut_points' | 'silence';
+    /**
+     * PDF, `mode: 'page_range'`: the pages to extract, e.g. `'1-5'` or `'1,3,5-7'`
+     * (1-based, inclusive). Required in that mode; at most 200 pages.
+     */
+    page_range?: string;
+    /**
+     * PDF, `mode: 'page_groups'`: pages per output (2-200). Required in that
+     * mode. Each output's `pageIndex` is its group's FIRST source page.
+     */
+    page_groups?: number;
+    /** Audio/video, `mode: 'interval'`: cut every N seconds (float, min 0.001). Required in that mode. */
+    interval?: number;
+    /** Audio/video, `mode: 'count'`: the number of equal-duration pieces (2-200). Required in that mode. */
+    count?: number;
+    /**
+     * Audio/video, `mode: 'cut_points'`: cut times in seconds, strictly
+     * increasing, each above 0 and below the duration (1-199 entries). Required
+     * in that mode.
+     */
+    cut_points?: readonly number[];
+    /** Audio, `mode: 'silence'` (beta): the silence floor in dBFS (at most 0; default -50). */
+    silence_threshold_db?: number;
+    /** Audio, `mode: 'silence'` (beta): the minimum silence gap in seconds (default 0.75). */
+    silence_min_duration?: number;
+    /** Audio, `mode: 'silence'` (beta): where detected silence goes. Only `'keep_at_end'` today. */
+    silence_handling?: 'keep_at_end';
+    /**
+     * Audio/video: cut precision. `'fast'` (default) cuts at packet boundaries.
+     * `'exact'` is planned: the SDK refuses it before upload
+     * (`feature_not_available`), as the server would at create.
+     */
+    precision?: 'fast' | 'exact';
+}
 /**
  * A per-call preset override for {@link CompressOptions.presetOverrides}: one of
  * the seven per-media compress preset DTOs, as a `*CompressPresetOptions` instance
@@ -364,6 +412,7 @@ export declare const VERB_OPTION_KEYS: {
     readonly convert: readonly ["quality", "background", "crf", "trim_start", "trim_end", "fps", "width", "height", "fit", "metadata", "color_profile", "auto_orient", "max_colors", "loop", "dither", "bitrate", "pages", "dpi"];
     readonly thumbnail: readonly ["width", "height", "fit", "format", "quality", "background", "timestamp", "source", "page"];
     readonly transform: readonly ["rotate", "flip"];
+    readonly split: readonly ["frame_range", "output_format", "mode", "page_range", "page_groups", "interval", "count", "cut_points", "silence_threshold_db", "silence_min_duration", "silence_handling", "precision"];
     readonly textWatermark: readonly ["font_size", "color", "font_family", "rotation", "watermark_mode", "tile_spacing", "anchor", "margin_x", "margin_y", "opacity"];
     readonly watermark: readonly ["anchor", "margin_x", "margin_y", "opacity", "overlay_width", "overlays"];
     readonly output: readonly ["quality", "quality_preset", "encoding_mode", "target_size_bytes", "chroma_subsampling", "width", "height", "fit", "background", "progressive", "optimization_level", "avif_speed", "metadata", "color_profile", "auto_orient", "lossless"];

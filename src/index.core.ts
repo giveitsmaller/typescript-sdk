@@ -205,6 +205,11 @@ export { MergedRecipe } from './file-first.js';
 // terminal ArchivedRecipe (zip / tar.gz; no post-bundle chain), then run()/submit().
 export { ArchivedRecipe } from './file-first.js';
 export type { ArchiveRecipeOptions } from './file-first.js';
+// File-first 1->N split (x1nYxBQx) — `client.file(x).split(opts)` returns a
+// terminal SplitRecipe (sole_op, N outputs; no chain after it, no batch()), then
+// run()/submit(). Each output carries `pageIndex` (PDF) or `position` when the
+// server provides it.
+export { SplitRecipe } from './file-first.js';
 // File-first multi-input watermark (FF4a / Z7zTr789) — `client.file(base)
 // .watermark(overlay, opts)` returns a single-output WatermarkedRecipe you chain
 // post-watermark ops on, then run()/submit(). Routes image_watermark / video_watermark
@@ -618,7 +623,8 @@ type _ArtifactDriftAssertion = [
 // `filename`/`sizeBytes`/`operation` verbatim; the target-size outcome
 // `chosenQuality`/`targetSizeMet` projected verbatim per 9u4YGZ4V; the
 // auto_quality metrics `measuredQuality`/`qualityMetric` per pAVd5oC4; the
-// compress `alreadyOptimal`/`alreadyOptimalKind` per bYOCX61m). A
+// compress `alreadyOptimal`/`alreadyOptimalKind` per bYOCX61m; the multi-output
+// `pageIndex`/`position` per x1nYxBQx). A
 // contracts regen that renames or drops one of these breaks here at
 // `tsc --noEmit` (same gating pattern as `_ArtifactDriftAssertion` above).
 import type { OutputFile as _OutputFile } from './file-first.js';
@@ -631,7 +637,9 @@ type _OutputFileFromDownload =
   | 'measuredQuality'
   | 'qualityMetric'
   | 'alreadyOptimal'
-  | 'alreadyOptimalKind';
+  | 'alreadyOptimalKind'
+  | 'pageIndex'
+  | 'position';
 type _OperationDownloadHasOutputFileFields = _AllBackedBy<_OutputFileFromDownload, _OperationDownload>;
 type _OutputFileHasUrl = 'url' extends keyof _OutputFile
   ? true
@@ -755,6 +763,7 @@ export {
   SplitDocumentPdfMode,
   SplitAudioMode,
   SplitAudioPrecision,
+  SplitAudioSilenceHandling,
   SplitVideoMode,
   SplitVideoPrecision,
 } from '@giveitsmaller/contracts/operations';
@@ -792,6 +801,7 @@ export type {
   ConvertOptions,
   ThumbnailOptions,
   TransformOptions,
+  SplitOptions,
   TextWatermarkOptions,
   WatermarkOptions,
   WatermarkOverlay,

@@ -54,6 +54,8 @@ describe('validateVerbOptions — valid bags pass', () => {
     ['thumbnail', { width: 10, height: 10, fit: 'crop' }],
     ['textWatermark', { font_size: 12 }],
     ['watermark', { anchor: 'center' }],
+    // split (x1nYxBQx): keys from different mime groups are all in the op-wide set.
+    ['split', { frame_range: '1-5', mode: 'page_groups', page_groups: 2, cut_points: [1], precision: 'fast' }],
   ];
 
   it.each(VALID)('%s accepts a real contract key without throwing', (verb, options) => {
@@ -61,7 +63,7 @@ describe('validateVerbOptions — valid bags pass', () => {
   });
 
   it('an empty bag passes for every verb', () => {
-    for (const verb of ['convert', 'thumbnail', 'textWatermark', 'watermark'] as ValidatedVerb[]) {
+    for (const verb of ['convert', 'thumbnail', 'split', 'textWatermark', 'watermark'] as ValidatedVerb[]) {
       expect(() => validateVerbOptions(verb, {})).not.toThrow();
     }
   });
@@ -338,6 +340,23 @@ describe('duplicated verb bodies reject invalid bags too', () => {
     const err = captureConfigError(() =>
       recipe('photo.jpg').watermark(overlay(), { bogus: 1 } as never),
     );
+    expect(err.reason).toBe('unknown_field');
+    expect(err.conflictingFields).toEqual(['bogus']);
+  });
+
+  it('split rejects a key from another verb (convert pages) with unknown_field', () => {
+    const err = captureConfigError(() => validateVerbOptions('split', { pages: '1-2' }));
+    expect(err.reason).toBe('unknown_field');
+    expect(err.conflictingFields).toEqual(['pages']);
+    expect(err.message).toContain("split: unknown option 'pages'");
+  });
+
+  it('split does not treat output_format as positional-owned (it is a GIF option)', () => {
+    expect(() => validateVerbOptions('split', { output_format: 'png' })).not.toThrow();
+  });
+
+  it('Recipe.split rejects an unknown key at the verb call', () => {
+    const err = captureConfigError(() => recipe('doc.pdf').split({ bogus: 1 } as never));
     expect(err.reason).toBe('unknown_field');
     expect(err.conflictingFields).toEqual(['bogus']);
   });

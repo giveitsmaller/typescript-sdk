@@ -135,6 +135,67 @@ export interface TransformOptions {
 }
 const TRANSFORM_OPTION_KEYS = ['rotate', 'flip'] as const;
 
+// ---- split (x1nYxBQx; sole_op, N outputs; no positional-owned key) ----
+// ONE flat interface over every mime group's keys, like TransformOptions and
+// ConvertOptions: the server picks the group from the input MIME, so the SDK
+// cannot narrow per group before upload. Values are string literals, because
+// the generated `split.ts` enums are not assignable from plain strings. Which
+// keys go with which group and mode is left to the server (a wrong pairing is a
+// 422). Groups: `image_gif` and `document_pdf` are stable; `audio` and `video`
+// are beta (passed through with no SDK gate, like every other verb).
+export interface SplitOptions {
+  /**
+   * GIF (`image_gif`) only: the 1-based inclusive frame range, `'start-end'`
+   * (e.g. `'1-100'`). REQUIRED for a GIF input; omitting it is a server 422.
+   * At most 200 frames.
+   */
+  frame_range?: string;
+  /** GIF only: the image format of each extracted frame. Default `'png'`. */
+  output_format?: 'png' | 'webp' | 'jpg';
+  /**
+   * Split strategy. PDF: `'page_range'` (default) or `'page_groups'`. Audio and
+   * video: `'interval'` (default), `'count'` or `'cut_points'`. Audio only:
+   * `'silence'` (beta). Not used for GIF.
+   */
+  mode?: 'page_range' | 'page_groups' | 'interval' | 'count' | 'cut_points' | 'silence';
+  /**
+   * PDF, `mode: 'page_range'`: the pages to extract, e.g. `'1-5'` or `'1,3,5-7'`
+   * (1-based, inclusive). Required in that mode; at most 200 pages.
+   */
+  page_range?: string;
+  /**
+   * PDF, `mode: 'page_groups'`: pages per output (2-200). Required in that
+   * mode. Each output's `pageIndex` is its group's FIRST source page.
+   */
+  page_groups?: number;
+  /** Audio/video, `mode: 'interval'`: cut every N seconds (float, min 0.001). Required in that mode. */
+  interval?: number;
+  /** Audio/video, `mode: 'count'`: the number of equal-duration pieces (2-200). Required in that mode. */
+  count?: number;
+  /**
+   * Audio/video, `mode: 'cut_points'`: cut times in seconds, strictly
+   * increasing, each above 0 and below the duration (1-199 entries). Required
+   * in that mode.
+   */
+  cut_points?: readonly number[];
+  /** Audio, `mode: 'silence'` (beta): the silence floor in dBFS (at most 0; default -50). */
+  silence_threshold_db?: number;
+  /** Audio, `mode: 'silence'` (beta): the minimum silence gap in seconds (default 0.75). */
+  silence_min_duration?: number;
+  /** Audio, `mode: 'silence'` (beta): where detected silence goes. Only `'keep_at_end'` today. */
+  silence_handling?: 'keep_at_end';
+  /**
+   * Audio/video: cut precision. `'fast'` (default) cuts at packet boundaries.
+   * `'exact'` is planned: the SDK refuses it before upload
+   * (`feature_not_available`), as the server would at create.
+   */
+  precision?: 'fast' | 'exact';
+}
+const SPLIT_OPTION_KEYS = [
+  'frame_range', 'output_format', 'mode', 'page_range', 'page_groups', 'interval', 'count', 'cut_points',
+  'silence_threshold_db', 'silence_min_duration', 'silence_handling', 'precision',
+] as const;
+
 // ---- compress (YdxagJOI) ----
 /**
  * A per-call preset override for {@link CompressOptions.presetOverrides}: one of
@@ -462,6 +523,10 @@ export type Equal<A, B> =
 const _convertKeysMatch: Equal<keyof ConvertOptions, (typeof CONVERT_OPTION_KEYS)[number]> = true;
 const _thumbnailKeysMatch: Equal<keyof ThumbnailOptions, (typeof THUMBNAIL_OPTION_KEYS)[number]> = true;
 const _transformKeysMatch: Equal<keyof TransformOptions, (typeof TRANSFORM_OPTION_KEYS)[number]> = true;
+// Compile-time arm only: ties `keyof SplitOptions` to SPLIT_OPTION_KEYS. The
+// tie of that tuple to `operationOptionKeys(splitMetadata)` is the runtime
+// wire-key conformance arm (`wire-key-conformance.test.ts`).
+const _splitKeysMatch: Equal<keyof SplitOptions, (typeof SPLIT_OPTION_KEYS)[number]> = true;
 const _textWatermarkKeysMatch: Equal<keyof TextWatermarkOptions, (typeof TEXT_WATERMARK_OPTION_KEYS)[number]> = true;
 const _watermarkKeysMatch: Equal<keyof WatermarkOptions, (typeof WATERMARK_OPTION_KEYS)[number]> = true;
 const _outputKeysMatch: Equal<keyof OutputOptions, (typeof OUTPUT_OPTION_KEYS)[number]> = true;
@@ -470,6 +535,7 @@ const _compressKeysMatch: Equal<keyof CompressOptions, (typeof COMPRESS_OPTION_K
 void _convertKeysMatch;
 void _thumbnailKeysMatch;
 void _transformKeysMatch;
+void _splitKeysMatch;
 void _textWatermarkKeysMatch;
 void _watermarkKeysMatch;
 void _outputKeysMatch;
@@ -484,6 +550,7 @@ export const VERB_OPTION_KEYS = {
   convert: CONVERT_OPTION_KEYS,
   thumbnail: THUMBNAIL_OPTION_KEYS,
   transform: TRANSFORM_OPTION_KEYS,
+  split: SPLIT_OPTION_KEYS,
   textWatermark: TEXT_WATERMARK_OPTION_KEYS,
   watermark: WATERMARK_OPTION_KEYS,
   output: OUTPUT_OPTION_KEYS,

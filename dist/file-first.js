@@ -30,6 +30,29 @@ import { wireMergeOptions } from './merge.js';
 import { Handle } from './handle.js';
 import { createWorkflowAwaitingProbe } from './probe-pending.js';
 /**
+ * Project one generated {@link OperationDownload} to the lean
+ * {@link OutputFile}. Optional fields are omitted when undefined on the LIVE
+ * object too (not just in toJSON), and appended in a fixed order so the
+ * key order of existing outputs is unchanged. Shared by the single-job and
+ * multi-job projectors so they cannot drift.
+ */
+function toOutputFile(f) {
+    return {
+        url: f.downloadUrl,
+        filename: f.filename,
+        sizeBytes: f.sizeBytes,
+        operation: f.operation,
+        ...(f.chosenQuality !== undefined ? { chosenQuality: f.chosenQuality } : {}),
+        ...(f.targetSizeMet !== undefined ? { targetSizeMet: f.targetSizeMet } : {}),
+        ...(f.measuredQuality !== undefined ? { measuredQuality: f.measuredQuality } : {}),
+        ...(f.qualityMetric !== undefined ? { qualityMetric: f.qualityMetric } : {}),
+        ...(f.alreadyOptimal !== undefined ? { alreadyOptimal: f.alreadyOptimal } : {}),
+        ...(f.alreadyOptimalKind !== undefined ? { alreadyOptimalKind: f.alreadyOptimalKind } : {}),
+        ...(f.pageIndex !== undefined ? { pageIndex: f.pageIndex } : {}),
+        ...(f.position !== undefined ? { position: f.position } : {}),
+    };
+}
+/**
  * Result of a file-first run. Coexists with the operation-first `Result`
  * (in `builder.ts`) until FF6.
  *
@@ -188,6 +211,10 @@ export class RunResult {
             ...(o.qualityMetric !== undefined ? { qualityMetric: o.qualityMetric } : {}),
             ...(o.alreadyOptimal !== undefined ? { alreadyOptimal: o.alreadyOptimal } : {}),
             ...(o.alreadyOptimalKind !== undefined ? { alreadyOptimalKind: o.alreadyOptimalKind } : {}),
+            // Appended AFTER the existing keys so outputs without them stay
+            // byte-identical. position 0 is a real value and is kept.
+            ...(o.pageIndex !== undefined ? { pageIndex: o.pageIndex } : {}),
+            ...(o.position !== undefined ? { position: o.position } : {}),
         });
         const rest = {
             artifacts: this.artifacts.map(file),
@@ -239,24 +266,11 @@ function firstOpError(ops) {
     return { errorMessage: op?.errorMessage, errorCode: op?.errorCode };
 }
 export function projectDownloadsToRunResult(workflowId, finalStatus, jobDownloads, key, downloader, transport) {
-    // Flatten to the lean OutputFile[] (the four file-first fields only).
+    // Flatten to the lean OutputFile[] (one toOutputFile projection per file).
     const artifacts = [];
     for (const job of jobDownloads) {
         for (const f of job.files) {
-            artifacts.push({
-                url: f.downloadUrl,
-                filename: f.filename,
-                sizeBytes: f.sizeBytes,
-                operation: f.operation,
-                // Omit-when-absent on the LIVE OutputFile too (not just toJSON): a
-                // non-target-size output carries no chosenQuality/targetSizeMet key.
-                ...(f.chosenQuality !== undefined ? { chosenQuality: f.chosenQuality } : {}),
-                ...(f.targetSizeMet !== undefined ? { targetSizeMet: f.targetSizeMet } : {}),
-                ...(f.measuredQuality !== undefined ? { measuredQuality: f.measuredQuality } : {}),
-                ...(f.qualityMetric !== undefined ? { qualityMetric: f.qualityMetric } : {}),
-                ...(f.alreadyOptimal !== undefined ? { alreadyOptimal: f.alreadyOptimal } : {}),
-                ...(f.alreadyOptimalKind !== undefined ? { alreadyOptimalKind: f.alreadyOptimalKind } : {}),
-            });
+            artifacts.push(toOutputFile(f));
         }
     }
     const state = finalStatus.status;
@@ -310,20 +324,7 @@ export function projectMultiJobToRunResult(workflowId, finalStatus, jobDownloads
     const jobs = finalStatus.jobs ?? [];
     for (const job of jobs) {
         const key = keyByRef.get(job.ref) ?? jobIndexFromRef(job.ref);
-        const outputs = (filesByRef.get(job.ref) ?? []).map((f) => ({
-            url: f.downloadUrl,
-            filename: f.filename,
-            sizeBytes: f.sizeBytes,
-            operation: f.operation,
-            // Omit-when-absent on the LIVE OutputFile too (mirrors toJSON + the
-            // single-job projector).
-            ...(f.chosenQuality !== undefined ? { chosenQuality: f.chosenQuality } : {}),
-            ...(f.targetSizeMet !== undefined ? { targetSizeMet: f.targetSizeMet } : {}),
-            ...(f.measuredQuality !== undefined ? { measuredQuality: f.measuredQuality } : {}),
-            ...(f.qualityMetric !== undefined ? { qualityMetric: f.qualityMetric } : {}),
-            ...(f.alreadyOptimal !== undefined ? { alreadyOptimal: f.alreadyOptimal } : {}),
-            ...(f.alreadyOptimalKind !== undefined ? { alreadyOptimalKind: f.alreadyOptimalKind } : {}),
-        }));
+        const outputs = (filesByRef.get(job.ref) ?? []).map(toOutputFile);
         // The flat artifacts[] keeps every job's outputs in job order.
         artifacts.push(...outputs);
         if (job.status === 'completed') {
@@ -791,6 +792,45 @@ export class Recipe {
         // which this verb owns via the first argument).
         validateVerbOptions('textWatermark', options);
         return this.withStep({ opType: 'text_watermark', options: { ...options, text } });
+    }
+    /**
+     * Split this file into N outputs (the `split` op, sole_op). Returns a
+     * TERMINAL {@link SplitRecipe}: nothing chains after a split and it cannot
+     * enter `batch()`, because an N-output job has no fan-out path into a
+     * following job. Steps BEFORE it are allowed (`.convert('pdf').split(...)`):
+     * they run in an upstream job and `run()` returns only the split's outputs.
+     *
+     * The server picks the mime group from the input:
+     * - GIF: `frame_range` is REQUIRED (omitting it is a server 422), plus
+     *   `output_format`. Each frame carries `position` when the server provides it.
+     * - PDF: `mode: 'page_range'` + `page_range`, or `mode: 'page_groups'` +
+     *   `page_groups`. Each output carries `pageIndex` (for a group, its first page).
+     * - audio / video (beta): `mode` `interval` / `count` / `cut_points`, audio
+     *   also `silence`. Each segment carries `position` when the server provides it.
+     * At most 200 outputs. Mode/key pairings and caps are checked by the server.
+     * `precision: 'exact'` is planned and refused before upload
+     * (`feature_not_available`).
+     *
+     * @throws {GislConfigError} `unknown_field` for a key not in the split
+     *   contract; `multi_sole_op_unsupported` when this recipe already holds a
+     *   sole_op step (e.g. `textWatermark()`), since one chain carries at most one.
+     */
+    split(options) {
+        validateVerbOptions('split', options);
+        // Eager, at the call: the same reason _splitSingleInputJobs raises at
+        // lowering, but naming split so the failure points at this call.
+        const priorSoleOp = this.steps.find((step) => SOLE_OP_TYPES.has(step.opType));
+        if (priorSoleOp !== undefined) {
+            throw new GislConfigError(`split() cannot follow ${priorSoleOp.opType}: both are sole_op operations and a recipe chains ` +
+                'at most one — run them as separate workflows.', { reason: 'multi_sole_op_unsupported' });
+        }
+        const wire = {};
+        // `?? {}`: an untyped JS `split()` lowers to a bare op the server rejects.
+        for (const [key, value] of Object.entries(options ?? {})) {
+            if (value !== undefined)
+                wire[key] = value;
+        }
+        return new SplitRecipe(this.withStep({ opType: 'split', options: wire }));
     }
     /**
      * Composite an image OVERLAY onto this file (a multi-input op). `overlay` is a
@@ -2340,6 +2380,62 @@ export class ArchivedRecipe {
         if (this.options.folderStructure !== undefined)
             out.folder_structure = this.options.folderStructure;
         return out;
+    }
+}
+/**
+ * The TERMINAL recipe you're in AFTER `client.file(x).split(options)`
+ * (x1nYxBQx). `split` fans one input into N outputs and is sole_op, so there is
+ * no chain after it and no `batch()` entry; this exposes only
+ * `run()` / `submit()` (plus `key()` / `stepCount` / `toWorkflowPayload()`).
+ *
+ * It delegates to a private {@link Recipe} whose LAST step is the split, so
+ * lowering, preflight (unknown keys, the planned `precision: 'exact'` gate) and
+ * the run/submit path are exactly the single-input Recipe's. Steps before the
+ * split lower into an upstream `pre` job; `run()` then returns only the split
+ * job's outputs. Each {@link OutputFile} carries `pageIndex` for PDF outputs and
+ * `position` when the server provides it. `toFile()` on a multi-output result
+ * throws `not_single_output`; use `downloadTo(dir)` or iterate `artifacts`.
+ *
+ * The PHP half lands with card aRmwBrLX.
+ */
+export class SplitRecipe {
+    recipe;
+    /** @internal Built by {@link Recipe.split}; not a caller-facing constructor. */
+    constructor(recipe) {
+        this.recipe = recipe;
+    }
+    /** The result-addressing key passed to `file()`, or undefined. */
+    key() {
+        return this.recipe.key();
+    }
+    /** The number of operations chained, the split included (introspection / tests). */
+    get stepCount() {
+        return this.recipe.stepCount;
+    }
+    /**
+     * Lower to the workflow-create payload: one job when the split is the only
+     * step, else a `pre` job feeding a `split` job via `job_output`.
+     *
+     * @internal Consumed by {@link run} / {@link submit} and the parity harness.
+     */
+    toWorkflowPayload(fileId, callbackUrl) {
+        return this.recipe.toWorkflowPayload(fileId, callbackUrl);
+    }
+    /**
+     * Execute end-to-end (upload, create, wait, downloads) and return the split's
+     * N outputs as a {@link RunResult}. Same options and errors as
+     * {@link Recipe.run}.
+     */
+    run(options = {}) {
+        return this.recipe.run(options);
+    }
+    /**
+     * Fire-and-forget: upload + create the split workflow (wiring `webhook` into
+     * `callback_url` when given) and return a client-bound {@link Handle}. Same
+     * shape as {@link Recipe.submit}.
+     */
+    submit(webhook, options) {
+        return this.recipe.submit(webhook, options);
     }
 }
 /**

@@ -13,7 +13,7 @@ import { GislItemFailedError } from './errors.js';
 import { type ProgressEvent, type RunTransport } from './builder.js';
 import type { GislClient } from './client.js';
 import type { OperationDownload, WorkflowStatusResponse } from '@giveitsmaller/contracts/openapi';
-import type { CompressOptions, ConvertOptions, ThumbnailOptions, TransformOptions, TextWatermarkOptions, WatermarkOptions, OutputOptions, OutputFit } from './ergonomic/option_types.js';
+import type { CompressOptions, ConvertOptions, ThumbnailOptions, TransformOptions, SplitOptions, TextWatermarkOptions, WatermarkOptions, OutputOptions, OutputFit } from './ergonomic/option_types.js';
 import { OptimizeFor } from './generated/sdk_spec/enums.js';
 import type { PresetDefaults } from './ergonomic/presets/index.js';
 import type { WorkflowCreatePayload } from './types.js';
@@ -50,7 +50,8 @@ export interface Downloader {
  * flat output type. Leaner than the operation-first `Artifact`: just the
  * four fields a caller needs to identify + fetch an output.
  *
- * Mirrors the PHP `OutputFile`.
+ * Mirrors the PHP `OutputFile`, except {@link pageIndex} and
+ * {@link position}, which are TS-only until card aRmwBrLX lands the PHP half.
  */
 export interface OutputFile {
     readonly url: string;
@@ -103,6 +104,31 @@ export interface OutputFile {
      * {@link OperationDownload.alreadyOptimalKind}; undefined when not reported.
      */
     readonly alreadyOptimalKind?: 'not_smaller' | (string & {});
+    /**
+     * 1-based SOURCE page number of a PDF-page output: each page of a convert
+     * PDF->image run, each page of a `split` of a PDF with `mode: 'page_range'`, or, for a
+     * `split` with `mode: 'page_groups'`, the group's FIRST page. It is the
+     * literal page from the input, so a sparse selection is not gapless. NOT
+     * the download filename's numeric suffix (a 0-based array position).
+     * Projected from the generated {@link OperationDownload.pageIndex};
+     * undefined (omitted) on non-page-indexed outputs. Mutually exclusive with
+     * {@link position}.
+     *
+     * TS-only until card aRmwBrLX lands the PHP half; the PHP `OutputFile`
+     * does not carry it yet.
+     */
+    readonly pageIndex?: number;
+    /**
+     * 0-based ordinal of a non-PDF multi-output output (e.g. one segment of an
+     * audio/video split), when the server provides it: the contract declares
+     * it forward-looking, so do not rely on it being present. `0` is a real
+     * value, not "absent". Projected from the generated
+     * {@link OperationDownload.position}; undefined (omitted) otherwise.
+     * Mutually exclusive with {@link pageIndex}.
+     *
+     * TS-only until card aRmwBrLX lands the PHP half.
+     */
+    readonly position?: number;
 }
 /**
  * One succeeded entry in {@link RunResult.succeeded}: a single input's
@@ -428,7 +454,7 @@ export declare const fileInput: {
 };
 /** One step in a {@link Recipe}'s chain — an op kind + captured ergonomic args. */
 interface RecipeStep {
-    readonly opType: 'compress' | 'convert' | 'thumbnail' | 'text_watermark' | 'output' | 'transform';
+    readonly opType: 'compress' | 'convert' | 'thumbnail' | 'text_watermark' | 'output' | 'transform' | 'split';
     readonly options: Readonly<Record<string, unknown>>;
 }
 /**
@@ -525,6 +551,29 @@ export declare class Recipe {
      * `options` carries any additional per-op watermark options.
      */
     textWatermark(text: string, options?: TextWatermarkOptions): Recipe;
+    /**
+     * Split this file into N outputs (the `split` op, sole_op). Returns a
+     * TERMINAL {@link SplitRecipe}: nothing chains after a split and it cannot
+     * enter `batch()`, because an N-output job has no fan-out path into a
+     * following job. Steps BEFORE it are allowed (`.convert('pdf').split(...)`):
+     * they run in an upstream job and `run()` returns only the split's outputs.
+     *
+     * The server picks the mime group from the input:
+     * - GIF: `frame_range` is REQUIRED (omitting it is a server 422), plus
+     *   `output_format`. Each frame carries `position` when the server provides it.
+     * - PDF: `mode: 'page_range'` + `page_range`, or `mode: 'page_groups'` +
+     *   `page_groups`. Each output carries `pageIndex` (for a group, its first page).
+     * - audio / video (beta): `mode` `interval` / `count` / `cut_points`, audio
+     *   also `silence`. Each segment carries `position` when the server provides it.
+     * At most 200 outputs. Mode/key pairings and caps are checked by the server.
+     * `precision: 'exact'` is planned and refused before upload
+     * (`feature_not_available`).
+     *
+     * @throws {GislConfigError} `unknown_field` for a key not in the split
+     *   contract; `multi_sole_op_unsupported` when this recipe already holds a
+     *   sole_op step (e.g. `textWatermark()`), since one chain carries at most one.
+     */
+    split(options: SplitOptions): SplitRecipe;
     /**
      * Composite an image OVERLAY onto this file (a multi-input op). `overlay` is a
      * secondary file-NODE (a {@link Recipe} — e.g. `client.file('logo.png')`),
@@ -1066,6 +1115,62 @@ export declare class ArchivedRecipe {
      * omitted option is dropped rather than sent.
      */
     private wireArchiveOptions;
+}
+/**
+ * The TERMINAL recipe you're in AFTER `client.file(x).split(options)`
+ * (x1nYxBQx). `split` fans one input into N outputs and is sole_op, so there is
+ * no chain after it and no `batch()` entry; this exposes only
+ * `run()` / `submit()` (plus `key()` / `stepCount` / `toWorkflowPayload()`).
+ *
+ * It delegates to a private {@link Recipe} whose LAST step is the split, so
+ * lowering, preflight (unknown keys, the planned `precision: 'exact'` gate) and
+ * the run/submit path are exactly the single-input Recipe's. Steps before the
+ * split lower into an upstream `pre` job; `run()` then returns only the split
+ * job's outputs. Each {@link OutputFile} carries `pageIndex` for PDF outputs and
+ * `position` when the server provides it. `toFile()` on a multi-output result
+ * throws `not_single_output`; use `downloadTo(dir)` or iterate `artifacts`.
+ *
+ * The PHP half lands with card aRmwBrLX.
+ */
+export declare class SplitRecipe {
+    private readonly recipe;
+    /** @internal Built by {@link Recipe.split}; not a caller-facing constructor. */
+    constructor(recipe: Recipe);
+    /** The result-addressing key passed to `file()`, or undefined. */
+    key(): string | undefined;
+    /** The number of operations chained, the split included (introspection / tests). */
+    get stepCount(): number;
+    /**
+     * Lower to the workflow-create payload: one job when the split is the only
+     * step, else a `pre` job feeding a `split` job via `job_output`.
+     *
+     * @internal Consumed by {@link run} / {@link submit} and the parity harness.
+     */
+    toWorkflowPayload(fileId: string, callbackUrl?: string): WorkflowCreatePayload;
+    /**
+     * Execute end-to-end (upload, create, wait, downloads) and return the split's
+     * N outputs as a {@link RunResult}. Same options and errors as
+     * {@link Recipe.run}.
+     */
+    run(options?: {
+        maxWait?: string | number;
+        onProgress?: (event: ProgressEvent) => void;
+        signal?: AbortSignal;
+        /** Force the poll fallback instead of attempting SSE. Default true (SSE-first, poll fallback). */
+        useSSE?: boolean;
+        pollIntervalMs?: number;
+        probeBeforeCreate?: boolean;
+        probeTimeoutMs?: number;
+    }): Promise<RunResult>;
+    /**
+     * Fire-and-forget: upload + create the split workflow (wiring `webhook` into
+     * `callback_url` when given) and return a client-bound {@link Handle}. Same
+     * shape as {@link Recipe.submit}.
+     */
+    submit(webhook?: string, options?: {
+        probeBeforeCreate?: boolean;
+        probeTimeoutMs?: number;
+    }): Promise<Handle>;
 }
 /**
  * The single-output recipe you're in AFTER `file(base).watermark(overlay, …)`

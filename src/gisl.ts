@@ -42,7 +42,7 @@ import {
   validateVerbOptions,
   assertThumbnailDimensions,
 } from './ergonomic/option_validation.js';
-import type { CompressOptions, ConvertOptions, ThumbnailOptions, TransformOptions } from './ergonomic/option_types.js';
+import type { CompressOptions, ConvertOptions, SplitOptions, ThumbnailOptions, TransformOptions } from './ergonomic/option_types.js';
 import { MergeBuilder, asset, type Asset, type MergeOptions } from './merge.js';
 import { PresetDefaults } from './ergonomic/presets/index.js';
 import { Recipe, FilesRecipe, BatchRecipe, fileInput, type FileInput } from './file-first.js';
@@ -352,7 +352,7 @@ function wrapErgonomic(
           );
         };
       }
-      if (prop === 'compress' || prop === 'thumbnail' || prop === 'transform') {
+      if (prop === 'compress' || prop === 'thumbnail' || prop === 'transform' || prop === 'split') {
         return (input: string | Blob, options: Record<string, unknown> = {}): OperationBuilder => {
           // ExVcchMz — validate the option bag pre-upload for the exported
           // single-op builder so a bad bag (unknown key / null thumbnail dim /
@@ -369,6 +369,10 @@ function wrapErgonomic(
           // `transform` is a passthrough (rotate/flip); no positional-owned keys
           // and no required dims — just the generic key-validation.
           if (prop === 'transform') validateVerbOptions('transform', options);
+          // `split` (x1nYxBQx) is the same: generic key-validation only. The
+          // planned `precision: 'exact'` is refused by the builder's planned-value
+          // gate at run()/submit(), before upload.
+          if (prop === 'split') validateVerbOptions('split', options);
           // T4b — pass client-scope presetDefaults into the builder so
           // .run()/.submit() consult the preset resolver. The Proxy's
           // closure carries the same reference for every per-call
@@ -467,8 +471,8 @@ function wrapErgonomic(
       if (prop === 'operation') {
         // qUhxfDA5 — generic escape-hatch sibling of the single-op verbs
         // (compress/convert/thumbnail). Builds a SINGLE-input, SINGLE-operation
-        // job for an op type with no typed verb (e.g. `text_watermark`, `split`,
-        // or a not-yet-in-contract op). Options ride through to the wire
+        // job for an op type with no typed verb (e.g. `text_watermark`, or a
+        // not-yet-in-contract op). Options ride through to the wire
         // unchanged (no preset resolution unless opType is 'compress'); the only
         // pre-upload check is the planned-everywhere value gate (99Da2uyx) — the
         // server validates everything else.
@@ -629,6 +633,17 @@ export type ErgonomicClient = GislClient & {
    */
   transform(input: string | Blob, options?: TransformOptions): OperationBuilder;
   /**
+   * Single-op split into N outputs, typed {@link SplitOptions} as on the
+   * file-first `split()`. The server picks the mime group from the input: GIF
+   * needs `frame_range` (omitting it is a server 422); PDF splits by
+   * `page_range` or `page_groups`; audio and video (beta) by
+   * `interval` / `count` / `cut_points` (audio also `silence`).
+   * `precision: 'exact'` is planned and refused before upload
+   * (`feature_not_available`). An unknown key is a compile-time error for an
+   * INLINE bag; the runtime key guard remains the backstop.
+   */
+  split(input: string | Blob, options: SplitOptions): OperationBuilder;
+  /**
    * Merge ordered-sequence factory (T3). Accepts a variadic list of assets
    * (strings/Blobs/`handle()`/`asset()`) optionally terminated by a
    * `MergeOptions` object. Returns a `MergeBuilder`; pin the play order
@@ -682,14 +697,14 @@ export type ErgonomicClient = GislClient & {
   /**
    * Generic operation escape hatch (qUhxfDA5). Build + run a SINGLE-input,
    * SINGLE-operation job for an op type with no first-class verb (e.g.
-   * `text_watermark`, `split`, or a not-yet-in-contract op). `options` reach the
+   * `text_watermark`, or a not-yet-in-contract op). `options` reach the
    * wire unchanged, with ONE pre-upload check: a value the contract marks
    * `planned` in every group that declares the option (e.g. split
    * `precision: 'exact'`) throws `GislConfigError` (`feature_not_available`)
    * before anything uploads. Everything else is validated by the server. NO
    * preset resolution unless `opType` is `compress`. Prefer the typed verbs
-   * (`compress` / `convert` / `thumbnail`) when they exist — they add local
-   * validation.
+   * (`compress` / `convert` / `thumbnail` / `transform` / `split`) when they
+   * exist — they add local validation.
    *
    * Multi-input operations (see {@link MultiInputOperationType}) are REJECTED
    * at compile time: passing one of those literals is a type error. `merge`,

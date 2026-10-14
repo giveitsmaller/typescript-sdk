@@ -2,6 +2,7 @@ import {
   convertMetadata,
   thumbnailMetadata,
   transformMetadata,
+  splitMetadata,
   textWatermarkMetadata,
   imageWatermarkMetadata,
   videoWatermarkMetadata,
@@ -21,8 +22,8 @@ import { VERB_OPTION_KEYS } from './option_types.js';
  * sidecars (the same contract-anchored source the wire-key conformance guard
  * uses), so it can never silently drift from the contract.
  *
- * SCOPE: `convert` / `thumbnail` / `textWatermark` / `watermark` / `output`
- * only. `compress` is deliberately EXCLUDED — its bag legitimately carries SDK-only keys
+ * SCOPE: `convert` / `thumbnail` / `transform` / `split` / `textWatermark` /
+ * `watermark` / `output` only. `compress` is deliberately EXCLUDED — its bag legitimately carries SDK-only keys
  * (`optimize`, `presetOverrides`) and camelCase resolver aliases (`targetSize`,
  * `outputFormat`) that are not `operationOptionKeys(compressMetadata)`; it has its
  * own `unknown_field` validation through the preset resolver.
@@ -46,7 +47,7 @@ export function operationOptionKeys(metadata: OperationMetadata): ReadonlySet<st
 }
 
 /** The ergonomic verbs whose option bags this module key-validates. */
-export type ValidatedVerb = 'convert' | 'thumbnail' | 'transform' | 'textWatermark' | 'watermark' | 'output';
+export type ValidatedVerb = 'convert' | 'thumbnail' | 'transform' | 'split' | 'textWatermark' | 'watermark' | 'output';
 
 function union(...sets: ReadonlySet<string>[]): ReadonlySet<string> {
   const out = new Set<string>();
@@ -66,6 +67,9 @@ const ALLOWED_KEYS: Readonly<Record<ValidatedVerb, ReadonlySet<string>>> = {
   // transform is a passthrough verb (rotate/flip). The generic allowed set is
   // the op-wide union {rotate, flip}; `flip`-on-PDF is narrowed server-side.
   transform: operationOptionKeys(transformMetadata),
+  // split (x1nYxBQx): the op-wide union of every mime group's keys; the group
+  // (and so which keys apply) is chosen server-side from the input MIME.
+  split: operationOptionKeys(splitMetadata),
   textWatermark: operationOptionKeys(textWatermarkMetadata),
   watermark: union(operationOptionKeys(imageWatermarkMetadata), operationOptionKeys(videoWatermarkMetadata)),
   // `output` is the image Output facade — its allowed keys are the UNION of every

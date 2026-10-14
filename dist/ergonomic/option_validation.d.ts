@@ -9,8 +9,8 @@ import { type OperationMetadata } from '@giveitsmaller/contracts/operations';
  * sidecars (the same contract-anchored source the wire-key conformance guard
  * uses), so it can never silently drift from the contract.
  *
- * SCOPE: `convert` / `thumbnail` / `textWatermark` / `watermark` / `output`
- * only. `compress` is deliberately EXCLUDED — its bag legitimately carries SDK-only keys
+ * SCOPE: `convert` / `thumbnail` / `transform` / `split` / `textWatermark` /
+ * `watermark` / `output` only. `compress` is deliberately EXCLUDED — its bag legitimately carries SDK-only keys
  * (`optimize`, `presetOverrides`) and camelCase resolver aliases (`targetSize`,
  * `outputFormat`) that are not `operationOptionKeys(compressMetadata)`; it has its
  * own `unknown_field` validation through the preset resolver.
@@ -25,7 +25,7 @@ import { type OperationMetadata } from '@giveitsmaller/contracts/operations';
  */
 export declare function operationOptionKeys(metadata: OperationMetadata): ReadonlySet<string>;
 /** The ergonomic verbs whose option bags this module key-validates. */
-export type ValidatedVerb = 'convert' | 'thumbnail' | 'transform' | 'textWatermark' | 'watermark' | 'output';
+export type ValidatedVerb = 'convert' | 'thumbnail' | 'transform' | 'split' | 'textWatermark' | 'watermark' | 'output';
 /** Accessor for the conformance guard (pins these sets to the contract metadata). */
 export declare function allowedKeysFor(verb: ValidatedVerb): ReadonlySet<string>;
 /**
