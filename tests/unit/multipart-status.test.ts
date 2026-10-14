@@ -15,6 +15,31 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { GislClient } from '../../src/client.js';
 import { GislAbortError, GislError } from '../../src/errors.js';
 
+// CODE-1 (aHgScsLJ): strings `new Date()` parses but that are not RFC 3339
+// date-times. Each must be rejected on the RAW wire value, before FromJSON.
+// codex (aHgScsLJ): pattern-valid strings whose calendar fields are out of
+// range. The RAW check range-checks them, so they fail on the envelope check
+// (requireValidDate after FromJSON is unreachable defence in depth).
+const OUT_OF_RANGE_TIMESTAMPS = [
+  ['month 13, day 45, 25:61:61', '2026-13-45T25:61:61Z'],
+  ['Feb 29 in a non-leap year', '2026-02-29T12:00:00Z'],
+  ['April 31', '2026-04-31T12:00:00Z'],
+] as const;
+const LEAP_DAY = '2028-02-29T12:00:00Z';
+
+// TEST-1 (aHgScsLJ): compression_api writes every multipart timestamp with
+// DateTimeInterface::ATOM ('+00:00', no Z, no millis). Both forms name the
+// same instant, 2026-05-21T12:00:00.000Z.
+const ATOM_OFFSET_TIMESTAMPS = [
+  ['a +00:00 offset (the API\'s ATOM format)', '2026-05-21T12:00:00+00:00'],
+  ['a +02:00 offset', '2026-05-21T14:00:00+02:00'],
+] as const;
+const NON_ISO_TIMESTAMPS = [
+  ['a date-only string', '2026-10-13'],
+  ['a bare numeric string', '1'],
+  ['an RFC 2822 string', 'Tue, 13 Oct 2026 12:00:00 GMT'],
+] as const;
+
 function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
@@ -29,27 +54,30 @@ interface StatusPageOpts {
   isTruncated: boolean;
   nextMarker: number;
   parts: number[];
+  /** Replaces the page's manifest_expires_at (default '2026-05-21T12:00:00.000Z'). */
+  manifestExpiresAt?: unknown;
+}
+function statusPageData(opts: StatusPageOpts): Record<string, unknown> {
+  return {
+    upload_id: opts.uploadId,
+    multipart_upload_id: 'mp-srv-' + opts.uploadId,
+    cloud_key: 'uploads/' + opts.uploadId,
+    total_parts: opts.totalParts,
+    uploaded_parts: opts.parts.map((n) => ({
+      part_number: n,
+      etag: `"etag-${n}"`,
+      size_bytes: 16_777_216,
+      last_modified: '2026-05-19T12:00:00.000Z',
+    })),
+    next_part_number_marker: opts.nextMarker,
+    is_truncated: opts.isTruncated,
+    manifest_expires_at:
+      'manifestExpiresAt' in opts ? opts.manifestExpiresAt : '2026-05-21T12:00:00.000Z',
+    recommended_chunk_size: 16_777_216,
+  };
 }
 function statusPage(opts: StatusPageOpts): Response {
-  return jsonResponse({
-    success: true,
-    data: {
-      upload_id: opts.uploadId,
-      multipart_upload_id: 'mp-srv-' + opts.uploadId,
-      cloud_key: 'uploads/' + opts.uploadId,
-      total_parts: opts.totalParts,
-      uploaded_parts: opts.parts.map((n) => ({
-        part_number: n,
-        etag: `"etag-${n}"`,
-        size_bytes: 16_777_216,
-        last_modified: '2026-05-19T12:00:00.000Z',
-      })),
-      next_part_number_marker: opts.nextMarker,
-      is_truncated: opts.isTruncated,
-      manifest_expires_at: '2026-05-21T12:00:00.000Z',
-      recommended_chunk_size: 16_777_216,
-    },
-  });
+  return jsonResponse({ success: true, data: statusPageData(opts) });
 }
 
 describe('SDK-3 getUploadStatus walk-pagination', () => {
@@ -85,6 +113,20 @@ describe('SDK-3 getUploadStatus walk-pagination', () => {
     expect(result.totalParts).toBe(3);
     expect(result.uploadedParts).toHaveLength(3);
     expect(result.uploadedParts.map((p) => p.partNumber)).toEqual([1, 2, 3]);
+    for (const part of result.uploadedParts) {
+      expect(part.lastModified).toBeInstanceOf(Date);
+      expect(part.lastModified.toISOString()).toBe('2026-05-19T12:00:00.000Z');
+      expect(part.lastModified.getTime()).toBe(Date.UTC(2026, 4, 19, 12, 0, 0));
+    }
+    expect(result.uploadedParts[0]).toEqual({
+      partNumber: 1,
+      etag: '"etag-1"',
+      sizeBytes: 16_777_216,
+      lastModified: new Date('2026-05-19T12:00:00.000Z'),
+    });
+    expect(result.manifestExpiresAt).toBeInstanceOf(Date);
+    expect(result.manifestExpiresAt?.toISOString()).toBe('2026-05-21T12:00:00.000Z');
+    expect(result.manifestExpiresAt?.getTime()).toBe(Date.UTC(2026, 4, 21, 12, 0, 0));
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -207,4 +249,257 @@ describe('SDK-3 getUploadStatus walk-pagination', () => {
     expect(err).toBeInstanceOf(GislError);
     expect((err as Error).message).toMatch(/total_parts/);
   });
+
+  // aHgScsLJ — timestamps become Date; malformed pages are GislErrors naming
+  // the method, never a raw TypeError / RangeError from the generated reader.
+
+  it('takes manifestExpiresAt from the LAST page', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      statusPage({
+        uploadId: 'mp-last',
+        cursor: 0,
+        totalParts: 3,
+        isTruncated: true,
+        nextMarker: 2,
+        parts: [1, 2],
+        manifestExpiresAt: '2026-05-21T12:00:00.000Z',
+      }),
+    );
+    fetchSpy.mockResolvedValueOnce(
+      statusPage({
+        uploadId: 'mp-last',
+        cursor: 2,
+        totalParts: 3,
+        isTruncated: false,
+        nextMarker: 3,
+        parts: [3],
+        manifestExpiresAt: '2026-05-22T08:30:15.250Z',
+      }),
+    );
+    const result = await client.getUploadStatus('mp-last');
+    expect(result.manifestExpiresAt?.toISOString()).toBe('2026-05-22T08:30:15.250Z');
+  });
+
+  it('accepts an explicit null manifest_expires_at (TTL lapsed) as manifestExpiresAt === null', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      statusPage({
+        uploadId: 'mp-null',
+        cursor: 0,
+        totalParts: 2,
+        isTruncated: false,
+        nextMarker: 1,
+        parts: [1],
+        manifestExpiresAt: null,
+      }),
+    );
+    const result = await client.getUploadStatus('mp-null');
+    expect(result.manifestExpiresAt).toBeNull();
+    expect(result.uploadedParts).toHaveLength(1);
+    expect(result.uploadedParts[0].lastModified.toISOString()).toBe('2026-05-19T12:00:00.000Z');
+  });
+
+  it('a null manifest on the LAST page wins over a Date on an earlier page', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      statusPage({
+        uploadId: 'mp-null-last',
+        cursor: 0,
+        totalParts: 3,
+        isTruncated: true,
+        nextMarker: 2,
+        parts: [1, 2],
+      }),
+    );
+    fetchSpy.mockResolvedValueOnce(
+      statusPage({
+        uploadId: 'mp-null-last',
+        cursor: 2,
+        totalParts: 3,
+        isTruncated: false,
+        nextMarker: 3,
+        parts: [3],
+        manifestExpiresAt: null,
+      }),
+    );
+    const result = await client.getUploadStatus('mp-null-last');
+    expect(result.manifestExpiresAt).toBeNull();
+  });
+
+  async function expectStatusRejects(data: Record<string, unknown>): Promise<Error> {
+    fetchSpy.mockResolvedValueOnce(jsonResponse({ success: true, data }));
+    const err = (await client.getUploadStatus('mp-bad').catch((e: unknown) => e)) as Error;
+    expect(err).toBeInstanceOf(GislError);
+    expect(err).not.toBeInstanceOf(TypeError);
+    expect(err.message).toMatch(/^getUploadStatus: /);
+    return err;
+  }
+  const goodPage = (): Record<string, unknown> =>
+    statusPageData({
+      uploadId: 'mp-bad',
+      cursor: 0,
+      totalParts: 2,
+      isTruncated: false,
+      nextMarker: 1,
+      parts: [1],
+    });
+
+  it('rejects an absent manifest_expires_at key (not the same as an explicit null)', async () => {
+    const data = goodPage();
+    delete data['manifest_expires_at'];
+    const err = await expectStatusRejects(data);
+    expect(err.message).toMatch(/missing required fields/);
+  });
+
+  it("rejects an empty-string manifest_expires_at", async () => {
+    const err = await expectStatusRejects({ ...goodPage(), manifest_expires_at: '' });
+    expect(err.message).toMatch(/missing required fields/);
+  });
+
+  it('rejects a non-string manifest_expires_at (a number)', async () => {
+    const err = await expectStatusRejects({
+      ...goodPage(),
+      manifest_expires_at: 1_779_364_800_000,
+    });
+    expect(err.message).toMatch(/missing required fields/);
+  });
+
+  it.each(OUT_OF_RANGE_TIMESTAMPS)(
+    'rejects an out-of-range manifest_expires_at (%s) on the raw page',
+    async (_label, value) => {
+      const err = await expectStatusRejects({ ...goodPage(), manifest_expires_at: value });
+      expect(err.message).toMatch(/^getUploadStatus: server page missing required fields/);
+    },
+  );
+
+  it.each(OUT_OF_RANGE_TIMESTAMPS)(
+    'rejects an out-of-range uploaded_parts[].last_modified (%s) on the raw page',
+    async (_label, value) => {
+      const err = await expectStatusRejects({
+        ...goodPage(),
+        uploaded_parts: [
+          { part_number: 1, etag: '"e1"', size_bytes: 16_777_216, last_modified: value },
+        ],
+      });
+      expect(err.message).toBe(
+        'getUploadStatus: uploaded_parts entry missing an ISO-8601 last_modified.',
+      );
+    },
+  );
+
+  it('accepts a leap-day manifest_expires_at and uploaded_parts[].last_modified', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      jsonResponse({
+        success: true,
+        data: {
+          ...goodPage(),
+          manifest_expires_at: LEAP_DAY,
+          uploaded_parts: [
+            { part_number: 1, etag: '"e1"', size_bytes: 16_777_216, last_modified: LEAP_DAY },
+          ],
+        },
+      }),
+    );
+    const result = await client.getUploadStatus('mp-bad');
+    expect(result.manifestExpiresAt?.toISOString()).toBe('2028-02-29T12:00:00.000Z');
+    expect(result.uploadedParts[0].lastModified.toISOString()).toBe('2028-02-29T12:00:00.000Z');
+  });
+
+  it('rejects a non-string uploaded_parts[].last_modified (a number)', async () => {
+    const err = await expectStatusRejects({
+      ...goodPage(),
+      uploaded_parts: [
+        { part_number: 1, etag: '"e1"', size_bytes: 16_777_216, last_modified: 1_779_192_000_000 },
+      ],
+    });
+    expect(err.message).toBe(
+      'getUploadStatus: uploaded_parts entry missing an ISO-8601 last_modified.',
+    );
+  });
+
+  it('rejects a page missing the uploaded_parts array (required by the contract)', async () => {
+    const data = goodPage();
+    delete data['uploaded_parts'];
+    const err = await expectStatusRejects(data);
+    expect(err.message).toBe('getUploadStatus: server page missing the uploaded_parts array.');
+  });
+
+  it('rejects a malformed SECOND page after a valid first one', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      statusPage({
+        uploadId: 'mp-bad',
+        cursor: 0,
+        totalParts: 3,
+        isTruncated: true,
+        nextMarker: 2,
+        parts: [1, 2],
+      }),
+    );
+    const err = await expectStatusRejects({
+      ...goodPage(),
+      total_parts: 3,
+      manifest_expires_at: '2026-13-45T25:61:61Z',
+    });
+    expect(err.message).toMatch(/^getUploadStatus: server page missing required fields/);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(NON_ISO_TIMESTAMPS)(
+    'rejects a non-ISO-8601 manifest_expires_at (%s) on the raw page',
+    async (_label, value) => {
+      const err = await expectStatusRejects({ ...goodPage(), manifest_expires_at: value });
+      expect(err.message).toMatch(/^getUploadStatus: server page missing required fields/);
+    },
+  );
+
+  it.each(NON_ISO_TIMESTAMPS)(
+    'rejects a non-ISO-8601 uploaded_parts[].last_modified (%s) on the raw page',
+    async (_label, value) => {
+      const err = await expectStatusRejects({
+        ...goodPage(),
+        uploaded_parts: [
+          { part_number: 1, etag: '"e1"', size_bytes: 16_777_216, last_modified: value },
+        ],
+      });
+      expect(err.message).toBe(
+        'getUploadStatus: uploaded_parts entry missing an ISO-8601 last_modified.',
+      );
+    },
+  );
+
+  it('rejects a null uploaded_parts entry as a GislError, not a TypeError', async () => {
+    const err = await expectStatusRejects({ ...goodPage(), uploaded_parts: [null] });
+    expect(err.message).toBe(
+      'getUploadStatus: uploaded_parts entry missing an ISO-8601 last_modified.',
+    );
+  });
+
+  it.each(ATOM_OFFSET_TIMESTAMPS)(
+    'accepts an offset manifest_expires_at (%s)',
+    async (_label, value) => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { ...goodPage(), manifest_expires_at: value } }),
+      );
+      const result = await client.getUploadStatus('mp-bad');
+      expect(result.manifestExpiresAt?.toISOString()).toBe('2026-05-21T12:00:00.000Z');
+    },
+  );
+
+  it.each(ATOM_OFFSET_TIMESTAMPS)(
+    'accepts an offset uploaded_parts[].last_modified (%s)',
+    async (_label, value) => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            ...goodPage(),
+            uploaded_parts: [
+              { part_number: 1, etag: '"e1"', size_bytes: 16_777_216, last_modified: value },
+            ],
+          },
+        }),
+      );
+      const result = await client.getUploadStatus('mp-bad');
+      expect(result.uploadedParts).toHaveLength(1);
+      expect(result.uploadedParts[0].lastModified.toISOString()).toBe('2026-05-21T12:00:00.000Z');
+    },
+  );
 });

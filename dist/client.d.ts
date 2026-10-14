@@ -1,6 +1,6 @@
-import type { AudioWatermarkDecodeRequest, AudioWatermarkDecodeResponse, ExternalImportCreatedResponse, ExternalImportRequest, LoginUserRequest, LoginUser200ResponseData, ContactRequest, BillingCheckoutRequest, BillingCheckoutSession, CheckoutSessionStatusResponseData, AccountLimits, AuthenticatedIdentity, CreditsBalanceResponse, LivenessResponse, CreditsUsageResponse, UploadResponse, UploadProbeResponse, WorkflowCancelResponse, WorkflowArchiveResponse, WorkflowRestoreResponse, WorkflowCreateResponse, WorkflowResumeResponse, WorkflowStatusResponse, WorkflowListResponse, WorkflowSummary, WorkflowDownloadResponse, MetadataResponse, RetryResponse } from '@giveitsmaller/contracts/openapi';
+import type { AudioWatermarkDecodeRequest, AudioWatermarkDecodeResponse, ExternalImportCreatedResponse, ExternalImportRequest, LoginUserRequest, LoginUser200ResponseData, ContactRequest, BillingCheckoutRequest, BillingCheckoutSession, CheckoutSessionStatusResponseData, AccountLimits, AuthenticatedIdentity, CreditsBalanceResponse, LivenessResponse, CreditsUsageResponse, UploadResponse, UploadProbeResponse, MultipartPresignResponse, MultipartKeepaliveResponse, WorkflowCancelResponse, WorkflowArchiveResponse, WorkflowRestoreResponse, WorkflowCreateResponse, WorkflowResumeResponse, WorkflowStatusResponse, WorkflowListResponse, WorkflowSummary, WorkflowDownloadResponse, MetadataResponse, RetryResponse } from '@giveitsmaller/contracts/openapi';
 import { type CreateAwaitingProbeOptions } from './probe-pending.js';
-import type { CreditsUsageOptions, ListWorkflowsOptions, GetSchemaOptions, GetSchemaResult, GislClientConfig, GislSseEvent, GislSseParseFailure, PreflightClipsResult, ProbeWaitOptions, ProbeWaitResult, ReadCapabilityOptions, UploadOptions, WaitOptions, WorkflowCreatePayload, _Sdk3HandCodedKeepaliveResult, MultipartUploadState, _Sdk3HandCodedPresignPartsResult } from './types.js';
+import type { CreditsUsageOptions, ListWorkflowsOptions, GetSchemaOptions, GetSchemaResult, GislClientConfig, GislSseEvent, GislSseParseFailure, PreflightClipsResult, ProbeWaitOptions, ProbeWaitResult, ReadCapabilityOptions, UploadOptions, WaitOptions, WorkflowCreatePayload, MultipartUploadState } from './types.js';
 export declare const MULTIPART_CONCURRENCY_DEFAULT: 4;
 export declare const DEFAULT_MULTIPART_FIRST_CHUNK_SIZE: number;
 /**
@@ -89,7 +89,10 @@ export declare class GislClient {
      * PUT. `onCheckpoint` fires OUTSIDE the retry-scoped path after every
      * successful PUT — a callback-throw must not trigger a duplicate PUT.
      *
-     * TODO(HxUmVr3Y): replace inline hand-coded request body marshalling on regen.
+     * When `/status` reports `manifestExpiresAt: null` (the manifest TTL lapsed
+     * or was never initialised) the resume calls `keepaliveUpload()` FIRST —
+     * before the entry checkpoint and before any presign — so every
+     * `onCheckpoint` call carries a non-empty ISO-8601 `manifestExpiresAt`.
      */
     private multipartResume;
     /**
@@ -104,7 +107,12 @@ export declare class GislClient {
      * Non-existent / expired sessions return 404 → `GislMultipartSessionNotFoundError`.
      * Authed-but-non-owning callers return 403 → `GislMultipartSessionOwnershipError`.
      *
-     * TODO(HxUmVr3Y): replace hand-coded response shape on regen.
+     * Every `uploadedParts[].lastModified` is a `Date`. `manifestExpiresAt` is a
+     * `Date`, or `null` when the server reports the manifest TTL as lapsed or
+     * never initialised (call `keepaliveUpload()` before re-presigning then); it
+     * comes from the last page. A malformed page — including a missing
+     * `manifest_expires_at` key, an empty string, or an unparseable timestamp —
+     * throws `GislError`.
      */
     getUploadStatus(uploadId: string, opts?: {
         signal?: AbortSignal;
@@ -122,11 +130,13 @@ export declare class GislClient {
      * - entries unique
      * - `totalParts` <=10 000 (S3 hard limit; mirrors the SDK-1 ceiling guard)
      *
-     * TODO(HxUmVr3Y): replace hand-coded request/response shapes on regen.
+     * Returns the generated `MultipartPresignResponse`; each
+     * `presignedUrls[].expiresAt` is a `Date`. A malformed response (including
+     * an unparseable `expires_at`) throws `GislError`.
      */
     presignParts(uploadId: string, partNumbers: readonly number[], totalParts: number, opts?: {
         signal?: AbortSignal;
-    }): Promise<_Sdk3HandCodedPresignPartsResult>;
+    }): Promise<MultipartPresignResponse>;
     /**
      * Extend the manifest TTL of an in-progress multipart upload session.
      *
@@ -138,11 +148,13 @@ export declare class GislClient {
      * clock skew between client and server. The server atomically refreshes
      * the Redis EXPIRE for the manifest key; the call is idempotent.
      *
-     * TODO(HxUmVr3Y): replace hand-coded response shape on regen.
+     * Returns the generated `MultipartKeepaliveResponse`; `manifestExpiresAt` is
+     * a `Date` and always present (a missing, empty or unparseable
+     * `manifest_expires_at` throws `GislError`).
      */
     keepaliveUpload(uploadId: string, opts?: {
         signal?: AbortSignal;
-    }): Promise<_Sdk3HandCodedKeepaliveResult>;
+    }): Promise<MultipartKeepaliveResponse>;
     /**
      * Private walk-pagination helper for /status. Aggregates every page into
      * a single `MultipartUploadState`. AbortSignal short-circuits

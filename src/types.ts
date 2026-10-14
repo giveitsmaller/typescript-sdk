@@ -10,6 +10,7 @@ import type {
   UploadProbeResponse,
   WorkflowSource,
   MultiInputSource,
+  MultipartPartListing,
 } from '@giveitsmaller/contracts/openapi';
 import type { JobInputV2RoleEnum, NotifyConfig } from '@giveitsmaller/contracts/openapi';
 import type {
@@ -821,114 +822,30 @@ export interface MultipartCheckpointState {
   readonly manifestExpiresAt: string;
 }
 
-// ---------------------------------------------------------------------------
-// SDK-3 hand-coded resume-support shapes (TODO(HxUmVr3Y): replace on regen).
-//
-// API-2 / PR #283 shipped the 3 resume-support endpoints (`/status`,
-// `/presign`, `/keepalive`); contracts ticket HxUmVr3Y will add the OpenAPI
-// schemas that drive the openapi-generator output. Until that regen lands,
-// these types are hand-coded so SDK-3 ships unblocked. Every public type and
-// call-site is prefixed `_Sdk3HandCoded` so the eventual regen sweep is a
-// mechanical grep — find every reference and re-point at the generated
-// `@giveitsmaller/contracts/openapi` types.
-//
-// Wire shape is snake_case (matches API-2's PHP response writer); the TS
-// surface here uses camelCase consistent with the rest of the SDK's
-// hand-written types. The client.ts code path that SENDS the `/presign`
-// request body marshals to the snake_case wire object inline; the response
-// shapes are read in camelCase after the `handleResponse` envelope unwrap
-// (callers narrow on field names from these interfaces).
-// ---------------------------------------------------------------------------
-
-/**
- * One entry in `_Sdk3HandCodedMultipartStatusResult.uploadedParts`. Aggregated
- * across all pages of the underlying `GET /status` endpoint by the SDK's
- * walk-pagination loop.
- *
- * TODO(HxUmVr3Y): replace hand-coded shape on regen.
- *
- * @deprecated iqR0V1mt — removed in the next minor. `getUploadStatus()` / `presignParts()` / `keepaliveUpload()` will then use the generated contract types (`MultipartPartListing`, `PresignedUrlPart`, `MultipartKeepaliveResponse`, re-exported from this package), whose timestamps are `Date`, not ISO strings; `getUploadStatus()` returns {@link MultipartUploadState} (never `MultipartStatusResponse`, which is one page).
- */
-export interface _Sdk3HandCodedUploadedPart {
-  readonly partNumber: number;
-  readonly etag: string;
-  readonly sizeBytes: number;
-  /** ISO-8601 last-modified instant of the S3 part. */
-  readonly lastModified: string;
-}
-
-/**
- * Aggregated result of `getUploadStatus()` after the SDK has walked every
- * page of the underlying `GET /api/uploads/multipart/{uploadId}/status`
- * endpoint (paginated via `next_part_number_marker` / `is_truncated`).
- * `uploadedParts` is the merged-and-sorted list of every part the server
- * has recorded across all pages — callers see the complete state without
- * needing to drive the pagination cursor themselves.
- *
- * TODO(HxUmVr3Y): replace hand-coded shape on regen.
- *
- * @deprecated iqR0V1mt — removed in the next minor. `getUploadStatus()` / `presignParts()` / `keepaliveUpload()` will then use the generated contract types (`MultipartPartListing`, `PresignedUrlPart`, `MultipartKeepaliveResponse`, re-exported from this package), whose timestamps are `Date`, not ISO strings; `getUploadStatus()` returns {@link MultipartUploadState} (never `MultipartStatusResponse`, which is one page).
- */
-export interface _Sdk3HandCodedMultipartStatusResult {
-  readonly uploadId: string;
-  readonly multipartUploadId: string;
-  readonly cloudKey: string;
-  readonly totalParts: number;
-  /** Sorted ascending by `partNumber`; complete across all server-side pages. */
-  readonly uploadedParts: readonly _Sdk3HandCodedUploadedPart[];
-  /** ISO-8601 wall-clock when the durable session manifest expires. */
-  readonly manifestExpiresAt: string;
-  /** Server-recommended chunk size in bytes (matches the initiate envelope). */
-  readonly recommendedChunkSize: number;
-}
 
 /**
  * The SDK's aggregate of every `GET /api/uploads/multipart/{uploadId}/status`
  * page (merged, sorted, no pagination cursor) — what `getUploadStatus()`
  * returns. It has no generated equivalent: `MultipartStatusResponse` is ONE
- * page. The stable name for the shape now called
- * `_Sdk3HandCodedMultipartStatusResult` (iqR0V1mt); timestamps stay ISO strings
- * in this release and become `Date` with the generated part type in the next.
+ * page. `uploadedParts` is the merged-and-sorted list of every part the
+ * server has recorded across all pages, as the generated
+ * `MultipartPartListing` (whose `lastModified` is a `Date`).
  */
-export type MultipartUploadState = _Sdk3HandCodedMultipartStatusResult;
-
-/**
- * One entry in `_Sdk3HandCodedPresignPartsResult.presignedUrls`. Shape mirrors
- * the contract-pinned `PresignedUrlPart` from the initiate envelope; kept
- * hand-coded here so the resume path does not depend on the generator's name
- * for that shape (decoupling for the HxUmVr3Y regen window).
- *
- * TODO(HxUmVr3Y): replace hand-coded shape on regen.
- *
- * @deprecated iqR0V1mt — removed in the next minor. `getUploadStatus()` / `presignParts()` / `keepaliveUpload()` will then use the generated contract types (`MultipartPartListing`, `PresignedUrlPart`, `MultipartKeepaliveResponse`, re-exported from this package), whose timestamps are `Date`, not ISO strings; `getUploadStatus()` returns {@link MultipartUploadState} (never `MultipartStatusResponse`, which is one page).
- */
-export interface _Sdk3HandCodedPresignedPart {
-  readonly partNumber: number;
-  readonly url: string;
-  readonly expiresAt: string;
-}
-
-/**
- * Result of `presignParts()` — the server-issued presigned PUT URLs for the
- * requested part numbers.
- *
- * TODO(HxUmVr3Y): replace hand-coded shape on regen.
- *
- * @deprecated iqR0V1mt — removed in the next minor. `getUploadStatus()` / `presignParts()` / `keepaliveUpload()` will then use the generated contract types (`MultipartPartListing`, `PresignedUrlPart`, `MultipartKeepaliveResponse`, re-exported from this package), whose timestamps are `Date`, not ISO strings; `getUploadStatus()` returns {@link MultipartUploadState} (never `MultipartStatusResponse`, which is one page).
- */
-export interface _Sdk3HandCodedPresignPartsResult {
+export interface MultipartUploadState {
   readonly uploadId: string;
-  readonly presignedUrls: readonly _Sdk3HandCodedPresignedPart[];
-}
-
-/**
- * Result of `keepaliveUpload()` — the refreshed manifest TTL expiry instant.
- *
- * TODO(HxUmVr3Y): replace hand-coded shape on regen.
- *
- * @deprecated iqR0V1mt — removed in the next minor. `getUploadStatus()` / `presignParts()` / `keepaliveUpload()` will then use the generated contract types (`MultipartPartListing`, `PresignedUrlPart`, `MultipartKeepaliveResponse`, re-exported from this package), whose timestamps are `Date`, not ISO strings; `getUploadStatus()` returns {@link MultipartUploadState} (never `MultipartStatusResponse`, which is one page).
- */
-export interface _Sdk3HandCodedKeepaliveResult {
-  readonly uploadId: string;
-  readonly manifestExpiresAt: string;
+  readonly multipartUploadId: string;
+  readonly cloudKey: string;
+  readonly totalParts: number;
+  /** Sorted ascending by `partNumber`; complete across all server-side pages. */
+  readonly uploadedParts: readonly MultipartPartListing[];
+  /**
+   * When the durable session manifest expires, taken from the LAST status
+   * page. `null` when the server reports the manifest TTL as lapsed or never
+   * initialised — the contract says to call `keepaliveUpload()` before
+   * re-presigning in that case (a resume via `uploadFile({ resumeUploadId })`
+   * does this itself).
+   */
+  readonly manifestExpiresAt: Date | null;
+  /** Server-recommended chunk size in bytes (matches the initiate envelope). */
+  readonly recommendedChunkSize: number;
 }

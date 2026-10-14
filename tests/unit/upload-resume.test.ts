@@ -23,7 +23,11 @@ vi.mock('node:fs/promises', () => ({
 
 import { stat, open } from 'node:fs/promises';
 import { GislClient } from '../../src/client.js';
-import { GislError, GislMultipartPartCountError } from '../../src/errors.js';
+import {
+  GislAbortError,
+  GislError,
+  GislMultipartPartCountError,
+} from '../../src/errors.js';
 import type { MultipartCheckpointState } from '../../src/types.js';
 
 const statMock = stat as unknown as ReturnType<typeof vi.fn>;
@@ -55,6 +59,10 @@ interface StatusPageInput {
   isTruncated: boolean;
   nextMarker: number;
   parts: number[];
+  /** Replaces the page's manifest_expires_at (default '2026-05-21T12:00:00.000Z'). */
+  manifestExpiresAt?: string | null;
+  /** Replaces every part's last_modified (default '2026-05-19T12:00:00.000Z'). */
+  lastModified?: string;
 }
 function buildStatusPage(opts: StatusPageInput): unknown {
   return {
@@ -68,11 +76,14 @@ function buildStatusPage(opts: StatusPageInput): unknown {
         part_number: n,
         etag: `"etag-${n}"`,
         size_bytes: CHUNK,
-        last_modified: '2026-05-19T12:00:00.000Z',
+        last_modified: opts.lastModified ?? '2026-05-19T12:00:00.000Z',
       })),
       next_part_number_marker: opts.nextMarker,
       is_truncated: opts.isTruncated,
-      manifest_expires_at: '2026-05-21T12:00:00.000Z',
+      manifest_expires_at:
+        opts.manifestExpiresAt === undefined
+          ? '2026-05-21T12:00:00.000Z'
+          : opts.manifestExpiresAt,
       recommended_chunk_size: CHUNK,
     },
   };
@@ -200,6 +211,15 @@ describe('SDK-3 uploadFile resume path', () => {
     expect(checkpoints[checkpoints.length - 1].uploadedPartNumbers).toEqual([
       1, 2, 3,
     ]);
+    // aHgScsLJ — the checkpoint stays a JSON-safe string, from /status.
+    for (const cp of checkpoints) {
+      expect(cp.manifestExpiresAt).toBe('2026-05-21T12:00:00.000Z');
+    }
+
+    // No keepalive: /status reported a live manifest.
+    expect(
+      fetchSpy.mock.calls.filter((c) => String(c[0]).includes('/keepalive')),
+    ).toHaveLength(0);
 
     // Checkpoint state is JSON-serialisable.
     const round = JSON.parse(
@@ -208,6 +228,7 @@ describe('SDK-3 uploadFile resume path', () => {
     expect(round.uploadId).toBe('u1');
     expect(round.totalParts).toBe(3);
     expect(round.uploadedPartNumbers).toEqual([1, 2, 3]);
+    expect(round.manifestExpiresAt).toBe('2026-05-21T12:00:00.000Z');
   });
 
   it('interrupt-mid-upload: resume picks up missing parts and emits checkpoint after each', async () => {
@@ -560,5 +581,344 @@ describe('SDK-3 uploadFile resume path', () => {
     // Critically: only ONE S3 PUT for the missing part. The callback throw
     // must NOT have triggered a retry-loop that re-PUTs the same part.
     expect(s3Puts).toHaveLength(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // aHgScsLJ — checkpoint manifestExpiresAt normalisation and the null-manifest
+  // keepalive-first resume.
+  // -------------------------------------------------------------------------
+
+  interface ResumeServerOpts {
+    uploadId: string;
+    totalParts: number;
+    parts: number[];
+    manifestExpiresAt: string | null;
+    lastModified?: string;
+    /** Keepalive `data` envelope; default echoes uploadId with a fixed expiry. */
+    keepaliveData?: unknown;
+    /** Replaces the keepalive fetch entirely (e.g. to hang until abort). */
+    keepaliveFetch?: (opts?: RequestInit) => Promise<Response>;
+  }
+
+  /** Routes every resume-path request and records the order they arrived in. */
+  function installResumeServer(opts: ResumeServerOpts): string[] {
+    const order: string[] = [];
+    fetchSpy.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.includes(`/multipart/${opts.uploadId}/status`)) {
+        order.push('status');
+        return jsonResponse(
+          buildStatusPage({
+            uploadId: opts.uploadId,
+            cursor: 0,
+            totalParts: opts.totalParts,
+            isTruncated: false,
+            nextMarker: opts.parts[opts.parts.length - 1] ?? 0,
+            parts: opts.parts,
+            manifestExpiresAt: opts.manifestExpiresAt,
+            lastModified: opts.lastModified,
+          }),
+        );
+      }
+      if (url.includes(`/multipart/${opts.uploadId}/keepalive`)) {
+        order.push('keepalive');
+        if (opts.keepaliveFetch) return opts.keepaliveFetch(init);
+        return jsonResponse({
+          success: true,
+          data: opts.keepaliveData ?? {
+            upload_id: opts.uploadId,
+            manifest_expires_at: '2026-05-25T09:15:30.500Z',
+          },
+        });
+      }
+      if (url.includes(`/multipart/${opts.uploadId}/presign`)) {
+        order.push('presign');
+        const body = JSON.parse((init!.body as string) ?? '{}') as {
+          part_numbers: number[];
+        };
+        return jsonResponse({
+          success: true,
+          data: {
+            upload_id: opts.uploadId,
+            presigned_urls: body.part_numbers.map((n) => ({
+              part_number: n,
+              url: `https://s3.example.com/${opts.uploadId}-p${n}`,
+              expires_at: '2026-05-21T12:00:00.000Z',
+            })),
+          },
+        });
+      }
+      if (url.startsWith(`https://s3.example.com/${opts.uploadId}-p`)) {
+        order.push('put');
+        return new Response('', { status: 200, headers: { etag: `"new-${url}"` } });
+      }
+      if (url.endsWith('/multipart/complete')) {
+        order.push('complete');
+        return jsonResponse({
+          success: true,
+          data: { upload_id: opts.uploadId, status: 'completed' },
+        });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    return order;
+  }
+
+  const ISO_8601_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+  it('normalises a second-precision /status manifest to toISOString() in every checkpoint', async () => {
+    const totalParts = 3;
+    installFakeFile((totalParts - 1) * CHUNK + 4 * 1024 * 1024);
+    installResumeServer({
+      uploadId: 'u-norm',
+      totalParts,
+      parts: [1],
+      manifestExpiresAt: '2026-05-21T12:00:00Z',
+    });
+    const checkpoints: MultipartCheckpointState[] = [];
+    await client.uploadFile('/tmp/r.bin', {
+      resumeUploadId: 'u-norm',
+      onCheckpoint: (state) => checkpoints.push(state),
+    });
+    expect(checkpoints).toHaveLength(3);
+    for (const cp of checkpoints) {
+      expect(typeof cp.manifestExpiresAt).toBe('string');
+      expect(cp.manifestExpiresAt).toBe('2026-05-21T12:00:00.000Z');
+    }
+  });
+
+  it('null /status manifest: keepalive runs BEFORE the first checkpoint and before any presign/PUT', async () => {
+    const totalParts = 3;
+    const fileSize = (totalParts - 1) * CHUNK + 4 * 1024 * 1024;
+    installFakeFile(fileSize);
+    const order = installResumeServer({
+      uploadId: 'u-null',
+      totalParts,
+      parts: [1],
+      manifestExpiresAt: null,
+    });
+    const keepaliveSpy = vi.spyOn(client, 'keepaliveUpload');
+    const ctl = new AbortController();
+
+    const checkpoints: MultipartCheckpointState[] = [];
+    const result = await client.uploadFile('/tmp/r.bin', {
+      resumeUploadId: 'u-null',
+      signal: ctl.signal,
+      onCheckpoint: (state) => {
+        // Recorded at callback time so its position against requests is real.
+        order.push('checkpoint');
+        checkpoints.push(state);
+      },
+    });
+    expect(result.fileId).toBe('u-null');
+
+    // Exactly one keepalive, called with the resumed id and the CALLER's signal.
+    expect(keepaliveSpy).toHaveBeenCalledTimes(1);
+    expect(keepaliveSpy).toHaveBeenCalledWith('u-null', { signal: ctl.signal });
+    expect(keepaliveSpy.mock.calls[0][1]?.signal).toBe(ctl.signal);
+
+    // Order: status -> keepalive -> entry checkpoint -> presign -> PUTs ...
+    expect(order.slice(0, 4)).toEqual(['status', 'keepalive', 'checkpoint', 'presign']);
+    expect(order.indexOf('keepalive')).toBeLessThan(order.indexOf('put'));
+    expect(order.filter((o) => o === 'keepalive')).toHaveLength(1);
+
+    // EVERY checkpoint, the first included, carries the keepalive's expiry.
+    expect(checkpoints).toHaveLength(3);
+    for (const cp of checkpoints) {
+      expect(cp.manifestExpiresAt).not.toBe('');
+      expect(cp.manifestExpiresAt).toMatch(ISO_8601_UTC);
+      expect(cp.manifestExpiresAt).toBe('2026-05-25T09:15:30.500Z');
+    }
+  });
+
+  it('null /status manifest with every part uploaded still keepalives before the single checkpoint', async () => {
+    const totalParts = 3;
+    installFakeFile((totalParts - 1) * CHUNK + 4 * 1024 * 1024);
+    const order = installResumeServer({
+      uploadId: 'u-null-done',
+      totalParts,
+      parts: [1, 2, 3],
+      manifestExpiresAt: null,
+    });
+    const checkpoints: MultipartCheckpointState[] = [];
+    await client.uploadFile('/tmp/r.bin', {
+      resumeUploadId: 'u-null-done',
+      onCheckpoint: (state) => {
+        order.push('checkpoint');
+        checkpoints.push(state);
+      },
+    });
+    expect(order).toEqual(['status', 'keepalive', 'checkpoint', 'complete']);
+    expect(checkpoints.map((c) => c.manifestExpiresAt)).toEqual(['2026-05-25T09:15:30.500Z']);
+  });
+
+  it('null /status manifest: an abort during keepalive rejects with no presign and no checkpoint', async () => {
+    const totalParts = 3;
+    installFakeFile((totalParts - 1) * CHUNK + 4 * 1024 * 1024);
+    const ctl = new AbortController();
+    const order = installResumeServer({
+      uploadId: 'u-abort',
+      totalParts,
+      parts: [1],
+      manifestExpiresAt: null,
+      // Hang until the request's composed signal fires, then reject the way
+      // fetch does. The caller aborts only once keepalive is in flight.
+      keepaliveFetch: (init) =>
+        new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          signal?.addEventListener('abort', () => {
+            reject(new DOMException('The operation was aborted.', 'AbortError'));
+          });
+          queueMicrotask(() => ctl.abort());
+        }),
+    });
+    const onCheckpoint = vi.fn();
+
+    const err = await client
+      .uploadFile('/tmp/r.bin', { resumeUploadId: 'u-abort', signal: ctl.signal, onCheckpoint })
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(GislAbortError);
+    expect(order).toEqual(['status', 'keepalive']);
+    expect(onCheckpoint).not.toHaveBeenCalled();
+  });
+
+  it('null /status manifest: a keepalive uploadId mismatch is a GislError before any checkpoint or presign', async () => {
+    const totalParts = 3;
+    installFakeFile((totalParts - 1) * CHUNK + 4 * 1024 * 1024);
+    const order = installResumeServer({
+      uploadId: 'u-mm',
+      totalParts,
+      parts: [1],
+      manifestExpiresAt: null,
+      keepaliveData: { upload_id: 'u-OTHER', manifest_expires_at: '2026-05-25T09:15:30.500Z' },
+    });
+    const onCheckpoint = vi.fn();
+
+    const err = (await client
+      .uploadFile('/tmp/r.bin', { resumeUploadId: 'u-mm', onCheckpoint })
+      .catch((e: unknown) => e)) as Error;
+
+    expect(err).toBeInstanceOf(GislError);
+    expect(err).not.toBeInstanceOf(TypeError);
+    expect(err.message).toBe(
+      'multipartResume: /keepalive response uploadId does not match resumeUploadId ' +
+        '(expected u-mm, got u-OTHER).',
+    );
+    expect(order).toEqual(['status', 'keepalive']);
+    expect(onCheckpoint).not.toHaveBeenCalled();
+  });
+
+  it('null /status manifest: a Feb-29-in-2026 keepalive expiry fails the resume on the raw envelope', async () => {
+    const totalParts = 3;
+    installFakeFile((totalParts - 1) * CHUNK + 4 * 1024 * 1024);
+    const order = installResumeServer({
+      uploadId: 'u-badka',
+      totalParts,
+      parts: [1],
+      manifestExpiresAt: null,
+      keepaliveData: { upload_id: 'u-badka', manifest_expires_at: '2026-02-29T12:00:00Z' },
+    });
+    const onCheckpoint = vi.fn();
+
+    const err = (await client
+      .uploadFile('/tmp/r.bin', { resumeUploadId: 'u-badka', onCheckpoint })
+      .catch((e: unknown) => e)) as Error;
+
+    expect(err).toBeInstanceOf(GislError);
+    expect(err).not.toBeInstanceOf(RangeError);
+    expect(err.message).toBe('keepaliveUpload: malformed response envelope.');
+    expect(order).toEqual(['status', 'keepalive']);
+    expect(onCheckpoint).not.toHaveBeenCalled();
+  });
+
+  it('an absent /status manifest_expires_at key fails the resume (it is not a lapsed manifest)', async () => {
+    installFakeFile(2 * CHUNK + 4 * 1024 * 1024);
+    const page = buildStatusPage({
+      uploadId: 'u-absent',
+      cursor: 0,
+      totalParts: 3,
+      isTruncated: false,
+      nextMarker: 1,
+      parts: [1],
+    }) as { data: Record<string, unknown> };
+    delete page.data['manifest_expires_at'];
+    fetchSpy.mockResolvedValueOnce(jsonResponse(page));
+
+    const err = (await client
+      .uploadFile('/tmp/r.bin', { resumeUploadId: 'u-absent' })
+      .catch((e: unknown) => e)) as Error;
+    expect(err).toBeInstanceOf(GislError);
+    expect(err.message).toMatch(/^getUploadStatus: server page missing required fields/);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('null /status manifest: a non-ISO-8601 keepalive expiry fails on the raw envelope before any checkpoint', async () => {
+    const totalParts = 3;
+    installFakeFile((totalParts - 1) * CHUNK + 4 * 1024 * 1024);
+    const order = installResumeServer({
+      uploadId: 'u-rfc2822',
+      totalParts,
+      parts: [1],
+      manifestExpiresAt: null,
+      keepaliveData: { upload_id: 'u-rfc2822', manifest_expires_at: 'Tue, 13 Oct 2026 12:00:00 GMT' },
+    });
+    const onCheckpoint = vi.fn();
+
+    const err = (await client
+      .uploadFile('/tmp/r.bin', { resumeUploadId: 'u-rfc2822', onCheckpoint })
+      .catch((e: unknown) => e)) as Error;
+
+    expect(err).toBeInstanceOf(GislError);
+    expect(err.message).toBe('keepaliveUpload: malformed response envelope.');
+    expect(order).toEqual(['status', 'keepalive']);
+    expect(onCheckpoint).not.toHaveBeenCalled();
+  });
+
+  it('a date-only /status manifest_expires_at fails the resume before any keepalive or checkpoint', async () => {
+    installFakeFile(2 * CHUNK + 4 * 1024 * 1024);
+    const order = installResumeServer({
+      uploadId: 'u-dateonly',
+      totalParts: 3,
+      parts: [1],
+      manifestExpiresAt: '2026-10-13',
+    });
+    const onCheckpoint = vi.fn();
+
+    const err = (await client
+      .uploadFile('/tmp/r.bin', { resumeUploadId: 'u-dateonly', onCheckpoint })
+      .catch((e: unknown) => e)) as Error;
+
+    expect(err).toBeInstanceOf(GislError);
+    expect(err.message).toMatch(/^getUploadStatus: server page missing required fields/);
+    expect(order).toEqual(['status']);
+    expect(onCheckpoint).not.toHaveBeenCalled();
+  });
+
+  it('null /status manifest with the API\'s +00:00 ATOM timestamps: every checkpoint is the normalised Z instant', async () => {
+    // TEST-1 — the production wire form from compression_api, on both /status
+    // (last_modified) and /keepalive (manifest_expires_at).
+    const totalParts = 3;
+    installFakeFile((totalParts - 1) * CHUNK + 4 * 1024 * 1024);
+    const order = installResumeServer({
+      uploadId: 'u-atom',
+      totalParts,
+      parts: [1],
+      manifestExpiresAt: null,
+      lastModified: '2026-05-19T12:00:00+00:00',
+      keepaliveData: { upload_id: 'u-atom', manifest_expires_at: '2026-05-21T12:00:00+00:00' },
+    });
+    const checkpoints: MultipartCheckpointState[] = [];
+
+    const result = await client.uploadFile('/tmp/r.bin', {
+      resumeUploadId: 'u-atom',
+      onCheckpoint: (state) => checkpoints.push(state),
+    });
+
+    expect(result.fileId).toBe('u-atom');
+    expect(order.slice(0, 2)).toEqual(['status', 'keepalive']);
+    expect(checkpoints).toHaveLength(3);
+    for (const cp of checkpoints) {
+      expect(cp.manifestExpiresAt).toBe('2026-05-21T12:00:00.000Z');
+    }
   });
 });

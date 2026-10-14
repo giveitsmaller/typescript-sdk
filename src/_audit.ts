@@ -273,18 +273,10 @@ type _AnonymousAllowlistInvariant = [
   _AssertTrueAnon<_AnonymousDoorExported>,
 ];
 
-// SDK-3 (Wb6ebOMM) — hand-coded resume-support types in types.ts. The
-// `_Sdk3HandCoded` prefix marks them as transient (replaced on HxUmVr3Y
-// regen). The audit gate pins their presence on the public surface so a
-// rename / drop on regen surfaces as a `tsc --noEmit` failure here.
-import type {
-  MultipartCheckpointState,
-  _Sdk3HandCodedUploadedPart,
-  _Sdk3HandCodedMultipartStatusResult,
-  _Sdk3HandCodedPresignedPart,
-  _Sdk3HandCodedPresignPartsResult,
-  _Sdk3HandCodedKeepaliveResult,
-} from './types.js';
+// SDK-3 (Wb6ebOMM) — the resume checkpoint type in types.ts. The audit gate
+// pins its presence on the public surface so a rename / drop surfaces as a
+// `tsc --noEmit` failure here.
+import type { MultipartCheckpointState } from './types.js';
 // iqR0V1mt — imported from the PUBLIC barrel, so a dropped re-export fails here.
 import type {
   MultipartUploadState,
@@ -347,11 +339,6 @@ export function _runAudit(): void {
   accept<OperationResultOutputEntry>();
   // SDK-3 (Wb6ebOMM) public-API surface for the 3 resume-support endpoints.
   accept<MultipartCheckpointState>();
-  accept<_Sdk3HandCodedUploadedPart>();
-  accept<_Sdk3HandCodedMultipartStatusResult>();
-  accept<_Sdk3HandCodedPresignedPart>();
-  accept<_Sdk3HandCodedPresignPartsResult>();
-  accept<_Sdk3HandCodedKeepaliveResult>();
   accept<MultipartUploadState>();
   accept<MultipartPartListing>();
   accept<PresignedUrlPart>();

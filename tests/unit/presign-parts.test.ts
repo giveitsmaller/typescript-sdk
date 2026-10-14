@@ -15,6 +15,31 @@ import {
   GislUploadCapExceededError,
 } from '../../src/errors.js';
 
+// CODE-1 (aHgScsLJ): strings `new Date()` parses but that are not RFC 3339
+// date-times. Each must be rejected on the RAW wire value, before FromJSON.
+// codex (aHgScsLJ): pattern-valid strings whose calendar fields are out of
+// range. The RAW check range-checks them, so they fail on the envelope check
+// (requireValidDate after FromJSON is unreachable defence in depth).
+const OUT_OF_RANGE_TIMESTAMPS = [
+  ['month 13, day 45, 25:61:61', '2026-13-45T25:61:61Z'],
+  ['Feb 29 in a non-leap year', '2026-02-29T12:00:00Z'],
+  ['April 31', '2026-04-31T12:00:00Z'],
+] as const;
+const LEAP_DAY = '2028-02-29T12:00:00Z';
+
+// TEST-1 (aHgScsLJ): compression_api writes every multipart timestamp with
+// DateTimeInterface::ATOM ('+00:00', no Z, no millis). Both forms name the
+// same instant, 2026-05-21T12:00:00.000Z.
+const ATOM_OFFSET_TIMESTAMPS = [
+  ['a +00:00 offset (the API\'s ATOM format)', '2026-05-21T12:00:00+00:00'],
+  ['a +02:00 offset', '2026-05-21T14:00:00+02:00'],
+] as const;
+const NON_ISO_TIMESTAMPS = [
+  ['a date-only string', '2026-10-13'],
+  ['a bare numeric string', '1'],
+  ['an RFC 2822 string', 'Tue, 13 Oct 2026 12:00:00 GMT'],
+] as const;
+
 function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
@@ -137,8 +162,15 @@ describe('SDK-3 presignParts client-side validation', () => {
     expect(result.presignedUrls[0]).toEqual({
       partNumber: 2,
       url: 'https://s3.example.com/p2',
-      expiresAt: '2026-05-21T12:00:00.000Z',
+      expiresAt: new Date('2026-05-21T12:00:00.000Z'),
     });
+    for (const part of result.presignedUrls) {
+      expect(part.expiresAt).toBeInstanceOf(Date);
+      expect(part.expiresAt.toISOString()).toBe('2026-05-21T12:00:00.000Z');
+      expect(part.expiresAt.getTime()).toBe(Date.UTC(2026, 4, 21, 12, 0, 0));
+    }
+    expect(result.presignedUrls[1].partNumber).toBe(5);
+    expect(result.presignedUrls[1].url).toBe('https://s3.example.com/p5');
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     const [url, opts] = fetchSpy.mock.calls[0];
@@ -192,4 +224,114 @@ describe('SDK-3 presignParts client-side validation', () => {
     await client.presignParts('u1', [9999], 10_000);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
+
+  // aHgScsLJ — a malformed /presign response is a GislError naming the method,
+  // never a raw TypeError / RangeError from the generated FromJSON helper.
+  async function expectPresignRejects(data: unknown): Promise<Error> {
+    fetchSpy.mockResolvedValueOnce(jsonResponse({ success: true, data }));
+    const err = (await client.presignParts('u1', [2], 10).catch((e: unknown) => e)) as Error;
+    expect(err).toBeInstanceOf(GislError);
+    expect(err).not.toBeInstanceOf(TypeError);
+    expect(err.message).toMatch(/^presignParts: /);
+    return err;
+  }
+
+  it.each(OUT_OF_RANGE_TIMESTAMPS)(
+    'rejects an out-of-range expires_at (%s) on the raw envelope',
+    async (_label, value) => {
+      const err = await expectPresignRejects({
+        upload_id: 'u1',
+        presigned_urls: [{ part_number: 2, url: 'https://s3.example.com/p2', expires_at: value }],
+      });
+      expect(err.message).toBe(
+        'presignParts: malformed response envelope (presigned_urls entry missing an ISO-8601 expires_at).',
+      );
+    },
+  );
+
+  it('accepts a leap-day expires_at', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      jsonResponse({
+        success: true,
+        data: {
+          upload_id: 'u1',
+          presigned_urls: [{ part_number: 2, url: 'https://s3.example.com/p2', expires_at: LEAP_DAY }],
+        },
+      }),
+    );
+    const result = await client.presignParts('u1', [2], 10);
+    expect(result.presignedUrls[0].expiresAt.toISOString()).toBe('2028-02-29T12:00:00.000Z');
+  });
+
+  it('rejects a non-string expires_at (a number)', async () => {
+    const err = await expectPresignRejects({
+      upload_id: 'u1',
+      presigned_urls: [
+        { part_number: 2, url: 'https://s3.example.com/p2', expires_at: 1_779_364_800_000 },
+      ],
+    });
+    expect(err.message).toMatch(/^presignParts: malformed response envelope/);
+    expect(err.message).toMatch(/expires_at/);
+  });
+
+  it('rejects a presigned_urls entry with no expires_at key', async () => {
+    const err = await expectPresignRejects({
+      upload_id: 'u1',
+      presigned_urls: [{ part_number: 2, url: 'https://s3.example.com/p2' }],
+    });
+    expect(err.message).toMatch(/^presignParts: malformed response envelope/);
+  });
+
+  it('rejects a missing presigned_urls array', async () => {
+    const err = await expectPresignRejects({ upload_id: 'u1' });
+    expect(err.message).toBe('presignParts: malformed response envelope.');
+  });
+
+  it('rejects a non-array presigned_urls', async () => {
+    const err = await expectPresignRejects({ upload_id: 'u1', presigned_urls: {} });
+    expect(err.message).toBe('presignParts: malformed response envelope.');
+  });
+
+  it('rejects a non-object presigned_urls entry', async () => {
+    const err = await expectPresignRejects({ upload_id: 'u1', presigned_urls: [null] });
+    expect(err.message).toMatch(/^presignParts: malformed response envelope/);
+  });
+
+  it('rejects a missing upload_id', async () => {
+    const err = await expectPresignRejects({ presigned_urls: [] });
+    expect(err.message).toBe('presignParts: malformed response envelope.');
+  });
+
+  it.each(NON_ISO_TIMESTAMPS)(
+    'rejects a non-ISO-8601 expires_at (%s) on the raw envelope',
+    async (_label, value) => {
+      const err = await expectPresignRejects({
+        upload_id: 'u1',
+        presigned_urls: [{ part_number: 2, url: 'https://s3.example.com/p2', expires_at: value }],
+      });
+      expect(err.message).toBe(
+        'presignParts: malformed response envelope (presigned_urls entry missing an ISO-8601 expires_at).',
+      );
+    },
+  );
+
+  it.each(ATOM_OFFSET_TIMESTAMPS)(
+    'accepts an offset expires_at (%s)',
+    async (_label, value) => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            upload_id: 'u1',
+            presigned_urls: [
+              { part_number: 2, url: 'https://s3.example.com/p2', expires_at: value },
+            ],
+          },
+        }),
+      );
+      const result = await client.presignParts('u1', [2], 10);
+      expect(result.presignedUrls).toHaveLength(1);
+      expect(result.presignedUrls[0].expiresAt.toISOString()).toBe('2026-05-21T12:00:00.000Z');
+    },
+  );
 });

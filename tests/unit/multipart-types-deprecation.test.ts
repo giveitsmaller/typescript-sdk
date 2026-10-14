@@ -1,32 +1,77 @@
-import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { describe, it, expect, expectTypeOf } from 'vitest';
 import type { GislClient } from '../../src/client.js';
 import type {
   MultipartUploadState,
   MultipartPartListing,
   PresignedUrlPart,
   MultipartKeepaliveResponse,
-  _Sdk3HandCodedMultipartStatusResult,
+  MultipartPresignResponse,
 } from '../../src/index.js';
 
+// aHgScsLJ — the five deprecated `_Sdk3HandCoded*` shapes are GONE from the
+// public barrel. Each import below must fail to resolve; if one is re-exported,
+// `npm run check:tests` reports an unused `@ts-expect-error`.
+import type {
+  // @ts-expect-error removed in aHgScsLJ
+  _Sdk3HandCodedUploadedPart,
+  // @ts-expect-error removed in aHgScsLJ
+  _Sdk3HandCodedMultipartStatusResult,
+  // @ts-expect-error removed in aHgScsLJ
+  _Sdk3HandCodedPresignedPart,
+  // @ts-expect-error removed in aHgScsLJ
+  _Sdk3HandCodedPresignPartsResult,
+  // @ts-expect-error removed in aHgScsLJ
+  _Sdk3HandCodedKeepaliveResult,
+} from '../../src/index.js';
+
+const REMOVED_NAMES = [
+  '_Sdk3HandCodedUploadedPart',
+  '_Sdk3HandCodedMultipartStatusResult',
+  '_Sdk3HandCodedPresignedPart',
+  '_Sdk3HandCodedPresignPartsResult',
+  '_Sdk3HandCodedKeepaliveResult',
+] as const;
+
 /**
- * iqR0V1mt, deprecation step (option b): the generated multipart models are
- * re-exported ALONGSIDE the deprecated `_Sdk3HandCoded*` shapes, and the
- * getUploadStatus() aggregate gets its stable name. These are compile-time
- * checks (enforced by `npm run check:tests`); the runtime assertion only keeps
- * vitest from reporting an empty test.
+ * iqR0V1mt step 2 (aHgScsLJ): the resume methods return the generated models
+ * with `Date` timestamps and the hand-coded shapes are removed. The type
+ * assertions are enforced by `npm run check:tests`; the snapshot assertion
+ * ties the removal to the computed export surface (api-surface.test.ts diffs
+ * that snapshot against the source barrel).
  */
-describe('multipart resume types (iqR0V1mt deprecation step)', () => {
-  it('getUploadStatus() returns MultipartUploadState, the same shape as the deprecated name', () => {
-    type Returned = Awaited<ReturnType<GislClient['getUploadStatus']>>;
-    const asStable = (r: Returned): MultipartUploadState => r;
-    const asDeprecated = (s: MultipartUploadState): _Sdk3HandCodedMultipartStatusResult => s;
-    expect([asStable, asDeprecated]).toHaveLength(2);
+describe('multipart resume types (aHgScsLJ post-removal guard)', () => {
+  it('the removed names have no row in either public-surface snapshot', () => {
+    const snapshotDir = join(__dirname, '..', 'api-surface');
+    for (const file of ['index.txt', 'index.browser.txt']) {
+      const names = readFileSync(join(snapshotDir, file), 'utf8')
+        .split('\n')
+        .map((line) => line.split('\t')[0]);
+      // Positive control: the snapshot parse sees a name that IS exported.
+      expect(names).toContain('MultipartUploadState');
+      for (const removed of REMOVED_NAMES) {
+        expect(names).not.toContain(removed);
+      }
+    }
   });
 
-  it('the generated models are importable from the SDK and carry Date timestamps', () => {
-    const partDate = (p: MultipartPartListing): Date => p.lastModified;
-    const presignDate = (p: PresignedUrlPart): Date => p.expiresAt;
-    const keepaliveDate = (k: MultipartKeepaliveResponse): Date => k.manifestExpiresAt;
-    expect([partDate, presignDate, keepaliveDate]).toHaveLength(3);
+  it('getUploadStatus() returns MultipartUploadState with Date | null manifest and Date part timestamps', () => {
+    type Returned = Awaited<ReturnType<GislClient['getUploadStatus']>>;
+    expectTypeOf<Returned>().toEqualTypeOf<MultipartUploadState>();
+    expectTypeOf<MultipartUploadState['manifestExpiresAt']>().toEqualTypeOf<Date | null>();
+    expectTypeOf<
+      MultipartUploadState['uploadedParts'][number]
+    >().toEqualTypeOf<MultipartPartListing>();
+    expectTypeOf<MultipartPartListing['lastModified']>().toEqualTypeOf<Date>();
+  });
+
+  it('presignParts() and keepaliveUpload() return the generated models with Date timestamps', () => {
+    type Presign = Awaited<ReturnType<GislClient['presignParts']>>;
+    type Keepalive = Awaited<ReturnType<GislClient['keepaliveUpload']>>;
+    expectTypeOf<Presign>().toEqualTypeOf<MultipartPresignResponse>();
+    expectTypeOf<Keepalive>().toEqualTypeOf<MultipartKeepaliveResponse>();
+    expectTypeOf<PresignedUrlPart['expiresAt']>().toEqualTypeOf<Date>();
+    expectTypeOf<MultipartKeepaliveResponse['manifestExpiresAt']>().toEqualTypeOf<Date>();
   });
 });

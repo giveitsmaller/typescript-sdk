@@ -69,21 +69,13 @@ export type {
   DeliveryOutputRefPayload,
   WorkflowProcessingPayload,
   ProcessingClassHintPayload,
-  // SDK-3 (Wb6ebOMM) resume-support surface. Hand-coded until contracts
-  // ticket HxUmVr3Y publishes the OpenAPI schemas; every type is prefixed
-  // `_Sdk3HandCoded` so the regen sweep finds every consumer via grep.
+  // SDK-3 (Wb6ebOMM) resume-support surface.
   MultipartCheckpointState,
-  _Sdk3HandCodedUploadedPart,
-  _Sdk3HandCodedMultipartStatusResult,
-  _Sdk3HandCodedPresignedPart,
-  _Sdk3HandCodedPresignPartsResult,
-  _Sdk3HandCodedKeepaliveResult,
-  // iqR0V1mt — the stable name for the getUploadStatus() aggregate.
+  // iqR0V1mt — the getUploadStatus() aggregate (no generated equivalent).
   MultipartUploadState,
 } from './types.js';
-// iqR0V1mt — the generated multipart-resume models, re-exported ALONGSIDE the
-// deprecated `_Sdk3HandCoded*` shapes for one release; the resume methods
-// switch to these (Date timestamps) in the next minor.
+// iqR0V1mt — the generated multipart-resume models the resume methods return
+// (presignParts / keepaliveUpload, and the parts inside MultipartUploadState).
 export type {
   MultipartPartListing,
   PresignedUrlPart,

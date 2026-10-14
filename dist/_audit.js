@@ -66,11 +66,6 @@ export function _runAudit() {
     accept();
     accept();
     accept();
-    accept();
-    accept();
-    accept();
-    accept();
-    accept();
     // T1 / wVU4xHx3 — ergonomic-layer entry points.
     accept();
     accept();

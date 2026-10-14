@@ -1,8 +1,3 @@
-_Sdk3HandCodedKeepaliveResult	type
-_Sdk3HandCodedMultipartStatusResult	type
-_Sdk3HandCodedPresignedPart	type
-_Sdk3HandCodedPresignPartsResult	type
-_Sdk3HandCodedUploadedPart	type
 AccountLimitEntry	type
 AccountLimits	type
 AccountLimitsLimits	type

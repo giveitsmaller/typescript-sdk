@@ -4,7 +4,7 @@
 // blobByteSource, which never touches these). Kept as a STATIC import (not a
 // dynamic one) so `vi.mock('node:fs/promises')` still intercepts it in tests.
 import { open, stat, basename } from './node-fs.js';
-import { AudioWatermarkDecodeRequestToJSON, AudioWatermarkDecodeResponseFromJSON, ExternalImportCreatedResponseFromJSON, ExternalImportRequestToJSON, LoginUser200ResponseDataFromJSON, AccountLimitsFromJSON, GetProfile200ResponseDataFromJSON, CreditsBalanceResponseFromJSON, BillingCheckoutRequestToJSON, BillingCheckoutSessionFromJSON, CheckoutSessionStatusResponseDataStatusEnum, CreditsUsageResponseFromJSON, UploadResponseFromJSON, UploadProbeResponseFromJSON, MultipartInitiateResponseFromJSON, MultipartInitiateRequestMetadataHintToJSON, MultipartCompleteResponseFromJSON, MultipartCompleteRequestToJSON, WorkflowCancelResponseFromJSON, WorkflowArchiveResponseFromJSON, WorkflowRestoreResponseFromJSON, WorkflowCreateResponseFromJSON, WorkflowResumeResponseFromJSON, WorkflowStatusResponseFromJSON, WorkflowListResponseFromJSON, WorkflowDownloadResponseFromJSON, MetadataResponseFromJSON, OperationsSchemaResponseFromJSON, RetryResponseFromJSON, WorkflowStatus, AuthErrorResponseFromJSON, AuthErrorType, AuthRejectionEnvelopeFromJSON, AuthRejectionEnvelopeErrorTypeEnum, BalanceExhaustedResponseFromJSON, BalanceExhaustedResponseRequiredActionEnum, FeatureNotAvailableResponseFromJSON, FeatureTierRestrictedResponseFromJSON, LongFormConcurrencyLimitResponseFromJSON, TierRestrictionKind, TierRestrictionResponseFromJSON, WorkflowExpiredResponseFromJSON, ProbePendingResponseFromJSON, UploadSizeExceedsTierResponseFromJSON, UploadDurationExceedsTierResponseFromJSON, UploadConstraintsAppliedProcessingClassPreAssignmentEnum, UploadThresholdsSingleShotMaxBytesEnum, UploadThresholdsMultipartChunkSizeEnum, UploadThresholdsMultipartConcurrencyDefaultEnum, } from '@giveitsmaller/contracts/openapi';
+import { AudioWatermarkDecodeRequestToJSON, AudioWatermarkDecodeResponseFromJSON, ExternalImportCreatedResponseFromJSON, ExternalImportRequestToJSON, LoginUser200ResponseDataFromJSON, AccountLimitsFromJSON, GetProfile200ResponseDataFromJSON, CreditsBalanceResponseFromJSON, BillingCheckoutRequestToJSON, BillingCheckoutSessionFromJSON, CheckoutSessionStatusResponseDataStatusEnum, CreditsUsageResponseFromJSON, UploadResponseFromJSON, UploadProbeResponseFromJSON, MultipartInitiateResponseFromJSON, MultipartInitiateRequestMetadataHintToJSON, MultipartCompleteResponseFromJSON, MultipartCompleteRequestToJSON, MultipartPresignResponseFromJSON, MultipartKeepaliveResponseFromJSON, MultipartStatusResponseFromJSON, WorkflowCancelResponseFromJSON, WorkflowArchiveResponseFromJSON, WorkflowRestoreResponseFromJSON, WorkflowCreateResponseFromJSON, WorkflowResumeResponseFromJSON, WorkflowStatusResponseFromJSON, WorkflowListResponseFromJSON, WorkflowDownloadResponseFromJSON, MetadataResponseFromJSON, OperationsSchemaResponseFromJSON, RetryResponseFromJSON, WorkflowStatus, AuthErrorResponseFromJSON, AuthErrorType, AuthRejectionEnvelopeFromJSON, AuthRejectionEnvelopeErrorTypeEnum, BalanceExhaustedResponseFromJSON, BalanceExhaustedResponseRequiredActionEnum, FeatureNotAvailableResponseFromJSON, FeatureTierRestrictedResponseFromJSON, LongFormConcurrencyLimitResponseFromJSON, TierRestrictionKind, TierRestrictionResponseFromJSON, WorkflowExpiredResponseFromJSON, ProbePendingResponseFromJSON, UploadSizeExceedsTierResponseFromJSON, UploadDurationExceedsTierResponseFromJSON, UploadConstraintsAppliedProcessingClassPreAssignmentEnum, UploadThresholdsSingleShotMaxBytesEnum, UploadThresholdsMultipartChunkSizeEnum, UploadThresholdsMultipartConcurrencyDefaultEnum, } from '@giveitsmaller/contracts/openapi';
 import { GislAbortError, GislApiError, GislAuthError, GislAuthRejectionError, GislBalanceExhaustedError, GislConfigError, GislError, GislFeatureNotAvailableError, GislFeatureTierRestrictedError, GislLongFormConcurrencyError, GislMultipartPartCountError, GislMultipartPartError, GislMultipartSessionNotFoundError, GislUnsupportedFileTypeError, GislMultipartSessionOwnershipError, GislMultipartSessionAuthRequiredError, GislTierRestrictedError, GislTimeoutError, GislProbePendingError, GislResponseContractError, GislStreamHostNotDeclaredError, GislUploadCapExceededError, GislValidationError, GislWorkflowExpiredError, } from './errors.js';
 // Stream-host vocabulary for the fail-closed `streamEvents` guard. The
 // resolver itself runs in `gisl.create()`; the client only reports what a
@@ -164,6 +164,40 @@ function readContractBody(deserialize, raw, requestPath) {
 function responseContractError(requestPath, detail, cause) {
     const operation = requestPath.split('?')[0] ?? requestPath;
     return new GislResponseContractError(`Response from ${operation} does not match the contract: ${detail}`, { operation, path: null, cause });
+}
+// aHgScsLJ — multipart resume readers. The generated multipart `FromJSON`
+// helpers convert timestamps with a bare `new Date(...)` and validate nothing,
+// so each reader checks the RAW envelope first (a missing array would otherwise
+// be a raw TypeError inside the helper) and every produced `Date` after.
+function isWireObject(value) {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+// RFC 3339 date-time (the contract's `format: date-time`). `new Date()` alone would
+// accept a bare date, an RFC 2822 string or "1", so the RAW wire string is checked
+// against this before the generated reader converts it.
+// The pattern alone would still let `new Date()` silently roll an impossible
+// calendar value forward (2026-02-29 becomes 2026-03-01), so the captured fields
+// are range-checked against the real calendar too.
+const ISO_8601_DATE_TIME = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-](\d{2}):(\d{2}))$/;
+function isIsoDateTime(value) {
+    if (typeof value !== 'string')
+        return false;
+    const m = ISO_8601_DATE_TIME.exec(value);
+    if (m === null)
+        return false;
+    const [year, month, day, hour, minute, second] = m.slice(1, 7).map(Number);
+    const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    const offsetHour = m[7] === undefined ? 0 : Number(m[7]);
+    const offsetMinute = m[8] === undefined ? 0 : Number(m[8]);
+    return (month >= 1 && month <= 12 &&
+        day >= 1 && day <= daysInMonth &&
+        hour <= 23 && minute <= 59 && second <= 59 &&
+        offsetHour <= 23 && offsetMinute <= 59);
+}
+function requireValidDate(value, method, field) {
+    if (!(value instanceof Date) || Number.isNaN(value.getTime())) {
+        throw new GislError(`${method}: ${field} is not a valid ISO-8601 timestamp.`);
+    }
 }
 // Canonical human-readable fallback when a failure envelope carries NO `message`
 // field. Kept IDENTICAL to the PHP SDK (`GislClient::fallbackErrorMessage`) so a
@@ -1301,7 +1335,10 @@ export class GislClient {
      * PUT. `onCheckpoint` fires OUTSIDE the retry-scoped path after every
      * successful PUT — a callback-throw must not trigger a duplicate PUT.
      *
-     * TODO(HxUmVr3Y): replace inline hand-coded request body marshalling on regen.
+     * When `/status` reports `manifestExpiresAt: null` (the manifest TTL lapsed
+     * or was never initialised) the resume calls `keepaliveUpload()` FIRST —
+     * before the entry checkpoint and before any presign — so every
+     * `onCheckpoint` call carries a non-empty ISO-8601 `manifestExpiresAt`.
      */
     async multipartResume(source, fileName, totalSize, resumeUploadId, options) {
         // Step 1: Walk /status for the authoritative session state.
@@ -1374,6 +1411,27 @@ export class GislClient {
             uploadedBytes += p.sizeBytes;
         }
         options?.onProgress?.(uploadedBytes, totalSize);
+        // The contract says a client SHOULD keepalive before re-presigning when
+        // /status reports a null manifest expiry. Doing it here, before the entry
+        // checkpoint, keeps MultipartCheckpointState.manifestExpiresAt a real
+        // instant on every call instead of an empty or invented one.
+        let manifestExpiresAt;
+        if (status.manifestExpiresAt === null) {
+            const keepalive = await this.keepaliveUpload(status.uploadId, {
+                signal: options?.signal,
+            });
+            if (keepalive.uploadId !== resumeUploadId) {
+                throw new GislError('multipartResume: /keepalive response uploadId does not match resumeUploadId ' +
+                    `(expected ${resumeUploadId}, got ${String(keepalive.uploadId)}).`);
+            }
+            manifestExpiresAt = keepalive.manifestExpiresAt;
+        }
+        else {
+            manifestExpiresAt = status.manifestExpiresAt;
+        }
+        // Both sources were Invalid-Date-checked by their readers, so this cannot
+        // throw a RangeError.
+        const manifestExpiresAtIso = manifestExpiresAt.toISOString();
         const fireCheckpoint = (extraPartNumber) => {
             const all = [...uploaded.keys()];
             if (extraPartNumber !== undefined)
@@ -1383,7 +1441,7 @@ export class GislClient {
                 uploadId: status.uploadId,
                 totalParts: status.totalParts,
                 uploadedPartNumbers: all,
-                manifestExpiresAt: status.manifestExpiresAt,
+                manifestExpiresAt: manifestExpiresAtIso,
             };
             // Callback fires OUTSIDE retry-scope. A throw here propagates and
             // fails the upload but cannot trigger a duplicate PUT.
@@ -1478,7 +1536,7 @@ export class GislClient {
                             partNumber: part.partNumber,
                             etag,
                             sizeBytes: contentLength,
-                            lastModified: new Date().toISOString(),
+                            lastModified: new Date(),
                         });
                         uploadedBytes = Math.min(uploadedBytes + contentLength, totalSize);
                         options?.onProgress?.(uploadedBytes, totalSize);
@@ -1572,9 +1630,8 @@ export class GislClient {
         // `processingClassPreAssignment = 'unknown'`. Consumers needing
         // authoritative post-upload metadata SHOULD call `getMetadata(fileId)`
         // (the fresh-upload path's docblock already says the same).
-        // TODO(HxUmVr3Y): when contracts ships the resume-support schemas,
-        // extend `/status` (or add `/multipart/{id}/manifest`) to carry
-        // mime_type + constraints_applied so this sentinel can go away.
+        // The sentinel can go only when the contract extends `/status` (or adds
+        // a `/multipart/{id}/manifest`) to carry mime_type + constraints_applied.
         return {
             fileId: completeResp.uploadId,
             originalName: fileName,
@@ -1604,7 +1661,12 @@ export class GislClient {
      * Non-existent / expired sessions return 404 → `GislMultipartSessionNotFoundError`.
      * Authed-but-non-owning callers return 403 → `GislMultipartSessionOwnershipError`.
      *
-     * TODO(HxUmVr3Y): replace hand-coded response shape on regen.
+     * Every `uploadedParts[].lastModified` is a `Date`. `manifestExpiresAt` is a
+     * `Date`, or `null` when the server reports the manifest TTL as lapsed or
+     * never initialised (call `keepaliveUpload()` before re-presigning then); it
+     * comes from the last page. A malformed page — including a missing
+     * `manifest_expires_at` key, an empty string, or an unparseable timestamp —
+     * throws `GislError`.
      */
     async getUploadStatus(uploadId, opts = {}) {
         if (typeof uploadId !== 'string' || uploadId === '') {
@@ -1625,7 +1687,9 @@ export class GislClient {
      * - entries unique
      * - `totalParts` <=10 000 (S3 hard limit; mirrors the SDK-1 ceiling guard)
      *
-     * TODO(HxUmVr3Y): replace hand-coded request/response shapes on regen.
+     * Returns the generated `MultipartPresignResponse`; each
+     * `presignedUrls[].expiresAt` is a `Date`. A malformed response (including
+     * an unparseable `expires_at`) throws `GislError`.
      */
     async presignParts(uploadId, partNumbers, totalParts, opts = {}) {
         if (typeof uploadId !== 'string' || uploadId === '') {
@@ -1666,20 +1730,22 @@ export class GislClient {
             // generated `*RequestToJSON` helper on regen.
             body: { part_numbers: [...partNumbers] },
             deserialize: (raw) => {
-                // Hand-coded snake_case -> camelCase. TODO(HxUmVr3Y): replace with
-                // generated FromJSON helper on regen.
-                const r = raw;
-                if (typeof r.upload_id !== 'string' || !Array.isArray(r.presigned_urls)) {
+                if (!isWireObject(raw) ||
+                    typeof raw.upload_id !== 'string' ||
+                    !Array.isArray(raw.presigned_urls)) {
                     throw new GislError('presignParts: malformed response envelope.');
                 }
-                return {
-                    uploadId: r.upload_id,
-                    presignedUrls: r.presigned_urls.map((p) => ({
-                        partNumber: p.part_number,
-                        url: p.url,
-                        expiresAt: p.expires_at,
-                    })),
-                };
+                for (const entry of raw.presigned_urls) {
+                    if (!isWireObject(entry) || !isIsoDateTime(entry.expires_at)) {
+                        throw new GislError('presignParts: malformed response envelope (presigned_urls entry ' +
+                            'missing an ISO-8601 expires_at).');
+                    }
+                }
+                const presigned = readContractBody(MultipartPresignResponseFromJSON, raw, path);
+                for (const part of presigned.presignedUrls) {
+                    requireValidDate(part.expiresAt, 'presignParts', `presigned_urls[${String(part.partNumber)}].expires_at`);
+                }
+                return presigned;
             },
             signal: opts.signal,
         });
@@ -1695,7 +1761,9 @@ export class GislClient {
      * clock skew between client and server. The server atomically refreshes
      * the Redis EXPIRE for the manifest key; the call is idempotent.
      *
-     * TODO(HxUmVr3Y): replace hand-coded response shape on regen.
+     * Returns the generated `MultipartKeepaliveResponse`; `manifestExpiresAt` is
+     * a `Date` and always present (a missing, empty or unparseable
+     * `manifest_expires_at` throws `GislError`).
      */
     async keepaliveUpload(uploadId, opts = {}) {
         if (typeof uploadId !== 'string' || uploadId === '') {
@@ -1708,17 +1776,14 @@ export class GislClient {
             // other JSON-bodied POSTs. The endpoint ignores any fields if present.
             body: {},
             deserialize: (raw) => {
-                // Hand-coded snake_case -> camelCase. TODO(HxUmVr3Y): replace with
-                // generated FromJSON helper on regen.
-                const r = raw;
-                if (typeof r.upload_id !== 'string' ||
-                    typeof r.manifest_expires_at !== 'string') {
+                if (!isWireObject(raw) ||
+                    typeof raw.upload_id !== 'string' ||
+                    !isIsoDateTime(raw.manifest_expires_at)) {
                     throw new GislError('keepaliveUpload: malformed response envelope.');
                 }
-                return {
-                    uploadId: r.upload_id,
-                    manifestExpiresAt: r.manifest_expires_at,
-                };
+                const keepalive = readContractBody(MultipartKeepaliveResponseFromJSON, raw, path);
+                requireValidDate(keepalive.manifestExpiresAt, 'keepaliveUpload', 'manifest_expires_at');
+                return keepalive;
             },
             signal: opts.signal,
         });
@@ -1745,7 +1810,7 @@ export class GislClient {
         let totalParts = 0;
         let multipartUploadId = '';
         let cloudKey = '';
-        let manifestExpiresAt = '';
+        let manifestExpiresAt = null;
         let recommendedChunkSize = 0;
         let pageCount = 0;
         while (true) {
@@ -1764,51 +1829,75 @@ export class GislClient {
             // template collapses to `/status{id}` and false-drifts — same reason
             // getSchema and getCreditsUsage concatenate their querystrings.
             const path = `/api/uploads/multipart/${encodeURIComponent(uploadId)}/status` + query;
-            const page = await this.request('GET', path, { signal: opts.signal });
-            // Defensive: server contract pins these fields. Strict-validate every
-            // top-level field on each page (code-reviewer P7) so a malformed wire
-            // envelope cannot silently coerce a missing key to '' / 0 / NaN and
-            // flow it into MultipartCheckpointState.manifestExpiresAt or downstream
-            // chunkSize guards.
-            if (typeof page.total_parts !== 'number' || page.total_parts < 1) {
-                throw new GislError('getUploadStatus: server page missing or invalid total_parts.');
+            const page = await this.request('GET', path, {
+                deserialize: (raw) => {
+                    // Defensive: server contract pins these fields. Strict-validate every
+                    // top-level field on the RAW page (code-reviewer P7) so a malformed
+                    // wire envelope cannot silently coerce a missing key to '' / 0 / NaN
+                    // and flow it into MultipartCheckpointState.manifestExpiresAt or
+                    // downstream chunkSize guards.
+                    if (!isWireObject(raw) ||
+                        typeof raw.total_parts !== 'number' ||
+                        raw.total_parts < 1) {
+                        throw new GislError('getUploadStatus: server page missing or invalid total_parts.');
+                    }
+                    // manifest_expires_at is nullable on the contract (TTL lapsed or never
+                    // initialised), so an explicit null is accepted. An ABSENT key is not:
+                    // the generated reader maps absent and null alike, and a missing key
+                    // is a malformed page, not a lapsed manifest.
+                    const rawManifestExpiresAt = raw.manifest_expires_at;
+                    const manifestExpiresAtValid = Object.prototype.hasOwnProperty.call(raw, 'manifest_expires_at') &&
+                        (rawManifestExpiresAt === null ||
+                            isIsoDateTime(rawManifestExpiresAt));
+                    if (typeof raw.upload_id !== 'string' ||
+                        raw.upload_id !== uploadId ||
+                        typeof raw.multipart_upload_id !== 'string' ||
+                        raw.multipart_upload_id === '' ||
+                        typeof raw.cloud_key !== 'string' ||
+                        raw.cloud_key === '' ||
+                        !manifestExpiresAtValid ||
+                        typeof raw.recommended_chunk_size !== 'number') {
+                        throw new GislError('getUploadStatus: server page missing required fields or returned a ' +
+                            `mismatching upload_id (expected ${uploadId}, got ` +
+                            `${String(raw.upload_id)}).`);
+                    }
+                    if (!Array.isArray(raw.uploaded_parts)) {
+                        throw new GislError('getUploadStatus: server page missing the uploaded_parts array.');
+                    }
+                    for (const entry of raw.uploaded_parts) {
+                        if (!isWireObject(entry) || !isIsoDateTime(entry.last_modified)) {
+                            throw new GislError('getUploadStatus: uploaded_parts entry missing an ISO-8601 last_modified.');
+                        }
+                    }
+                    const built = readContractBody(MultipartStatusResponseFromJSON, raw, path);
+                    for (const part of built.uploadedParts) {
+                        requireValidDate(part.lastModified, 'getUploadStatus', `uploaded_parts[${String(part.partNumber)}].last_modified`);
+                    }
+                    if (built.manifestExpiresAt !== null) {
+                        requireValidDate(built.manifestExpiresAt, 'getUploadStatus', 'manifest_expires_at');
+                    }
+                    return built;
+                },
+                signal: opts.signal,
+            });
+            totalParts = page.totalParts;
+            multipartUploadId = page.multipartUploadId;
+            cloudKey = page.cloudKey;
+            manifestExpiresAt = page.manifestExpiresAt;
+            recommendedChunkSize = page.recommendedChunkSize;
+            for (const p of page.uploadedParts) {
+                collected.push(p);
             }
-            if (typeof page.upload_id !== 'string' ||
-                page.upload_id !== uploadId ||
-                typeof page.multipart_upload_id !== 'string' ||
-                page.multipart_upload_id === '' ||
-                typeof page.cloud_key !== 'string' ||
-                page.cloud_key === '' ||
-                typeof page.manifest_expires_at !== 'string' ||
-                page.manifest_expires_at === '' ||
-                typeof page.recommended_chunk_size !== 'number') {
-                throw new GislError('getUploadStatus: server page missing required fields or returned a ' +
-                    `mismatching upload_id (expected ${uploadId}, got ` +
-                    `${String(page.upload_id)}).`);
-            }
-            totalParts = page.total_parts;
-            multipartUploadId = page.multipart_upload_id;
-            cloudKey = page.cloud_key;
-            manifestExpiresAt = page.manifest_expires_at;
-            recommendedChunkSize = page.recommended_chunk_size;
-            for (const p of page.uploaded_parts ?? []) {
-                collected.push({
-                    partNumber: p.part_number,
-                    etag: p.etag,
-                    sizeBytes: p.size_bytes,
-                    lastModified: p.last_modified,
-                });
-            }
-            if (!page.is_truncated)
+            if (!page.isTruncated)
                 break;
             // Advance cursor; guard against a contract-violating non-advancing
             // marker that would loop forever.
-            if (typeof page.next_part_number_marker !== 'number' ||
-                page.next_part_number_marker <= cursor) {
+            if (typeof page.nextPartNumberMarker !== 'number' ||
+                page.nextPartNumberMarker <= cursor) {
                 throw new GislError('getUploadStatus: server is_truncated=true but next_part_number_marker ' +
-                    `did not advance (was ${cursor}, got ${String(page.next_part_number_marker)}).`);
+                    `did not advance (was ${cursor}, got ${String(page.nextPartNumberMarker)}).`);
             }
-            cursor = page.next_part_number_marker;
+            cursor = page.nextPartNumberMarker;
         }
         // Sort ascending by partNumber — server SHOULD already deliver in order
         // page-by-page, but a defensive sort keeps the aggregated shape's
