@@ -3716,9 +3716,14 @@ export class GislClient {
    * after the previous create started (a refusal costs a `workflow_create`
    * token), and waits out a re-create refused with a plain `429
    * TOO_MANY_REQUESTS` the same way. `DUPLICATE_IN_PROGRESS` and the long-form
-   * concurrency 429 are rethrown at once. When the probe still has not landed
-   * at the end of a budget of at least 900 s, it makes ONE last create at the
-   * boundary, which the server should then accept.
+   * concurrency 429 are rethrown at once. Under the DEFAULT budget, when the
+   * probe still has not landed at its end, it makes ONE last create about 2 s
+   * past it (the server's bound is strict, in whole seconds), which the server
+   * should then accept; so the default budget may end up to about 3 s late. An
+   * explicit `timeoutMs` is a strict cap: no create is scheduled past it, and a
+   * late timer may start one at most 1 s past (4v7Vwvcw). With an explicit
+   * budget of at least about 902 s it makes that one create once the server's
+   * 900 s bound has passed, instead of polling to the budget's end.
    *
    * On a guest client (`gisl.anonymous()`) the probe endpoint is sign-in only, so
    * it does NOT poll: it re-creates on the refusal's Retry-After, else a doubling

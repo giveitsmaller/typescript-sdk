@@ -34,8 +34,9 @@ export const GUEST_BACKOFF_MAX_MS = 30_000;
  */
 const BOUNDARY_SLACK_MS = 1_000;
 /**
- * How far past the budget the boundary create starts, when the budget reaches
- * the contract bound. The server stops gating only when `waitedSeconds > 900`,
+ * How far past the server's gate opening (the first refusal plus
+ * PROBE_WAIT_BOUND_MS) the boundary create starts: past the DEFAULT budget's end,
+ * or inside an explicit budget that reaches it (a shorter one gets none). The server stops gating only when `waitedSeconds > 900`,
  * strict, in WHOLE seconds from the upload's timestamp
  * (compression_api CreateWorkflowCommandHandler.php:3095-3096), so a create at
  * exactly 900 s can still be refused: it must land about 1 s plus the
@@ -60,7 +61,11 @@ export interface CreateAwaitingProbeOptions {
    * ONE budget (ms) for the whole recovery - the refusal's Retry-After plus
    * every probe wait and create gap. Default {@link PROBE_WAIT_BOUND_MS}
    * (900 s), for guests and signed-in callers alike. Past it the original
-   * refusal is rethrown.
+   * refusal is rethrown. The DEFAULT budget ends with a boundary create about
+   * 2 s past it; an explicit one is a strict cap: no create is scheduled past
+   * it, and a late timer may start one at most 1 s past. An explicit budget of
+   * at least about 902 s makes that one create once the server's 900 s bound has
+   * passed, and stops polling there.
    */
   timeoutMs?: number;
   /** Whole-run deadline (epoch ms): nothing starts past it (GislTimeoutError). */
@@ -98,10 +103,15 @@ export async function createWorkflowAwaitingProbe(
   options: CreateAwaitingProbeOptions = {},
 ): Promise<WorkflowCreateResponse> {
   const budgetMs = Math.max(0, options.timeoutMs ?? PROBE_WAIT_BOUND_MS);
-  // Only a budget that reaches the contract bound is waiting for the server's
-  // bypass; a shorter explicit budget's last create stays at its own end.
-  const boundaryMarginMs = budgetMs >= PROBE_WAIT_BOUND_MS ? BOUNDARY_MARGIN_MS : 0;
+  // Only the DEFAULT budget waits for the server's bypass with a create past its
+  // end; an explicit timeoutMs, however long, is a strict cap (codex DISCUSS on
+  // #562, 4v7Vwvcw): its last create stays at its own end.
+  const defaultBudget = options.timeoutMs === undefined;
+  const boundaryMarginMs = defaultBudget ? BOUNDARY_MARGIN_MS : 0;
   let budgetEnd: number | undefined;
+  // When the server's gate is known to be open: the contract bound after the
+  // FIRST refusal, which comes after the upload the server measures from.
+  let gateOpenAt: number | undefined;
   // Every give-up path rethrows the FIRST refusal, as documented; each retry's
   // own refusal is read only for its Retry-After and job_ref (codex d63a045d884c).
   let original: GislProbePendingError | undefined;
@@ -117,22 +127,25 @@ export async function createWorkflowAwaitingProbe(
   /**
    * Signed-in: sleep until the next create may start - the previous create's
    * start plus max(Retry-After, doubling backoff); the boundary create waits
-   * until BOUNDARY_MARGIN_MS past the budget. A start past the budget rethrows
-   * `firstRefusal` without creating (at the boundary, past the budget plus
-   * margin plus timer slack); one past the deadline throws GislTimeoutError.
+   * until `boundaryAt`. A start past the budget rethrows `firstRefusal` without
+   * creating (the default budget's boundary create: past `boundaryAt` plus timer
+   * slack); one past the deadline throws GislTimeoutError.
    */
   const paceCreate = async (
     createsMade: number,
     retryAfterMs: number | undefined,
     until: number,
-    atBoundary: boolean,
+    boundaryAt: number | undefined,
     firstRefusal: GislProbePendingError,
   ): Promise<void> => {
     const pacedAt = lastCreateAt + createGapMs(createsMade, retryAfterMs);
-    const startAt = atBoundary ? Math.max(pacedAt, until + BOUNDARY_MARGIN_MS) : pacedAt;
-    const latestStart = until + (atBoundary ? BOUNDARY_MARGIN_MS : 0) + BOUNDARY_SLACK_MS;
+    const startAt = boundaryAt !== undefined ? Math.max(pacedAt, boundaryAt) : pacedAt;
+    const latestStart = (boundaryAt ?? until) + BOUNDARY_SLACK_MS;
+    // The default budget's boundary create is scheduled past the budget by design;
+    // under an explicit budget nothing is scheduled past it (strict cap).
+    const scheduleLimit = boundaryAt !== undefined && defaultBudget ? latestStart : until;
     if (options.deadline !== undefined && startAt >= options.deadline) throw timeout();
-    if (startAt > (atBoundary ? latestStart : until)) throw firstRefusal;
+    if (startAt > scheduleLimit) throw firstRefusal;
     const waitMs = startAt - Date.now();
     if (waitMs > 0) await abortableSleep(waitMs, options.signal);
     // A late timer must not create past the deadline, nor past the budget
@@ -155,7 +168,7 @@ export async function createWorkflowAwaitingProbe(
       // and the long-form concurrency 429, which no back-off clears.
       if (!guest && original !== undefined && budgetEnd !== undefined && isCreateRateLimit(err)) {
         const retryAfterMs = parseRetryAfterMs(err.responseHeaders?.['retry-after']);
-        await paceCreate(attempt, retryAfterMs, budgetEnd, false, original);
+        await paceCreate(attempt, retryAfterMs, budgetEnd, undefined, original);
         continue;
       }
       if (!(err instanceof GislProbePendingError)) throw err;
@@ -170,8 +183,18 @@ export async function createWorkflowAwaitingProbe(
     if (!guest && fileIds.length === 0) throw firstRefusal;
     // One budget for the WHOLE recovery, Retry-After included (codex b08a5036e468):
     // submit() has no run deadline, so without it a server delay was unbounded.
-    budgetEnd ??= Date.now() + budgetMs;
+    if (budgetEnd === undefined) {
+      const recoveryStart = Date.now();
+      budgetEnd = recoveryStart + budgetMs;
+      gateOpenAt = recoveryStart + PROBE_WAIT_BOUND_MS;
+    }
     const until = budgetEnd;
+    const gateOpen = gateOpenAt as number;
+    // ONE rule for every budget: the boundary create lands BOUNDARY_MARGIN_MS past
+    // the open gate, when the caller gave no budget (the default, which then ends
+    // that margin late) or an explicit one that reaches it (within its cap).
+    const boundaryAt = gateOpen + BOUNDARY_MARGIN_MS;
+    const boundaryAllowed = defaultBudget || boundaryAt <= until;
     /** Ms left before the next step would cross the deadline (timeout) or the budget (refusal). */
     const leftBefore = (stepMs: number): number => {
       const now = Date.now();
@@ -194,9 +217,9 @@ export async function createWorkflowAwaitingProbe(
       if (guestFinalCreate) throw firstRefusal;
       // When the next wait would cross the budget, wait only what is left and make
       // ONE last create at the boundary: the server starts accepting just past the
-      // policy bound (codex 781cae520a36). With a budget that reaches the bound the
-      // wait runs BOUNDARY_MARGIN_MS past it, since the server's check is strict on
-      // whole seconds (Hal5c41E); a shorter explicit budget is honoured exactly.
+      // policy bound (codex 781cae520a36). Under the default budget the wait runs
+      // BOUNDARY_MARGIN_MS past it, since the server's check is strict on whole
+      // seconds (Hal5c41E); an explicit budget is honoured exactly (4v7Vwvcw).
       // The deadline still wins.
       const now = Date.now();
       let waitMs = delayMs;
@@ -218,10 +241,13 @@ export async function createWorkflowAwaitingProbe(
     }
     let atBoundary = false;
     for (const fileId of fileIds) {
-      const budgetLeft = leftBefore(0);
-      const deadlineLeft = options.deadline === undefined ? budgetLeft : options.deadline - Date.now();
+      // Polling stops once the server's gate is known to be open: past it a create
+      // is accepted whether or not the probe has landed.
+      const probeEnd = Math.min(until, gateOpen);
+      const probeLeft = Math.max(0, Math.min(leftBefore(0), probeEnd - Date.now()));
+      const deadlineLeft = options.deadline === undefined ? probeLeft : options.deadline - Date.now();
       const waited = await client.waitForProbe(fileId, {
-        timeoutMs: Math.min(budgetLeft, deadlineLeft),
+        timeoutMs: Math.min(probeLeft, deadlineLeft),
         signal: options.signal,
         // Spaced polls, and a probe 429 waited out: the per-user probe bucket is
         // 10/min on Free, which a 900 s wait at the default cadence would exhaust.
@@ -243,17 +269,17 @@ export async function createWorkflowAwaitingProbe(
       // The probe did not land. A passed deadline is a timeout, not a refusal.
       const now = Date.now();
       if (options.deadline !== undefined && now >= options.deadline) throw timeout();
-      // ONE last create at the budget boundary, only when this run's own budget
-      // (at least the contract bound) is what ended the wait, and only on time.
-      // Safe because the server's bound runs from the UPLOAD, while this budget
-      // starts at the first refusal, which comes after the upload: so budgetEnd
-      // >= upload + 900 s, and by now the server has stopped gating.
+      // ONE last create past the open gate, when the boundary is allowed (above),
+      // the gate clamp rather than the deadline ended the wait, and only on time.
+      // Safe because the server's bound runs from the UPLOAD, while gateOpen is
+      // measured from the first refusal, which comes after the upload: so
+      // boundaryAt > upload + 900 s, and by then the server has stopped gating.
       if (
         waited.reason === 'timeout' &&
-        budgetMs >= PROBE_WAIT_BOUND_MS &&
-        budgetLeft <= deadlineLeft &&
-        now >= until &&
-        now <= until + BOUNDARY_SLACK_MS
+        boundaryAllowed &&
+        probeLeft <= deadlineLeft &&
+        now >= probeEnd &&
+        now <= probeEnd + BOUNDARY_SLACK_MS
       ) {
         atBoundary = true;
         break;
@@ -263,7 +289,7 @@ export async function createWorkflowAwaitingProbe(
     if (!atBoundary && options.deadline !== undefined && Date.now() >= options.deadline) {
       throw new GislTimeoutError('Probe landed but maxWait elapsed before the workflow could be re-created');
     }
-    await paceCreate(attempt, retryAfterMs, until, atBoundary, firstRefusal);
+    await paceCreate(attempt, retryAfterMs, until, atBoundary ? boundaryAt : undefined, firstRefusal);
     boundaryCreateMade = atBoundary;
   }
 }

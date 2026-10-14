@@ -31,7 +31,11 @@ export interface CreateAwaitingProbeOptions {
      * ONE budget (ms) for the whole recovery - the refusal's Retry-After plus
      * every probe wait and create gap. Default {@link PROBE_WAIT_BOUND_MS}
      * (900 s), for guests and signed-in callers alike. Past it the original
-     * refusal is rethrown.
+     * refusal is rethrown. The DEFAULT budget ends with a boundary create about
+     * 2 s past it; an explicit one is a strict cap: no create is scheduled past
+     * it, and a late timer may start one at most 1 s past. An explicit budget of
+     * at least about 902 s makes that one create once the server's 900 s bound has
+     * passed, and stops polling there.
      */
     timeoutMs?: number;
     /** Whole-run deadline (epoch ms): nothing starts past it (GislTimeoutError). */
