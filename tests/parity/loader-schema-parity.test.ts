@@ -83,6 +83,72 @@ describe('parity loader matches fixture.schema.json', () => {
     });
   });
 
+  describe('DflFw0j1 split: last op only, never in files mode or a watermark block, options required', () => {
+    const SPLIT = { op: 'split', options: { mode: 'page_range', page_range: '1' } };
+    type Ops = Array<Record<string, unknown>>;
+    // Rebuild `raw[block]` with its `operations` replaced, leaving every other key intact.
+    const withOps = (stem: string, block: string, edit: (ops: Ops) => Ops): Record<string, unknown> => {
+      const raw = load(stem);
+      const spec = raw[block] as { operations: Ops };
+      return { ...raw, [block]: { ...spec, operations: edit(spec.operations) } };
+    };
+
+    it('loads the unmutated split fixtures', () => {
+      for (const stem of [
+        'ff_lowering_split_pdf_page_groups',
+        'ff_run_split_pdf_page_index',
+        'ff_submit_split_pdf_page_groups',
+      ]) {
+        expect(() => validateFixture(load(stem), pathOf(stem))).not.toThrow();
+      }
+    });
+
+    it('rejects split in files mode', () => {
+      const stem = 'ff_files_lowering_multi_compress';
+      expect(() => validateFixture(withOps(stem, 'files', (ops) => [...ops, SPLIT]), pathOf(stem))).toThrow(
+        /operations\[1\]\.op 'split' is not valid in files mode/,
+      );
+    });
+
+    it('rejects split in watermark overlay ops', () => {
+      const stem = 'ff_lowering_image_watermark_overlay';
+      const raw = load(stem);
+      const lowering = raw.lowering as { watermark: { overlay: Record<string, unknown> } };
+      const watermark = { ...lowering.watermark, overlay: { ...lowering.watermark.overlay, operations: [SPLIT] } };
+      expect(() => validateFixture({ ...raw, lowering: { ...lowering, watermark } }, pathOf(stem))).toThrow(
+        /\[0\]\.op 'split' is not valid in a watermark block/,
+      );
+    });
+
+    it('rejects split together with a watermark block', () => {
+      const stem = 'ff_lowering_image_watermark_overlay';
+      expect(() => validateFixture(withOps(stem, 'lowering', () => [SPLIT]), pathOf(stem))).toThrow(
+        /operations\[0\]\.op 'split' cannot be combined with a watermark block/,
+      );
+    });
+
+    it.each([
+      ['lowering', 'ff_lowering_split_pdf_page_groups'],
+      ['run', 'ff_run_split_pdf_page_index'],
+      ['submit', 'ff_submit_split_pdf_page_groups'],
+    ])('rejects split that is not the last op (%s)', (block, stem) => {
+      const raw = withOps(stem, block, (ops) => [...ops, { op: 'compress' }]);
+      const splitAt = (raw[block] as { operations: Ops }).operations.findIndex((op) => op.op === 'split');
+      expect(() => validateFixture(raw, pathOf(stem))).toThrow(
+        new RegExp(`operations\\[${splitAt}\\]\\.op 'split' must be the LAST op`),
+      );
+    });
+
+    it.each([
+      ['no options key', (op: Record<string, unknown>) => { const { options: _options, ...rest } = op; return rest; }],
+      ['an empty options mapping', (op: Record<string, unknown>) => ({ ...op, options: {} })],
+    ])('rejects a split op with %s', (_label, edit) => {
+      const stem = 'ff_lowering_split_pdf_page_groups';
+      const raw = withOps(stem, 'lowering', (ops) => ops.map((op) => (op.op === 'split' ? edit(op) : op)));
+      expect(() => validateFixture(raw, pathOf(stem))).toThrow(/split requires a non-empty 'options' mapping/);
+    });
+  });
+
   it('rejects an unknown fit', () => {
     const stem = 'ff_lowering_output_resize_format_change';
     const raw = load(stem);

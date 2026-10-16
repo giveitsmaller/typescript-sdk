@@ -95,13 +95,17 @@ export interface FixtureLoweringFile {
 }
 
 export interface FixtureLoweringOp {
-  readonly op: 'compress' | 'convert' | 'thumbnail' | 'text_watermark' | 'output' | 'resize';
+  readonly op: 'compress' | 'convert' | 'thumbnail' | 'text_watermark' | 'output' | 'resize' | 'split';
   readonly optimize?: string;
   readonly format?: string;
   readonly width?: number;
   readonly height?: number;
   readonly text?: string;
-  /** output: the OutputOptions bag (quality/metadata/background/progressive/…). */
+  /**
+   * output: the OutputOptions bag (quality/metadata/background/progressive/…).
+   * split: the split options bag, required and non-empty; split is always the
+   * LAST op (it returns a terminal SplitRecipe).
+   */
   readonly options?: Readonly<Record<string, unknown>>;
   /** resize / output: the fit mode (max|crop|scale). */
   readonly fit?: string;
@@ -963,7 +967,9 @@ export function validateFixture(raw: unknown, file: string): Fixture {
   };
 }
 
-const LOWERING_OPS = new Set(['compress', 'convert', 'thumbnail', 'text_watermark', 'output', 'resize']);
+// `split` (DflFw0j1) returns a terminal SplitRecipe, so the loaders also enforce
+// that it is the LAST op and never appears in files mode or a watermark block.
+const LOWERING_OPS = new Set(['compress', 'convert', 'thumbnail', 'text_watermark', 'output', 'resize', 'split']);
 const LOWERING_KEYS = new Set(['file', 'resolvedFileId', 'operations', 'watermark']);
 const LOWERING_FILE_KEYS = new Set(['kind', 'path', 'uploadId', 'key']);
 const LOWERING_OP_KEYS = new Set(['op', 'optimize', 'format', 'width', 'height', 'text', 'options', 'fit']);
@@ -1057,6 +1063,7 @@ function validateRun(value: unknown, ctx: string): FixtureRun {
     if (typeof o.op !== 'string' || !LOWERING_OPS.has(o.op)) {
       throw new Error(`${ctx} operations[${i}].op must be one of ${[...LOWERING_OPS].join('|')}`);
     }
+    assertSplitIsLast(o.op, i, (v.operations as unknown[]).length, ctx);
     validateLoweringOpParams(o.op, o, `${ctx} operations[${i}]`);
     return o as unknown as FixtureLoweringOp;
   });
@@ -1115,6 +1122,7 @@ function validateSubmit(value: unknown, ctx: string): FixtureSubmit {
     if (typeof o.op !== 'string' || !LOWERING_OPS.has(o.op)) {
       throw new Error(`${ctx} operations[${i}].op must be one of ${[...LOWERING_OPS].join('|')}`);
     }
+    assertSplitIsLast(o.op, i, (v.operations as unknown[]).length, ctx);
     validateLoweringOpParams(o.op, o, `${ctx} operations[${i}]`);
     return o as unknown as FixtureLoweringOp;
   });
@@ -1211,6 +1219,9 @@ function validateFiles(value: unknown, ctx: string): FixtureFiles {
     if (typeof o.op !== 'string' || !LOWERING_OPS.has(o.op)) {
       throw new Error(`${ctx} operations[${i}].op must be one of ${[...LOWERING_OPS].join('|')}`);
     }
+    if (o.op === 'split') {
+      throw new Error(`${ctx} operations[${i}].op 'split' is not valid in files mode (FilesRecipe has no split)`);
+    }
     // text_watermark has no MergedRecipe equivalent (the merged output exposes
     // compress/convert/thumbnail only) — reject it as a post-combine op so the
     // failure is at load time, not a runtime dispatch error.
@@ -1294,6 +1305,12 @@ function validateLowering(value: unknown, ctx: string): FixtureLowering {
         `${ctx} operations[${i}].op must be one of ${[...LOWERING_OPS].join('|')}`,
       );
     }
+    if (hasWatermark && o.op === 'split') {
+      throw new Error(
+        `${ctx} operations[${i}].op 'split' cannot be combined with a watermark block (split returns a terminal SplitRecipe)`,
+      );
+    }
+    assertSplitIsLast(o.op, i, (v.operations as unknown[]).length, ctx);
     validateLoweringOpParams(o.op, o, `${ctx} operations[${i}]`);
     return o as unknown as FixtureLoweringOp;
   });
@@ -1373,12 +1390,28 @@ function validateWatermarkOps(
     requireObject(op, ctx, `[${i}]`);
     const o = op as Record<string, unknown>;
     rejectUnknownKeys(o, LOWERING_OP_KEYS, `${ctx}[${i}]`);
+    if (o.op === 'split') {
+      throw new Error(`${ctx}[${i}].op 'split' is not valid in a watermark block (split returns a terminal SplitRecipe)`);
+    }
     if (typeof o.op !== 'string' || !allowed.has(o.op)) {
       throw new Error(`${ctx}[${i}].op must be one of ${[...allowed].join('|')}`);
     }
     validateLoweringOpParams(o.op, o, `${ctx}[${i}]`);
     return o as unknown as FixtureLoweringOp;
   });
+}
+
+/**
+ * `split` returns a terminal SplitRecipe, so nothing can chain after it: reject
+ * a split at any position but the last. Mirrors the PHP
+ * `FixtureLoader::assertSplitIsLast`.
+ */
+function assertSplitIsLast(op: string, i: number, count: number, ctx: string): void {
+  if (op === 'split' && i !== count - 1) {
+    throw new Error(
+      `${ctx} operations[${i}].op 'split' must be the LAST op (split returns a terminal SplitRecipe)`,
+    );
+  }
 }
 
 /**
@@ -1412,6 +1445,16 @@ function validateLoweringOpParams(op: string, o: Record<string, unknown>, ctx: s
     case 'compress':
       if ('optimize' in o && (typeof o.optimize !== 'string' || o.optimize === '')) {
         throw new Error(`${ctx} compress 'optimize' must be a non-empty string when present`);
+      }
+      break;
+    case 'split':
+      if (
+        typeof o.options !== 'object' ||
+        o.options === null ||
+        Array.isArray(o.options) ||
+        Object.keys(o.options).length === 0
+      ) {
+        throw new Error(`${ctx} split requires a non-empty 'options' mapping`);
       }
       break;
   }

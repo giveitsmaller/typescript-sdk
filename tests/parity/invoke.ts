@@ -20,7 +20,15 @@ import {
   type SequenceEntry,
 } from '../../src/merge.js';
 import { verifyWebhook } from '../../src/webhook.js';
-import { Recipe, FilesRecipe, MergedRecipe, WatermarkedRecipe, fileInput, type FileInput } from '../../src/file-first.js';
+import {
+  Recipe,
+  FilesRecipe,
+  MergedRecipe,
+  SplitRecipe,
+  WatermarkedRecipe,
+  fileInput,
+  type FileInput,
+} from '../../src/file-first.js';
 import type { OptimizeFor } from '../../src/generated/sdk_spec/enums.js';
 import type { WorkflowCreatePayload } from '../../src/types.js';
 
@@ -201,16 +209,17 @@ export function lowerFixture(fixture: Fixture): WorkflowCreatePayload {
       ? fileInput.uploadId(spec.file.uploadId as string)
       : fileInput.path(spec.file.path as string);
 
-  let recipe = new Recipe(input, spec.file.key ?? undefined);
-  for (const op of spec.operations) {
-    recipe = applyLoweringOp(recipe, op);
-  }
+  const recipe = applyLoweringChain(new Recipe(input, spec.file.key ?? undefined), spec.operations);
 
   // FF4a (Z7zTr789) — a `watermark` block lowers `file(base).watermark(overlay,
   // opts)` -> WatermarkedRecipe. The base recipe above carries the base's
   // preceding steps; build the overlay file-node + its own steps, then lower
   // against [baseId, overlayId].
   if (spec.watermark !== undefined) {
+    // The loader rejects split with a watermark block; this narrows the type.
+    if (!(recipe instanceof Recipe)) {
+      throw new Error(`[${fixture.name}] a watermark block cannot follow split (SplitRecipe is terminal)`);
+    }
     const ov = spec.watermark.overlay;
     const overlayInput: FileInput =
       ov.file.kind === 'upload_id'
@@ -258,10 +267,10 @@ export async function runRecipeFixture(fixture: Fixture): Promise<unknown> {
   // Bind the client as the Recipe's execution-only last ctor arg so run() has
   // a client (the lowering path constructs without one). The fixture's file
   // path is canned — the stub serves the upload response without real bytes.
-  let recipe = new Recipe(input, spec.file.key ?? undefined, [], undefined, undefined, client);
-  for (const op of spec.operations) {
-    recipe = applyLoweringOp(recipe, op);
-  }
+  const recipe = applyLoweringChain(
+    new Recipe(input, spec.file.key ?? undefined, [], undefined, undefined, client),
+    spec.operations,
+  );
 
   const result = await recipe.run({
     ...(spec.maxWait !== undefined ? { maxWait: spec.maxWait } : {}),
@@ -296,10 +305,10 @@ export async function submitRecipeFixture(fixture: Fixture): Promise<unknown> {
   // Bind the client as the Recipe's execution-only last ctor arg so submit()
   // has a client (the lowering path constructs without one). The recipe key (if
   // any) rides on the Handle but is NOT serialised by toJSON().
-  let recipe = new Recipe(input, spec.file.key ?? undefined, [], undefined, undefined, client);
-  for (const op of spec.operations) {
-    recipe = applyLoweringOp(recipe, op);
-  }
+  const recipe = applyLoweringChain(
+    new Recipe(input, spec.file.key ?? undefined, [], undefined, undefined, client),
+    spec.operations,
+  );
 
   const handle = await recipe.submit(spec.webhook);
   // Handle.toJSON() is the canonical DATA projection (mirrors PHP toArray()) —
@@ -470,6 +479,26 @@ function applyFilesOp(recipe: FilesRecipe, op: FixtureLoweringOp): FilesRecipe {
     default:
       throw new Error(`[files] unknown op '${String((op as { op: string }).op)}'`);
   }
+}
+
+/**
+ * Apply a lowering/run/submit op chain to a {@link Recipe}. A `split` op
+ * (DflFw0j1) turns the chain into a terminal {@link SplitRecipe}, so it must be
+ * the LAST op; the loaders enforce that, and this re-checks it. Mirrors PHP
+ * `Invoke::applyLoweringChain`.
+ */
+function applyLoweringChain(recipe: Recipe, ops: readonly FixtureLoweringOp[]): Recipe | SplitRecipe {
+  let current = recipe;
+  for (const [i, op] of ops.entries()) {
+    if (op.op === 'split') {
+      if (i !== ops.length - 1) {
+        throw new Error(`[lowering] split must be the last op (got it at ${i} of ${ops.length})`);
+      }
+      return current.split((op.options ?? {}) as Parameters<Recipe['split']>[0]);
+    }
+    current = applyLoweringOp(current, op);
+  }
+  return current;
 }
 
 function applyLoweringOp(recipe: Recipe, op: FixtureLoweringOp): Recipe {
