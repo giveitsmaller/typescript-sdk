@@ -112,11 +112,20 @@ describe('GislClient.maybeWaitForVideoProbe', () => {
     expect((probeCall?.[1] as RequestInit | undefined)?.method).toBe('POST');
   });
 
-  it('422-then-200 → polls then completes (delegates to never-bounce waitForProbe)', async () => {
-    fetchSpy.mockResolvedValueOnce(notLanded()).mockResolvedValueOnce(probeOk());
-    await client.maybeWaitForVideoProbe(FID, { enabled: true, isVideo: true, sizeBytes: LARGE, timeoutMs: 5000 });
-    expect(probeWasHit(fetchSpy)).toBe(true);
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  it('422-then-200 → polls then completes, the second poll a patient 3 s later (delegates to never-bounce waitForProbe)', async () => {
+    vi.useFakeTimers();
+    try {
+      fetchSpy.mockResolvedValueOnce(notLanded()).mockResolvedValueOnce(probeOk());
+      const done = client.maybeWaitForVideoProbe(FID, { enabled: true, isVideo: true, sizeBytes: LARGE, timeoutMs: 5000 });
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await done;
+      expect(probeWasHit(fetchSpy)).toBe(true);
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('never-bounce: video+multipart but probe always 422 + tiny timeout → returns void without throwing', async () => {
@@ -143,5 +152,73 @@ describe('GislClient.maybeWaitForVideoProbe', () => {
       client.maybeWaitForVideoProbe(FID, { enabled: true, isVideo: true, sizeBytes: LARGE, timeoutMs: 5000 }),
     ).resolves.toBeUndefined();
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  // --- patient polling (QDhKs5xv) -------------------------------------------
+  // The probe endpoint allows a Free account 10 polls/min. Without `patient`
+  // this wait polled ~20/min and a probe 429 failed the run before create.
+
+  describe('polls patiently', () => {
+    function rateLimited(): Response {
+      return new Response(
+        JSON.stringify({ success: false, error: 'TOO_MANY_REQUESTS', message: 'Too many requests' }),
+        { status: 429, headers: { 'Content-Type': 'application/json', 'Retry-After': '20' } },
+      );
+    }
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('a probe that never lands stays within 10 polls in any 60 s window', async () => {
+      const pollTimes: number[] = [];
+      const start = Date.now();
+      fetchSpy.mockImplementation(() => {
+        pollTimes.push(Date.now() - start);
+        return Promise.resolve(notLanded());
+      });
+      const done = client.maybeWaitForVideoProbe(FID, { enabled: true, isVideo: true, sizeBytes: LARGE, timeoutMs: 120_000 });
+      await vi.advanceTimersByTimeAsync(120_000);
+      await expect(done).resolves.toBeUndefined();
+      // Gaps 3, 6, 12, 24, then 30, 30 s.
+      expect(pollTimes).toEqual([0, 3_000, 9_000, 21_000, 45_000, 75_000, 105_000]);
+      for (const from of pollTimes) {
+        expect(pollTimes.filter((t) => t >= from && t < from + 60_000).length).toBeLessThanOrEqual(10);
+      }
+    });
+
+    it('the live not-ready answer (probe_not_ready, Retry-After: 3) no longer sets a 3 s cadence', async () => {
+      // The api answers a not-yet-probed upload with probe_not_ready and Retry-After: 3.
+      // Honoured as the whole gap, that was 20 polls a minute.
+      const pollTimes: number[] = [];
+      const start = Date.now();
+      fetchSpy.mockImplementation(() => {
+        pollTimes.push(Date.now() - start);
+        return Promise.resolve(
+          new Response(JSON.stringify({ success: false, error: 'UNPROCESSABLE_ENTITY', error_type: 'probe_not_ready' }), {
+            status: 422,
+            headers: { 'Content-Type': 'application/json', 'Retry-After': '3' },
+          }),
+        );
+      });
+      const done = client.maybeWaitForVideoProbe(FID, { enabled: true, isVideo: true, sizeBytes: LARGE, timeoutMs: 120_000 });
+      await vi.advanceTimersByTimeAsync(120_000);
+      await expect(done).resolves.toBeUndefined();
+      expect(pollTimes).toEqual([0, 3_000, 9_000, 21_000, 45_000, 75_000, 105_000]);
+    });
+
+    it('a probe 429 is waited out for its Retry-After and does not fail the call', async () => {
+      fetchSpy.mockResolvedValueOnce(rateLimited()).mockResolvedValueOnce(probeOk());
+      const done = client.maybeWaitForVideoProbe(FID, { enabled: true, isVideo: true, sizeBytes: LARGE, timeoutMs: 60_000 });
+      await vi.advanceTimersByTimeAsync(19_999);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(done).resolves.toBeUndefined();
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    });
   });
 });
