@@ -423,6 +423,8 @@ export const KNOWN_SDK_METHODS: ReadonlySet<string> = new Set([
   'compress',
   'thumbnail',
   'convert',
+  // JpgY3328: the single-op ergonomic split.
+  'split',
   'merge',
   // File-first builder-chain LOWERING marker (FF2a / MfV0PDok). Not a
   // GislClient method — mode=lowering dispatches off the `lowering` block.

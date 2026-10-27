@@ -9,6 +9,7 @@ import { createHmac } from 'node:crypto';
 
 import { GislClient } from '../../src/client.js';
 import { OperationBuilder } from '../../src/builder.js';
+import { validateVerbOptions } from '../../src/ergonomic/option_validation.js';
 import {
   MergeBuilder,
   asset as mergeAsset,
@@ -60,6 +61,10 @@ const ERGONOMIC_DISPATCH_VERBS: ReadonlySet<string> = new Set([
   'compress',
   'thumbnail',
   'convert',
+  // JpgY3328: `split` lowers through the same single-op builder; the
+  // ergonomic client's `split()` is a `validateVerbOptions` + `new
+  // OperationBuilder(..., 'split', ...)`, so the fixtures exercise it here.
+  'split',
   // `watermark` / `archive` deliberately omitted — see fixtures.ts for
   // why (v2 OperationType / multi-input shape mismatches).
 ]);
@@ -536,6 +541,9 @@ async function invokeErgonomic(
     | { submit: { webhook: string } }
     | { run: { maxWait: string | number; useSSE?: boolean; pollIntervalMs?: number } };
 
+  // Mirror the ergonomic client's `split()` (gisl.ts), which validates the bag
+  // before building; PHP's harness calls `GislErgonomicClient::split()` itself.
+  if (method === 'split') validateVerbOptions('split', opOptions);
   const builder = new OperationBuilder(client, method, input, opOptions);
   if ('submit' in terminal) {
     const handle = await builder.submit({ webhook: terminal.submit.webhook });
