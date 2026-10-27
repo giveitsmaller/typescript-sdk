@@ -563,7 +563,7 @@ function aggregateWorkflowStatus(statuses) {
  * declares the `status_poll` family — guarding `GET /api/workflows/{id}/status`
  * and `/downloads` — as a **sliding window of 60 requests per minute**, scaled
  * at consume time (`:177`, `:188`) by `UserTier::rateLimitMultiplier()`
- * (`Identity/Domain/Enums/UserTier.php:186-194`): Free and Basic ×1, Pro ×5,
+ * (`Identity/Domain/Enums/UserTier.php:186-194`): Pay as you go (also spelled basic / free) ×1, Pro ×5,
  * Max ×15, Enterprise ×20.
  *
  * ⇒ 100 ms is **600 requests/minute**: ten times the Free ceiling, twice Pro's,

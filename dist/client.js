@@ -1984,11 +1984,12 @@ export class GislClient {
      * The response's `billingEffect` field tells the caller what
      * happened to outstanding reservations:
      * - `unspent_reservation_released` — workflow was active or paused
-     *   and the unspent portion of the reservation has been refunded.
-     *   The refund appears as a separate `CreditTransaction` with
-     *   `type: refund`.
-     * - `none` — no refund (all reserved credits were already consumed
-     *   by completed jobs, or this is an idempotent re-cancel).
+     *   and the unspent portion of the reservation has been released.
+     *   The release appears as a separate `CreditTransaction` with
+     *   `type: reservation_release` (`reference_type:
+     *   workflow_reservation_release`). There is no `refund` type.
+     * - `none` — nothing released (all reserved credits were already
+     *   consumed by completed jobs, or this is an idempotent re-cancel).
      *
      * In-flight operations may continue running briefly after the
      * cancel response while their Lambda processes terminate; the
@@ -2365,8 +2366,8 @@ export class GislClient {
     }
     /**
      * Has the purchase behind a checkout session the caller started been applied
-     * (NzdriXAK)? `GET /api/billing/checkout/{sessionId}/status`, **beta**; auth
-     * required. Pass the `sessionId` from {@link createCheckoutSession}.
+     * (NzdriXAK)? `GET /api/billing/checkout/{sessionId}/status`, **stable**
+     * (contracts v2.236.0, #727, 2026-10-14; was beta); auth required. Pass the `sessionId` from {@link createCheckoutSession}.
      *
      * - `paid`: applied to the caller's account (a pack's credits granted; a
      *   subscription linked - linked, not necessarily in good standing).
@@ -2697,10 +2698,11 @@ export class GislClient {
      *   `payload.error_type`).
      * - `probe_not_applicable` — this upload's type is never probed (e.g. an
      *   image); terminal, no result will ever exist. Base {@link GislApiError}.
-     * - `feature_not_available` (surfaced as {@link GislFeatureNotAvailableError})
-     *   — TRANSITIONAL: what the server sends today for BOTH causes above; it
-     *   does NOT mean "not implemented". The server switches to the two arms
-     *   above only after an SDK release that reads them is published.
+     *
+     * Contracts v2.236.0 declares only those two arms (both seen on prod). An
+     * older server build may still answer `feature_not_available` (surfaced as
+     * {@link GislFeatureNotAvailableError}) for either cause; on this endpoint
+     * it does NOT mean "not implemented".
      *
      * Once landed it returns a `200` with any `probeStatus`. Idempotent: probing
      * the same `fileId` twice returns the cached result. See {@link waitForProbe}
@@ -2725,10 +2727,11 @@ export class GislClient {
      *   (e.g. an image), so no result will ever exist: resolves
      *   `{ landed: false, reason: 'not_applicable' }` after ONE request — no
      *   retry, no wait.
-     * - `422 feature_not_available` → TRANSITIONAL arm the server sends today for
-     *   both causes above → polled like `probe_not_ready`. Its retry ceiling is
-     *   `timeoutMs`: a never-probed upload answered this way resolves
-     *   `{ landed: false, reason: 'timeout' }` once the budget runs out.
+     * - `422 feature_not_available` → not in the contract since v2.236.0; only
+     *   an older server build sends it, for either cause above → polled like
+     *   `probe_not_ready`. Its retry ceiling is `timeoutMs`: a never-probed
+     *   upload answered this way resolves `{ landed: false, reason: 'timeout' }`
+     *   once the budget runs out.
      * - any `200` → STOP. Resolves `{ landed: true, probe }` regardless of
      *   `probeStatus` (ok / corrupt / unsupported_codec / missing_metadata) —
      *   the server + fan-out gate decide split-vs-single from the landed
@@ -2791,8 +2794,8 @@ export class GislClient {
                 }
                 const probe422 = probe422ErrorType(err);
                 if (err instanceof GislFeatureNotAvailableError || probe422 === 'probe_not_ready') {
-                    // Not landed yet — keep polling. `feature_not_available` is the
-                    // transitional arm (either cause); `timeoutMs` is its ceiling.
+                    // Not landed yet — keep polling. `feature_not_available` comes only
+                    // from an older server build (either cause); `timeoutMs` is its ceiling.
                     retryAfterMs = parseRetryAfterMs(err.responseHeaders?.['retry-after']);
                 }
                 else if (patient &&
@@ -2925,8 +2928,8 @@ export class GislClient {
      * outcome. Returns `{ ok, rejected, errors }` so the caller can
      * cleanly drop bad clips before submitting a long-form merge
      * workflow. Probe-call failures (including every arm of the probe's
-     * not-cached `422`: `probe_not_ready`, `probe_not_applicable` and the
-     * transitional `feature_not_available`) land in `errors` rather than
+     * not-cached `422`: `probe_not_ready`, `probe_not_applicable`, and
+     * `feature_not_available` from an older server build) land in `errors` rather than
      * throwing, so a partially-successful batch still yields useful
      * aggregation. This does not poll; see {@link waitForProbe}.
      */

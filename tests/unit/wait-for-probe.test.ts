@@ -240,7 +240,7 @@ describe('GislClient.waitForProbe', () => {
       expect(Date.now() - start).toBeLessThan(2000);
     });
 
-    it('(iii) feature_not_available (transitional) keeps retrying until timeoutMs, its ceiling', async () => {
+    it('(iii) feature_not_available (older server builds) keeps retrying until timeoutMs, its ceiling', async () => {
       fetchSpy.mockImplementation(() => Promise.resolve(notLanded()));
       const start = Date.now();
       // 1.5 s: the attempt-1 jitter backoff is at most 250 ms, so a second poll

@@ -39,11 +39,21 @@ describe('UserTier basic/free transition tripwires (contract-declared)', () => {
     ).toContain('free');
   });
 
-  it('the contract declares `basic` as the base tier', () => {
+  it('the contract declares `pay_as_you_go` as the base tier', () => {
     expect(
       schemas.UserTier?.enum,
-      'The vendored contract does not declare UserTier `basic`. The rename has been reverted or ' +
-        'the vendored spec is older than v2.196.0 — decide which before changing the tier fixtures.',
+      'The vendored contract does not declare UserTier `pay_as_you_go`. The rename (pricing v1.3, ' +
+        'contracts v2.236.0, kcA1ZRwW) has been reverted or the vendored spec is older than v2.236.0.',
+    ).toContain('pay_as_you_go');
+  });
+
+  it('the contract still declares the deprecated `basic` alias', () => {
+    expect(
+      schemas.UserTier?.enum,
+      'The vendored contract no longer declares UserTier `basic`. That is the CONTRACT step of the ' +
+        'pay_as_you_go rename (IloAPrH4) reaching this repo. DECIDE before re-vendoring past it: every ' +
+        'SDK reader of `basic` and the fixtures pinning it must move to `pay_as_you_go`, and the change ' +
+        'is BREAKING for consumers that compare against UserTier.basic. Then invert this assertion.',
     ).toContain('basic');
   });
 

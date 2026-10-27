@@ -3625,8 +3625,9 @@ describe('GislClient', () => {
       }
     });
 
-    // 🔴 `basic` IS THE BASE TIER AS OF CONTRACTS v2.196.0, and `free` is
-    // DEPRECATED IN PLACE — one tier under two names, same ordinal position.
+    // 🔴 `pay_as_you_go` IS THE BASE TIER AS OF CONTRACTS v2.236.0; `basic` and
+    // `free` are DEPRECATED spellings of it (removal: `IloAPrH4` / `nD8fCPDy`)
+    // — one tier under three names, same ordinal position.
     // The contract requires a tolerance artefact from both SDKs (`tkRA9Bim`)
     // and warns that code handling `free` and not `basic` "will silently take
     // a different branch the day the producer switches".

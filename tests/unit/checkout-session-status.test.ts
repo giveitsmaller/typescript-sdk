@@ -10,7 +10,7 @@ import {
 
 /**
  * NzdriXAK — `getCheckoutSessionStatus(sessionId)`:
- * `GET /api/billing/checkout/{sessionId}/status` (beta, auth required). The
+ * `GET /api/billing/checkout/{sessionId}/status` (stable since contracts v2.236.0, auth required). The
  * three statuses are a CLOSED enum, and `unknown` is an ordinary answer.
  */
 
