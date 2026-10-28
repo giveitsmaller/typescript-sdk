@@ -228,6 +228,15 @@ export interface WorkflowCreatePayload {
      * hand-built payload can carry it. Mirrors `export`/`delivery`/`processing`.
      */
     notify?: NotifyConfig;
+    /**
+     * Accept a reservation quote (contracts v2.238.0, `x-availability: planned`; the api
+     * does not serve quotes yet). Wire shape only, so a hand-built payload can carry it;
+     * accepting a quote ergonomically is a separate follow-up (card slwm9fHN).
+     */
+    accepted_quote?: {
+        quote_id: string;
+        quote_version: number;
+    };
 }
 /**
  * Single source of truth for WorkflowCreatePayload's top-level wire keys.
@@ -236,7 +245,7 @@ export interface WorkflowCreatePayload {
  * only via deep imports and should not be treated as public API.
  * @internal
  */
-export declare const WORKFLOW_CREATE_PAYLOAD_KEYS: readonly ["jobs", "source", "operations", "workflow_edges", "callback_url", "callback_events", "export", "delivery", "processing", "notify"];
+export declare const WORKFLOW_CREATE_PAYLOAD_KEYS: readonly ["jobs", "source", "operations", "workflow_edges", "callback_url", "callback_events", "export", "delivery", "processing", "notify", "accepted_quote"];
 export interface GetSchemaOptions {
     /** Filter the schema to operations that accept this MIME type (e.g. `image/jpeg`). */
     mimeType?: string;

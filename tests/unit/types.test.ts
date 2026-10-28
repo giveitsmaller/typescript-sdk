@@ -413,6 +413,7 @@ describe('WORKFLOW_CREATE_PAYLOAD_KEYS', () => {
       'delivery',
       'processing',
       'notify',
+      'accepted_quote',
     ]);
   });
 });

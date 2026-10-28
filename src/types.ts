@@ -409,6 +409,12 @@ export interface WorkflowCreatePayload {
    * hand-built payload can carry it. Mirrors `export`/`delivery`/`processing`.
    */
   notify?: NotifyConfig;
+  /**
+   * Accept a reservation quote (contracts v2.238.0, `x-availability: planned`; the api
+   * does not serve quotes yet). Wire shape only, so a hand-built payload can carry it;
+   * accepting a quote ergonomically is a separate follow-up (card slwm9fHN).
+   */
+  accepted_quote?: { quote_id: string; quote_version: number };
 }
 
 /**
@@ -429,6 +435,7 @@ export const WORKFLOW_CREATE_PAYLOAD_KEYS = Object.freeze([
   'delivery',
   'processing',
   'notify',
+  'accepted_quote',
 ] as const);
 
 // Compile-time invariant: WORKFLOW_CREATE_PAYLOAD_KEYS must exactly equal
