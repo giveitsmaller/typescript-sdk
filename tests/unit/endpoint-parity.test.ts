@@ -1,10 +1,10 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import ts from 'typescript';
 import { parse as parseYaml } from 'yaml';
 import { GislClient, DEFAULT_MULTIPART_FIRST_CHUNK_SIZE } from '../../src/client.js';
 import { SDKS_REPO_ROOT } from './_contract-paths.js';
+import { PKG_ROOT, publicClassMethods, typesEntrypoints } from './_built-surface.js';
 
 /**
  * zdbFzaNX (DX A1a-TS) — the `ts` column of docs/parity/endpoints.yaml, proven
@@ -39,7 +39,6 @@ import { SDKS_REPO_ROOT } from './_contract-paths.js';
  * a gated subset (`ANONYMOUS_ALLOWLIST`) and is out of scope here.
  */
 
-const PKG_ROOT = resolve(SDKS_REPO_ROOT, 'packages/typescript');
 const ENDPOINTS_YAML = resolve(SDKS_REPO_ROOT, 'docs/parity/endpoints.yaml');
 
 const API_BASE_URL = 'https://api.example.com';
@@ -161,106 +160,13 @@ const DIRECT_IDS: string[] = rowsOfKind('method').map((r) => r.operationId);
 // (1) Existence on the BUILT surface
 // ---------------------------------------------------------------------------
 
-// Copied from tests/api-surface.test.ts (createRelativeOnlyProgram and its
-// helpers): bare specifiers resolve to nothing, so the read cannot depend on
-// what happens to be installed in node_modules.
-const COMPILER_OPTIONS: ts.CompilerOptions = {
-  noLib: true,
-  target: ts.ScriptTarget.Latest,
-  module: ts.ModuleKind.ESNext,
-  moduleResolution: ts.ModuleResolutionKind.Bundler,
-};
-
-function resolveRelative(fromFile: string, specifier: string): string | undefined {
-  const base = resolve(dirname(fromFile), specifier);
-  const stripped = base.replace(/\.js$/, '');
-  for (const candidate of [`${stripped}.ts`, `${stripped}.d.ts`, `${base}.ts`, `${base}.d.ts`]) {
-    if (existsSync(candidate)) return candidate;
-  }
-  return undefined;
-}
-
-const isRelative = (specifier: string): boolean => specifier.startsWith('.');
-
-function createRelativeOnlyProgram(entryFiles: readonly string[]): ts.Program {
-  const host = ts.createCompilerHost(COMPILER_OPTIONS, true);
-  host.resolveModuleNameLiterals = (literals, containingFile): ts.ResolvedModuleWithFailedLookupLocations[] =>
-    literals.map((literal) => {
-      const specifier = literal.text;
-      if (!isRelative(specifier)) return { resolvedModule: undefined };
-      const resolvedFileName = resolveRelative(containingFile, specifier);
-      if (resolvedFileName === undefined) return { resolvedModule: undefined };
-      return {
-        resolvedModule: {
-          resolvedFileName,
-          extension: resolvedFileName.endsWith('.d.ts') ? ts.Extension.Dts : ts.Extension.Ts,
-        },
-      };
-    });
-  return ts.createProgram([...entryFiles], COMPILER_OPTIONS, host);
-}
-
-/** Every `types` path package.json exposes under `exports`, plus top-level `types`. */
-function typesEntrypoints(): string[] {
-  const manifest: unknown = JSON.parse(readFileSync(resolve(PKG_ROOT, 'package.json'), 'utf8'));
-  if (!isRecord(manifest)) throw new Error('package.json is not an object');
-  const found = new Set<string>();
-  const walk = (node: unknown): void => {
-    if (!isRecord(node)) return;
-    for (const [key, value] of Object.entries(node)) {
-      if (key === 'types' && typeof value === 'string') found.add(value);
-      else walk(value);
-    }
-  };
-  walk(manifest.exports);
-  if (typeof manifest.types === 'string') found.add(manifest.types);
-  return [...found].map((relative) => resolve(PKG_ROOT, relative)).sort();
-}
-
-/**
- * Public, non-static method names of the `GislClient` class that `entryFile`
- * exports, followed through every alias. Private members are emitted into a
- * .d.ts as property declarations (`private foo;`), so filtering on
- * MethodDeclaration plus the modifier check is what makes this "public".
- */
-function publicGislClientMethods(entryFile: string): Set<string> {
-  const program = createRelativeOnlyProgram([entryFile]);
-  const checker = program.getTypeChecker();
-  const sourceFile = program.getSourceFile(entryFile);
-  if (sourceFile === undefined) throw new Error(`${entryFile}: not in the program`);
-  const moduleSymbol = checker.getSymbolAtLocation(sourceFile);
-  if (moduleSymbol === undefined) throw new Error(`${entryFile}: no module symbol`);
-
-  const exported = checker.getExportsOfModule(moduleSymbol).find((s) => s.getName() === 'GislClient');
-  if (exported === undefined) throw new Error(`${entryFile}: does not export GislClient`);
-  const target =
-    (exported.flags & ts.SymbolFlags.Alias) !== 0 ? checker.getAliasedSymbol(exported) : exported;
-  const classDeclaration = (target.declarations ?? []).find(
-    (declaration): declaration is ts.ClassDeclaration => ts.isClassDeclaration(declaration),
-  );
-  if (classDeclaration === undefined) {
-    throw new Error(`${entryFile}: GislClient does not resolve to a class declaration`);
-  }
-
-  const methods = new Set<string>();
-  for (const member of classDeclaration.members) {
-    if (!ts.isMethodDeclaration(member) || !ts.isIdentifier(member.name)) continue;
-    const flags = ts.getCombinedModifierFlags(member);
-    if ((flags & (ts.ModifierFlags.Private | ts.ModifierFlags.Protected | ts.ModifierFlags.Static)) !== 0) {
-      continue;
-    }
-    methods.add(member.name.text);
-  }
-  return methods;
-}
-
 let builtSurfaceCache: Map<string, Set<string>> | null = null;
 
 /** Entrypoint file -> its GislClient public method set. Built once. */
 function builtSurface(): Map<string, Set<string>> {
   if (builtSurfaceCache === null) {
     const surface = new Map<string, Set<string>>();
-    for (const entry of typesEntrypoints()) surface.set(entry, publicGislClientMethods(entry));
+    for (const entry of typesEntrypoints()) surface.set(entry, publicClassMethods(entry, 'GislClient'));
     builtSurfaceCache = surface;
   }
   return builtSurfaceCache;
