@@ -59,6 +59,10 @@ export type ErrorCode =
   | "sse_connection_limit_exceeded"
   | "sse_capacity_exhausted"
   | "long_form_concurrency_limit_exceeded"
+  | "known_bad_input"
+  | "failure_cooldown"
+  | "retry_budget_exhausted"
+  | "service_degraded"
   | "unprocessable_entity"
   | "email_same"
   | "config_error"
@@ -815,6 +819,58 @@ export const ERROR_CODES: Readonly<Record<ErrorCode, ErrorEntry>> = Object.freez
       "maxDurationSeconds": "number",
     }),
   }),
+  "known_bad_input": Object.freeze({
+    code: "known_bad_input",
+    category: "api" as ErrorCategory,
+    source: "ErrorEnvelope.error",
+    status: "declared" as ErrorStatus,
+    httpStatus: 422,
+    retryable: false,
+    sdkClass: "GislApiError",
+    description: "422 on POST /api/workflows and POST /api/operations/{id}/retry — this input already failed deterministically for this account and operation; refused until expiresAt. Wire `error: KNOWN_BAD_INPUT`, `error_type: known_bad_input` (KnownBadInputResponse). Carries no fingerprint and no worker version by design.",
+    metadataSchema: Object.freeze({
+      "operationType": "string",
+      "errorCode": "string",
+      "expiresAt": "string",
+    }),
+  }),
+  "failure_cooldown": Object.freeze({
+    code: "failure_cooldown",
+    category: "api" as ErrorCategory,
+    source: "ErrorEnvelope.error",
+    status: "declared" as ErrorStatus,
+    httpStatus: 429,
+    retryable: true,
+    sdkClass: "GislApiError",
+    description: "429 on POST /api/workflows and POST /api/operations/{id}/retry — per-account failure cooldown after too many recent failures (platform failures never count). Wire `error: FAILURE_COOLDOWN`, `error_type: failure_cooldown` (FailureCooldownResponse); Retry-After header and body retry_after_seconds carry the same value.",
+    metadataSchema: Object.freeze({
+      "retryAfterSeconds": "integer",
+    }),
+  }),
+  "retry_budget_exhausted": Object.freeze({
+    code: "retry_budget_exhausted",
+    category: "api" as ErrorCategory,
+    source: "ErrorEnvelope.error",
+    status: "declared" as ErrorStatus,
+    httpStatus: 409,
+    retryable: false,
+    sdkClass: "GislApiError",
+    description: "409 on POST /api/operations/{id}/retry — this position has used every attempt it is allowed (attempt_count == attempt_budget). Terminal, no Retry-After. Wire `error: RETRY_BUDGET_EXHAUSTED`, message_key operation.retry_budget_exhausted. Distinct from FAILURE_COOLDOWN (429) and KNOWN_BAD_INPUT (422).",
+    metadataSchema: Object.freeze({}),
+  }),
+  "service_degraded": Object.freeze({
+    code: "service_degraded",
+    category: "api" as ErrorCategory,
+    source: "ErrorEnvelope.error",
+    status: "declared" as ErrorStatus,
+    httpStatus: 503,
+    retryable: true,
+    sdkClass: "GislApiError",
+    description: "503 on POST /api/workflows and POST /api/operations/{id}/retry — the service-wide circuit breaker is open; says nothing about this caller. Optional scope names the operation type or media group covered (absent = every operation). Wire `error: SERVICE_DEGRADED`, `error_type: service_degraded` (ServiceDegradedResponse).",
+    metadataSchema: Object.freeze({
+      "scope": "string",
+    }),
+  }),
   "unprocessable_entity": Object.freeze({
     code: "unprocessable_entity",
     category: "auth" as ErrorCategory,
@@ -963,6 +1019,10 @@ export const ERROR_CATEGORIES: Readonly<Record<ErrorCategory, readonly ErrorCode
     "sse_connection_limit_exceeded",
     "sse_capacity_exhausted",
     "long_form_concurrency_limit_exceeded",
+    "known_bad_input",
+    "failure_cooldown",
+    "retry_budget_exhausted",
+    "service_degraded",
     "item_failed",
   ] as readonly ErrorCode[]),
   config: Object.freeze([
