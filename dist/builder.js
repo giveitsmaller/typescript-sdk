@@ -391,7 +391,7 @@ export class OperationBuilder {
         // file-first path has always passed it (`file-first.ts`); the operation-first
         // path did not, which is the same "demands what file-first does not" defect
         // this ticket is about, one layer down.
-        return new Handle(created.workflowId, created.webhookSecret != null ? created.webhookSecret : undefined, this.client, null);
+        return new Handle(created.workflowId, created.webhookSecret != null ? created.webhookSecret : undefined, this.client, null, created.quote);
     }
     /**
      * Fan-out chain: run this builder to completion, then for each artifact

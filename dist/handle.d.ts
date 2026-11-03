@@ -33,6 +33,7 @@
  * Mirrors the PHP `Gisl\Sdk\Ergonomic\Handle` + `Gisl\Sdk\Ergonomic\StatusSnapshot`.
  */
 import type { GislClient } from './client.js';
+import type { CreditQuote } from '@giveitsmaller/contracts/openapi';
 import { type ProgressEvent } from './builder.js';
 import { RunResult } from './file-first.js';
 /**
@@ -48,7 +49,27 @@ import { RunResult } from './file-first.js';
 export declare class StatusSnapshot {
     readonly workflowId: string;
     readonly state: string;
-    constructor(workflowId: string, state: string);
+    /**
+     * The workflow's live reservation quote from the status response: the
+     * most it can be charged (`maxHoldCredits`) and how much of that is held,
+     * charged and released right now. **Planned on the api**: `undefined`
+     * until the API emits quotes, and always `undefined` for a workflow that
+     * has none. Read-tolerant: absence is never an error. Not part of
+     * {@link toJSON}. The type is the generated contract model, so the wire
+     * key `final` reads as `_final`.
+     */
+    readonly quote?: CreditQuote | undefined;
+    constructor(workflowId: string, state: string, 
+    /**
+     * The workflow's live reservation quote from the status response: the
+     * most it can be charged (`maxHoldCredits`) and how much of that is held,
+     * charged and released right now. **Planned on the api**: `undefined`
+     * until the API emits quotes, and always `undefined` for a workflow that
+     * has none. Read-tolerant: absence is never an error. Not part of
+     * {@link toJSON}. The type is the generated contract model, so the wire
+     * key `final` reads as `_final`.
+     */
+    quote?: CreditQuote | undefined);
     /**
      * True when {@link state} is one of the terminal states (`completed`,
      * `failed`, `partially_failed`, `cancelled`, `expired`,
@@ -84,7 +105,20 @@ export declare class Handle {
     #private;
     readonly workflowId: string;
     readonly webhookSecret?: string | undefined;
-    constructor(workflowId: string, webhookSecret?: string | undefined, client?: GislClient, key?: string | null);
+    constructor(workflowId: string, webhookSecret?: string | undefined, client?: GislClient, key?: string | null, quote?: CreditQuote);
+    /**
+     * The workflow's reservation quote as the create response carried it: the
+     * most it can ever be charged (`maxHoldCredits`) and its per-operation
+     * lines. Read it after `submit()` and before {@link wait};
+     * for the live amounts call {@link status} and read `StatusSnapshot.quote`.
+     *
+     * **Planned on the api**: `undefined` until the API emits quotes, and always
+     * `undefined` for a workflow that has none and for a handle reattached via
+     * `client.workflow(id)` (there is no create response). Read-tolerant:
+     * absence is never an error. Not part of {@link toJSON}. The type is the
+     * generated contract model, so the wire key `final` reads as `_final`.
+     */
+    get quote(): CreditQuote | undefined;
     /**
      * Fetch the workflow's current status once (non-blocking) and project it to
      * a {@link StatusSnapshot}.

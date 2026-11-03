@@ -1011,7 +1011,7 @@ export class Recipe {
         // so the post-upload deadline check is skipped: a 600s cap here would throw
         // on a slow-but-successful big upload before createWorkflow (codex).
         const created = await this._uploadAndCreate(webhook, undefined, undefined, undefined, options?.probeBeforeCreate, options?.probeTimeoutMs);
-        return new Handle(created.workflowId, created.webhookSecret != null ? created.webhookSecret : undefined, this.client, this.recipeKey ?? null);
+        return new Handle(created.workflowId, created.webhookSecret != null ? created.webhookSecret : undefined, this.client, this.recipeKey ?? null, created.quote);
     }
     /**
      * Resolve the upload id (verbatim for a pre-uploaded id; uploading a path /
@@ -1909,7 +1909,7 @@ export class FilesRecipe {
             throw new GislConfigError('FilesRecipe.submit() requires a client; build the fan-out via gisl().files(...) rather than constructing FilesRecipe directly.', { reason: 'no_client' });
         }
         const created = await this._uploadAllAndCreate(webhook, undefined, undefined, undefined, options?.probeBeforeCreate, options?.probeTimeoutMs);
-        return new Handle(created.workflowId, created.webhookSecret != null ? created.webhookSecret : undefined, this.client, null);
+        return new Handle(created.workflowId, created.webhookSecret != null ? created.webhookSecret : undefined, this.client, null, created.quote);
     }
     /**
      * Upload every input (verbatim for a pre-uploaded id; uploading a path /
@@ -2128,7 +2128,7 @@ export class MergedRecipe {
             throw new GislConfigError('MergedRecipe.submit() requires a client; build the merge via gisl().files(...).merge(...) rather than constructing MergedRecipe directly.', { reason: 'no_client' });
         }
         const created = await this._uploadAllAndCreate(webhook, undefined, undefined, undefined, options?.probeBeforeCreate, options?.probeTimeoutMs);
-        return new Handle(created.workflowId, created.webhookSecret != null ? created.webhookSecret : undefined, this.client, null);
+        return new Handle(created.workflowId, created.webhookSecret != null ? created.webhookSecret : undefined, this.client, null, created.quote);
     }
     // ---------------------------------------------------------------------------
     /**
@@ -2340,7 +2340,7 @@ export class ArchivedRecipe {
             throw new GislConfigError('ArchivedRecipe.submit() requires a client; build the bundle via gisl().files(...).archive(...) rather than constructing ArchivedRecipe directly.', { reason: 'no_client' });
         }
         const created = await this._uploadAllAndCreate(webhook, undefined, undefined, undefined, options?.probeBeforeCreate, options?.probeTimeoutMs);
-        return new Handle(created.workflowId, created.webhookSecret != null ? created.webhookSecret : undefined, this.client, null);
+        return new Handle(created.workflowId, created.webhookSecret != null ? created.webhookSecret : undefined, this.client, null, created.quote);
     }
     // ---------------------------------------------------------------------------
     async _uploadAllAndCreate(webhook, deadline, onProgress, signal, probeBeforeCreate, probeTimeoutMs) {
@@ -2615,7 +2615,7 @@ export class WatermarkedRecipe {
             throw new GislConfigError('WatermarkedRecipe.submit() requires a client; build the watermark via gisl().file(...).watermark(...) rather than constructing WatermarkedRecipe directly.', { reason: 'no_client' });
         }
         const created = await this._uploadAllAndCreate(webhook, undefined, undefined, undefined, options?.probeBeforeCreate, options?.probeTimeoutMs);
-        return new Handle(created.workflowId, created.webhookSecret != null ? created.webhookSecret : undefined, this.client, null);
+        return new Handle(created.workflowId, created.webhookSecret != null ? created.webhookSecret : undefined, this.client, null, created.quote);
     }
     // ---------------------------------------------------------------------------
     /** Base + overlay inputs, in upload/lowering order (`[base, overlay, …]`). */

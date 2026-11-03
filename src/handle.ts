@@ -35,6 +35,7 @@
 
 import type { GislClient } from './client.js';
 import { DEFAULT_POLL_TIMEOUT_MS } from './client.js';
+import type { CreditQuote } from '@giveitsmaller/contracts/openapi';
 import {
   GislConfigError,
   GislResultNotReadyError,
@@ -88,7 +89,20 @@ const TERMINAL_STATES: ReadonlySet<string> = new Set([
  * Mirrors the PHP `Gisl\Sdk\Ergonomic\StatusSnapshot`.
  */
 export class StatusSnapshot {
-  constructor(readonly workflowId: string, readonly state: string) {}
+  constructor(
+    readonly workflowId: string,
+    readonly state: string,
+    /**
+     * The workflow's live reservation quote from the status response: the
+     * most it can be charged (`maxHoldCredits`) and how much of that is held,
+     * charged and released right now. **Planned on the api**: `undefined`
+     * until the API emits quotes, and always `undefined` for a workflow that
+     * has none. Read-tolerant: absence is never an error. Not part of
+     * {@link toJSON}. The type is the generated contract model, so the wire
+     * key `final` reads as `_final`.
+     */
+    readonly quote?: CreditQuote,
+  ) {}
 
   /**
    * True when {@link state} is one of the terminal states (`completed`,
@@ -156,14 +170,38 @@ export class Handle {
   // webhookSecret}). `#key` is non-enumerable, so that shape stays byte-identical.
   readonly #key: string | null;
 
+  // The create response's reservation quote, threaded from every `submit()`.
+  // ES-private for the same reason as `#key`: a plain field would add `quote`
+  // to the own-enumerable submit() shape whenever a server sends one. Read it
+  // through the `quote` getter, which lives on the prototype.
+  readonly #quote?: CreditQuote;
+
   constructor(
     readonly workflowId: string,
     readonly webhookSecret?: string,
     client?: GislClient,
     key: string | null = null,
+    quote?: CreditQuote,
   ) {
     this.#client = client;
     this.#key = key;
+    this.#quote = quote;
+  }
+
+  /**
+   * The workflow's reservation quote as the create response carried it: the
+   * most it can ever be charged (`maxHoldCredits`) and its per-operation
+   * lines. Read it after `submit()` and before {@link wait};
+   * for the live amounts call {@link status} and read `StatusSnapshot.quote`.
+   *
+   * **Planned on the api**: `undefined` until the API emits quotes, and always
+   * `undefined` for a workflow that has none and for a handle reattached via
+   * `client.workflow(id)` (there is no create response). Read-tolerant:
+   * absence is never an error. Not part of {@link toJSON}. The type is the
+   * generated contract model, so the wire key `final` reads as `_final`.
+   */
+  get quote(): CreditQuote | undefined {
+    return this.#quote;
   }
 
   /**
@@ -174,7 +212,7 @@ export class Handle {
   async status(): Promise<StatusSnapshot> {
     const client = this.requireClient();
     const status = await client.getWorkflowStatus(this.workflowId);
-    return new StatusSnapshot(this.workflowId, status.status);
+    return new StatusSnapshot(this.workflowId, status.status, status.quote);
   }
 
   /**

@@ -282,6 +282,9 @@ export function _runAudit() {
     // FF5a / Ao8RPVxD — file-first Handle reattach surface.
     accept();
     accept();
+    // RHxg7olf — Handle.quote is the generated contract quote, undefined when absent.
+    const _handleQuote = true;
+    void _handleQuote;
     // TYNjcjpo — SSE parse-failure diagnostic surface.
     accept();
     // iOcpCt6L — SSE wire shapes + unknown-event arm.

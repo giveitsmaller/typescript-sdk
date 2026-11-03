@@ -1404,6 +1404,7 @@ export class Recipe {
       created.webhookSecret != null ? created.webhookSecret : undefined,
       this.client,
       this.recipeKey ?? null,
+      created.quote,
     );
   }
 
@@ -2537,6 +2538,7 @@ export class FilesRecipe {
       created.webhookSecret != null ? created.webhookSecret : undefined,
       this.client,
       null,
+      created.quote,
     );
   }
 
@@ -2840,6 +2842,7 @@ export class MergedRecipe {
       created.webhookSecret != null ? created.webhookSecret : undefined,
       this.client,
       null,
+      created.quote,
     );
   }
 
@@ -3150,6 +3153,7 @@ export class ArchivedRecipe {
       created.webhookSecret != null ? created.webhookSecret : undefined,
       this.client,
       null,
+      created.quote,
     );
   }
 
@@ -3525,6 +3529,7 @@ export class WatermarkedRecipe {
       created.webhookSecret != null ? created.webhookSecret : undefined,
       this.client,
       null,
+      created.quote,
     );
   }
 

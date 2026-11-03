@@ -9,6 +9,7 @@ import {
   GislStreamHostNotDeclaredError,
 } from '../src/errors.js';
 import type { GislClient } from '../src/client.js';
+import type { CreditQuote } from '../src/index.js';
 
 /**
  * FF5a — `Handle` + `StatusSnapshot` value objects + the `client.workflow(id)`
@@ -357,6 +358,170 @@ describe('client.workflow(id) reattach', () => {
     expect(mock.getWorkflowDownloads).toHaveBeenCalledWith('wf_reattach');
     expect(result.state).toBe('completed');
     expect(result.succeeded[0].key).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// quote — the planned reservation quote, decoded from the wire (RHxg7olf)
+// ---------------------------------------------------------------------------
+
+describe('Handle.quote / StatusSnapshot.quote — through the real client from a wire stub', () => {
+  const WF = '019539ac-2222-7000-8000-000000000002';
+  // The contract's `paused` example (GET /api/workflows/{id}/quote, 200), as the
+  // API sends it. Nonempty on purpose: the lines are what a decoder can get wrong.
+  const WIRE_QUOTE = {
+    quote_id: '019539b0-5555-7000-8000-000000000002',
+    quote_version: 1,
+    workflow_id: WF,
+    status: 'accepted',
+    expires_at: null,
+    max_hold_credits: 46,
+    held_credits: 0,
+    charged_credits: 0,
+    released_credits: 0,
+    final: false,
+    settlement_pending: false,
+    pricing_version: '2026-10-01',
+    meter: null,
+    lines: [
+      {
+        line_id: 'main/0',
+        job_ref: 'main',
+        operation_index: 0,
+        operation_type: 'compress',
+        job_id: '019539ad-3333-7000-8000-000000000005',
+        operation_id: '019539ae-4444-7000-8000-000000000006',
+        max_credits: 40,
+        state: 'paused',
+        charged_credits: 0,
+        released_credits: 0,
+      },
+      {
+        line_id: 'main/1',
+        job_ref: 'main',
+        operation_index: 1,
+        operation_type: 'thumbnail_video',
+        job_id: '019539ad-3333-7000-8000-000000000005',
+        operation_id: '019539ae-4444-7000-8000-000000000007',
+        max_credits: 6,
+        state: 'paused',
+        charged_credits: 0,
+        released_credits: 0,
+      },
+    ],
+  };
+  // The same quote as the SDK exposes it: camelCase, and `final` as `_final`.
+  const DECODED_QUOTE: CreditQuote = {
+    quoteId: '019539b0-5555-7000-8000-000000000002',
+    quoteVersion: 1,
+    workflowId: WF,
+    status: 'accepted',
+    maxHoldCredits: 46,
+    heldCredits: 0,
+    chargedCredits: 0,
+    releasedCredits: 0,
+    _final: false,
+    settlementPending: false,
+    pricingVersion: '2026-10-01',
+    lines: [
+      {
+        lineId: 'main/0',
+        jobRef: 'main',
+        operationIndex: 0,
+        operationType: 'compress',
+        jobId: '019539ad-3333-7000-8000-000000000005',
+        operationId: '019539ae-4444-7000-8000-000000000006',
+        maxCredits: 40,
+        state: 'paused',
+        chargedCredits: 0,
+        releasedCredits: 0,
+      },
+      {
+        lineId: 'main/1',
+        jobRef: 'main',
+        operationIndex: 1,
+        operationType: 'thumbnail_video',
+        jobId: '019539ad-3333-7000-8000-000000000005',
+        operationId: '019539ae-4444-7000-8000-000000000007',
+        maxCredits: 6,
+        state: 'paused',
+        chargedCredits: 0,
+        releasedCredits: 0,
+      },
+    ],
+  };
+
+  function envelope(data: unknown): Response {
+    return new Response(JSON.stringify({ success: true, data }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  async function realClient() {
+    const { create } = await import('../src/gisl.js');
+    return create({ apiKey: 'k', baseUrl: 'https://api.example.com' });
+  }
+
+  it('submit() puts the create response quote on handle.quote; own keys and toJSON() are unchanged', async () => {
+    const client = await realClient();
+    const created = {
+      workflow_id: WF,
+      status: 'paused_insufficient_credits',
+      jobs: [],
+      created_at: '2026-10-16T12:00:00Z',
+      warnings: [],
+      webhook_secret: 'wh_secret',
+      quote: WIRE_QUOTE,
+    };
+    fetchSpy.mockResolvedValueOnce(
+      envelope({ file_id: 'file-1', original_name: 'x', mime_type: 'text/plain', size_bytes: 1 }),
+    );
+    fetchSpy.mockResolvedValueOnce(envelope(created));
+
+    const handle = await client
+      .operation('text_watermark', new Blob(['x']), { text: 'CONFIDENTIAL', position: 'bottom-right' })
+      .submit({ webhook: 'https://example.com/hook' });
+
+    expect(handle.quote).toEqual(DECODED_QUOTE);
+    // A getter over a private field: the quote adds no own key and stays out of toJSON().
+    expect(Object.keys(handle)).toEqual(['workflowId', 'webhookSecret']);
+    expect(handle.toJSON()).toEqual({ workflowId: WF, webhookSecret: 'wh_secret' });
+
+    // The file-first Recipe builds its Handle at a separate site.
+    fetchSpy.mockResolvedValueOnce(
+      envelope({ file_id: 'file-2', original_name: 'x', mime_type: 'image/jpeg', size_bytes: 3 }),
+    );
+    fetchSpy.mockResolvedValueOnce(envelope(created));
+
+    const recipeHandle = await client
+      .file(new Blob([new Uint8Array([0xff, 0xd8, 0xff])], { type: 'image/jpeg' }))
+      .compress()
+      .submit('https://example.com/hook');
+
+    expect(recipeHandle.quote).toEqual(DECODED_QUOTE);
+    expect(Object.keys(recipeHandle)).toEqual(['workflowId', 'webhookSecret']);
+    expect(recipeHandle.toJSON()).toEqual({ workflowId: WF, webhookSecret: 'wh_secret' });
+  });
+
+  it('status() puts the status response quote on snapshot.quote; toJSON() is unchanged', async () => {
+    const client = await realClient();
+    fetchSpy.mockResolvedValueOnce(
+      envelope({
+        workflow_id: WF,
+        status: 'paused_insufficient_credits',
+        created_at: '2026-10-16T12:00:00Z',
+        updated_at: '2026-10-16T12:01:00Z',
+        jobs: [],
+        quote: WIRE_QUOTE,
+      }),
+    );
+
+    // A reattached handle has no create-response quote, so this one can only come from status().
+    const snap = await client.workflow(WF).status();
+
+    expect(snap.quote).toEqual(DECODED_QUOTE);
+    expect(snap.toJSON()).toEqual({ workflowId: WF, state: 'paused_insufficient_credits' });
   });
 });
 

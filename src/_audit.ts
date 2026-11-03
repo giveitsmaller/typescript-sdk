@@ -156,6 +156,9 @@ import type { ErrorCategory } from './index.js';
 // `RunResult.transport`). Imported via `./index.js` so dropping the type-only
 // re-export breaks `tsc --noEmit` here.
 import type { RunTransport } from './index.js';
+// RHxg7olf — the reservation quote surfaced by `Handle.quote`. Imported via
+// `./index.js` so dropping the type-only re-export breaks `tsc --noEmit` here.
+import type { CreditQuote } from './index.js';
 
 // Ergonomic-layer entry points (T1 / wVU4xHx3) — `gisl.create()` factory
 // + credential-chain types + the new local-error tree (GislConfigError +
@@ -618,6 +621,9 @@ export function _runAudit(): void {
   // FF5a / Ao8RPVxD — file-first Handle reattach surface.
   accept<StatusSnapshot>();
   accept<GislResultNotReadyError>();
+  // RHxg7olf — Handle.quote is the generated contract quote, undefined when absent.
+  const _handleQuote: Equal<Handle['quote'], CreditQuote | undefined> = true;
+  void _handleQuote;
   // TYNjcjpo — SSE parse-failure diagnostic surface.
   accept<GislSseParseFailure>();
   // iOcpCt6L — SSE wire shapes + unknown-event arm.

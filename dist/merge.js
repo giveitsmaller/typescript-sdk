@@ -171,7 +171,7 @@ export class MergeBuilder {
         // status()/wait()/result() throw `no_client`; the merge submit reconciles via
         // webhook" — an accurate description of a defect. `webhook` is optional now,
         // so an unbound handle here would leave a submit with no outcome channel at all.
-        return new Handle(created.workflowId, created.webhookSecret != null ? created.webhookSecret : undefined, this.client, null);
+        return new Handle(created.workflowId, created.webhookSecret != null ? created.webhookSecret : undefined, this.client, null, created.quote);
     }
     // ---------------------------------------------------------------------------
     /**

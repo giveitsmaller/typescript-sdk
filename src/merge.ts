@@ -345,6 +345,7 @@ export class MergeBuilder {
       created.webhookSecret != null ? created.webhookSecret : undefined,
       this.client,
       null,
+      created.quote,
     );
   }
 

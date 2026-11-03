@@ -64,9 +64,21 @@ const TERMINAL_STATES = new Set([
 export class StatusSnapshot {
     workflowId;
     state;
-    constructor(workflowId, state) {
+    quote;
+    constructor(workflowId, state, 
+    /**
+     * The workflow's live reservation quote from the status response: the
+     * most it can be charged (`maxHoldCredits`) and how much of that is held,
+     * charged and released right now. **Planned on the api**: `undefined`
+     * until the API emits quotes, and always `undefined` for a workflow that
+     * has none. Read-tolerant: absence is never an error. Not part of
+     * {@link toJSON}. The type is the generated contract model, so the wire
+     * key `final` reads as `_final`.
+     */
+    quote) {
         this.workflowId = workflowId;
         this.state = state;
+        this.quote = quote;
     }
     /**
      * True when {@link state} is one of the terminal states (`completed`,
@@ -128,11 +140,32 @@ export class Handle {
     // operation-first/merge `submit()` back-compat shape ({workflowId,
     // webhookSecret}). `#key` is non-enumerable, so that shape stays byte-identical.
     #key;
-    constructor(workflowId, webhookSecret, client, key = null) {
+    // The create response's reservation quote, threaded from every `submit()`.
+    // ES-private for the same reason as `#key`: a plain field would add `quote`
+    // to the own-enumerable submit() shape whenever a server sends one. Read it
+    // through the `quote` getter, which lives on the prototype.
+    #quote;
+    constructor(workflowId, webhookSecret, client, key = null, quote) {
         this.workflowId = workflowId;
         this.webhookSecret = webhookSecret;
         this.#client = client;
         this.#key = key;
+        this.#quote = quote;
+    }
+    /**
+     * The workflow's reservation quote as the create response carried it: the
+     * most it can ever be charged (`maxHoldCredits`) and its per-operation
+     * lines. Read it after `submit()` and before {@link wait};
+     * for the live amounts call {@link status} and read `StatusSnapshot.quote`.
+     *
+     * **Planned on the api**: `undefined` until the API emits quotes, and always
+     * `undefined` for a workflow that has none and for a handle reattached via
+     * `client.workflow(id)` (there is no create response). Read-tolerant:
+     * absence is never an error. Not part of {@link toJSON}. The type is the
+     * generated contract model, so the wire key `final` reads as `_final`.
+     */
+    get quote() {
+        return this.#quote;
     }
     /**
      * Fetch the workflow's current status once (non-blocking) and project it to
@@ -142,7 +175,7 @@ export class Handle {
     async status() {
         const client = this.requireClient();
         const status = await client.getWorkflowStatus(this.workflowId);
-        return new StatusSnapshot(this.workflowId, status.status);
+        return new StatusSnapshot(this.workflowId, status.status, status.quote);
     }
     /**
      * Block until the workflow reaches a terminal state (SSE with poll

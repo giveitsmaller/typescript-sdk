@@ -687,9 +687,11 @@ describe('operation() generic escape hatch (qUhxfDA5)', () => {
     fetchSpy.mockResolvedValueOnce(uploadResponse('file-xyz'));
     fetchSpy.mockResolvedValueOnce(createResponse());
 
-    await client
+    const handle = await client
       .operation('text_watermark', new Blob(['x']), { text: 'CONFIDENTIAL', position: 'bottom-right' })
       .submit({ webhook: 'https://example.com/hook' });
+    // A create response with no `quote` (every API today) parses to a handle without one.
+    expect(handle.quote).toBeUndefined();
 
     // Second fetch = createWorkflow. Assert the wire payload.
     const [url, init] = fetchSpy.mock.calls[1] as [string, RequestInit];

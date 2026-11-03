@@ -82,6 +82,12 @@ ConvertOptions	type
 ConvertVideoOptions	type
 create	value
 CreateAwaitingProbeOptions	type
+CreditQuote	type
+CreditQuoteLine	type
+CreditQuoteLineOutcome	value
+CreditQuoteLineState	value
+CreditQuoteMeter	type
+CreditQuoteStatus	value
 CreditsBalanceResponse	type
 CreditsUsageOptions	type
 CreditsUsageResponse	type

@@ -399,6 +399,11 @@ export type {
   MultipartInitiateRequestMetadataHint,
   WorkflowCreateResponse,
   WorkflowStatusResponse,
+  // Reservation quote (planned, RHxg7olf) — reachable from Handle.quote and
+  // StatusSnapshot.quote, plus the nested line and meter shapes it carries.
+  CreditQuote,
+  CreditQuoteLine,
+  CreditQuoteMeter,
   WorkflowListResponse,
   WorkflowSummary,
   WorkflowDownloadResponse,
@@ -494,6 +499,11 @@ export {
   WorkflowCancelBillingEffect,
   WorkflowPauseRequiredAction,
   WorkflowStatus,
+  // CreditQuote enums (planned, RHxg7olf) — value-bearing forms for the
+  // quote's `status`, `lines[].state` and `lines[].outcome`.
+  CreditQuoteStatus,
+  CreditQuoteLineState,
+  CreditQuoteLineOutcome,
   WarningType,
   WorkflowWarningSeverity,
   OperationType,

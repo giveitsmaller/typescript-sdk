@@ -152,7 +152,10 @@ export { AudioWatermarkDecodeRequestMethodHintEnum, AudioWatermarkDecodeResponse
 // Surfaced on OperationSchemaDefinition.inputModel so form-renderers
 // can decide whether to render a single-file picker or a multi-file
 // input list.
-OperationInputModel, ExternalImportRequestProviderHintEnum, ContactSubject, CreditTransactionSourceBucket, UploadProbeStatus, UploadProbeProcessingClass, WorkflowCancelBillingEffect, WorkflowPauseRequiredAction, WorkflowStatus, WarningType, WorkflowWarningSeverity, OperationType, SseEventType, CallbackEventType, OperationStatus, JobStatus, JobInputV2RoleEnum, 
+OperationInputModel, ExternalImportRequestProviderHintEnum, ContactSubject, CreditTransactionSourceBucket, UploadProbeStatus, UploadProbeProcessingClass, WorkflowCancelBillingEffect, WorkflowPauseRequiredAction, WorkflowStatus, 
+// CreditQuote enums (planned, RHxg7olf) — value-bearing forms for the
+// quote's `status`, `lines[].state` and `lines[].outcome`.
+CreditQuoteStatus, CreditQuoteLineState, CreditQuoteLineOutcome, WarningType, WorkflowWarningSeverity, OperationType, SseEventType, CallbackEventType, OperationStatus, JobStatus, JobInputV2RoleEnum, 
 // Error-payload discriminator enums — pair with the typed payload
 // types above for narrowing inside `error instanceof Gisl<X>Error`
 // branches.
