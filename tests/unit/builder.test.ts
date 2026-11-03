@@ -1657,38 +1657,54 @@ describe('429 on status / downloads inside a wait (bTNCSX1x)', () => {
     });
 
   it('waits Retry-After on a status poll, then completes (count AND spacing)', async () => {
-    const mock = makeMockClient();
-    const calledAt: number[] = [];
-    const completed = { workflowId: 'wf_1', status: 'completed' };
-    mock.getWorkflowStatus.mockImplementation(async () => {
-      calledAt.push(Date.now());
-      if (calledAt.length === 1) throw rateLimited('2');
-      return completed;
-    });
+    vi.useFakeTimers();
+    try {
+      const mock = makeMockClient();
+      const calledAt: number[] = [];
+      const completed = { workflowId: 'wf_1', status: 'completed' };
+      mock.getWorkflowStatus.mockImplementation(async () => {
+        calledAt.push(Date.now());
+        if (calledAt.length === 1) throw rateLimited('2');
+        return completed;
+      });
 
-    const result = await new OperationBuilder(mock.client, 'compress', 'p.jpg', {}).run({
-      maxWait: '30s',
-      useSSE: false,
-    });
+      const run = new OperationBuilder(mock.client, 'compress', 'p.jpg', {}).run({
+        maxWait: '30s',
+        useSSE: false,
+      });
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(mock.getWorkflowStatus).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await run;
 
-    expect(result.status).toBe('completed');
-    expect(calledAt).toHaveLength(2);
-    // >= 1950 ms: above the LARGEST no-header fallback (250 + 1000 ms), so this can
-    // only pass if Retry-After was honoured (second-identity review).
-    expect(calledAt[1]! - calledAt[0]!).toBeGreaterThanOrEqual(1950);
+      expect(result.status).toBe('completed');
+      expect(calledAt).toHaveLength(2);
+      // Exactly 2 s on the fake clock: above the LARGEST no-header fallback (250 + 1000 ms),
+      // so this can only pass if Retry-After was honoured (second-identity review).
+      expect(calledAt[1]! - calledAt[0]!).toBe(2_000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('retries a 429 on the TERMINAL downloads fetch (the work is done and paid for)', async () => {
-    const mock = makeMockClient();
-    mock.getWorkflowDownloads.mockRejectedValueOnce(rateLimited('1'));
+    vi.useFakeTimers();
+    try {
+      const mock = makeMockClient();
+      mock.getWorkflowDownloads.mockRejectedValueOnce(rateLimited('1'));
 
-    const result = await new OperationBuilder(mock.client, 'compress', 'p.jpg', {}).run({
-      maxWait: '30s',
-      useSSE: false,
-    });
+      const run = new OperationBuilder(mock.client, 'compress', 'p.jpg', {}).run({
+        maxWait: '30s',
+        useSSE: false,
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      const result = await run;
 
-    expect(result.status).toBe('completed');
-    expect(mock.getWorkflowDownloads).toHaveBeenCalledTimes(2);
+      expect(result.status).toBe('completed');
+      expect(mock.getWorkflowDownloads).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('a Retry-After past the deadline throws GislTimeoutError at once, without sleeping', async () => {
@@ -1706,44 +1722,66 @@ describe('429 on status / downloads inside a wait (bTNCSX1x)', () => {
   // Per ENTRY POINT (second-identity review of #432): removing the wrapper from any
   // one of these call sites must turn a test red.
   it('SSE path: a 429 on the status fetch after the terminal frame is retried', async () => {
-    const mock = makeMockClient();
-    mock.streamEvents.mockImplementation(async function* () {
-      yield { event: 'workflow.completed', data: {} };
-    });
-    mock.getWorkflowStatus
-      .mockRejectedValueOnce(rateLimited('1'))
-      .mockResolvedValue({ workflowId: 'wf_1', status: 'completed' });
+    vi.useFakeTimers();
+    try {
+      const mock = makeMockClient();
+      mock.streamEvents.mockImplementation(async function* () {
+        yield { event: 'workflow.completed', data: {} };
+      });
+      mock.getWorkflowStatus
+        .mockRejectedValueOnce(rateLimited('1'))
+        .mockResolvedValue({ workflowId: 'wf_1', status: 'completed' });
 
-    const result = await new OperationBuilder(mock.client, 'compress', 'p.jpg', {}).run({ maxWait: '30s' });
+      const run = new OperationBuilder(mock.client, 'compress', 'p.jpg', {}).run({ maxWait: '30s' });
+      await vi.advanceTimersByTimeAsync(1_000);
+      const result = await run;
 
-    expect(result.status).toBe('completed');
-    expect(mock.streamEvents).toHaveBeenCalledTimes(1);
-    expect(mock.getWorkflowStatus).toHaveBeenCalledTimes(2);
+      expect(result.status).toBe('completed');
+      expect(mock.streamEvents).toHaveBeenCalledTimes(1);
+      expect(mock.getWorkflowStatus).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('Handle.wait(): a 429 on its downloads fetch is retried', async () => {
-    const mock = makeMockClient();
-    mock.getWorkflowDownloads.mockRejectedValueOnce(rateLimited('1'));
-    const handle = await new OperationBuilder(mock.client, 'compress', 'p.jpg', {}).submit();
+    vi.useFakeTimers();
+    try {
+      const mock = makeMockClient();
+      mock.getWorkflowDownloads.mockRejectedValueOnce(rateLimited('1'));
+      const handle = await new OperationBuilder(mock.client, 'compress', 'p.jpg', {}).submit();
 
-    await handle.wait('30s');
+      const waited = handle.wait('30s');
+      await vi.advanceTimersByTimeAsync(1_000);
+      await waited;
 
-    expect(mock.getWorkflowDownloads).toHaveBeenCalledTimes(2);
+      expect(mock.getWorkflowDownloads).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('the downloads fetch is PATIENT: success on the 6th attempt still completes (a status budget of 4 could not)', async () => {
-    const mock = makeMockClient();
-    for (let i = 0; i < 5; i++) mock.getWorkflowDownloads.mockRejectedValueOnce(rateLimited('0.001'));
-    // '0.001' is not a delta-seconds token -> absent -> jittered backoff; keep it short:
-    // the run's deadline, not this test, bounds the total.
-    const result = await new OperationBuilder(mock.client, 'compress', 'p.jpg', {}).run({
-      maxWait: '120s',
-      useSSE: false,
-    });
+    vi.useFakeTimers();
+    try {
+      const mock = makeMockClient();
+      for (let i = 0; i < 5; i++) mock.getWorkflowDownloads.mockRejectedValueOnce(rateLimited('0.001'));
+      // '0.001' is not a delta-seconds token -> absent -> jittered backoff. The five
+      // backoffs are at most 1249 + 2249 + 4249 + 8249 + 10000 = 25,996 ms, so 30 s on
+      // the fake clock covers whatever Math.random draws and stays inside maxWait.
+      const run = new OperationBuilder(mock.client, 'compress', 'p.jpg', {}).run({
+        maxWait: '120s',
+        useSSE: false,
+      });
+      await vi.advanceTimersByTimeAsync(30_000);
+      const result = await run;
 
-    expect(result.status).toBe('completed');
-    expect(mock.getWorkflowDownloads).toHaveBeenCalledTimes(6);
-  }, 60_000);
+      expect(result.status).toBe('completed');
+      expect(mock.getWorkflowDownloads).toHaveBeenCalledTimes(6);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it('a permanent 429 exhausts the budget and then propagates - no infinite loop', async () => {
     let calls = 0;

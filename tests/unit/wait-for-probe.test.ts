@@ -83,21 +83,29 @@ describe('GislClient.waitForProbe', () => {
   });
 
   it('polls past 422 not-landed and stops on the first 200 (landed: true)', async () => {
-    fetchSpy
-      .mockResolvedValueOnce(notLanded())
-      .mockResolvedValueOnce(notLanded())
-      .mockResolvedValueOnce(probeOk(FID));
+    vi.useFakeTimers();
+    try {
+      fetchSpy
+        .mockResolvedValueOnce(notLanded())
+        .mockResolvedValueOnce(notLanded())
+        .mockResolvedValueOnce(probeOk(FID));
 
-    const polls: Array<{ attempt: number; elapsedMs: number }> = [];
-    const result = await client.waitForProbe(FID, { timeoutMs: 5000, onPoll: (i) => polls.push(i) });
+      const polls: Array<{ attempt: number; elapsedMs: number }> = [];
+      const waited = client.waitForProbe(FID, { timeoutMs: 5000, onPoll: (i) => polls.push(i) });
+      // Two jitter sleeps, at most 249 + 499 ms.
+      await vi.advanceTimersByTimeAsync(750);
+      const result = await waited;
 
-    expect(result.landed).toBe(true);
-    expect(result.probe?.probeStatus).toBe('ok');
-    expect(result.reason).toBeUndefined();
-    expect(fetchSpy).toHaveBeenCalledTimes(3);
-    // onPoll fires once per attempt, 1-based, with monotonic elapsedMs.
-    expect(polls.map((p) => p.attempt)).toEqual([1, 2, 3]);
-    expect(polls[0].elapsedMs).toBeGreaterThanOrEqual(0);
+      expect(result.landed).toBe(true);
+      expect(result.probe?.probeStatus).toBe('ok');
+      expect(result.reason).toBeUndefined();
+      expect(fetchSpy).toHaveBeenCalledTimes(3);
+      // onPoll fires once per attempt, 1-based, with monotonic elapsedMs.
+      expect(polls.map((p) => p.attempt)).toEqual([1, 2, 3]);
+      expect(polls[0].elapsedMs).toBeGreaterThanOrEqual(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('stops on ANY 200 without interpreting probeStatus (e.g. corrupt → still landed)', async () => {
@@ -117,15 +125,23 @@ describe('GislClient.waitForProbe', () => {
   });
 
   it('retries a couple of 5xx then gives up with reason "prober_error" (never throws)', async () => {
-    fetchSpy
-      .mockResolvedValueOnce(proberCrash())
-      .mockResolvedValueOnce(proberCrash())
-      .mockResolvedValueOnce(proberCrash());
-    const result = await client.waitForProbe(FID, { timeoutMs: 5000 });
-    expect(result.landed).toBe(false);
-    expect(result.reason).toBe('prober_error');
-    // 2 retries allowed → the 3rd 5xx trips give-up.
-    expect(fetchSpy).toHaveBeenCalledTimes(3);
+    vi.useFakeTimers();
+    try {
+      fetchSpy
+        .mockResolvedValueOnce(proberCrash())
+        .mockResolvedValueOnce(proberCrash())
+        .mockResolvedValueOnce(proberCrash());
+      const waited = client.waitForProbe(FID, { timeoutMs: 5000 });
+      // Two jitter sleeps, at most 249 + 499 ms.
+      await vi.advanceTimersByTimeAsync(750);
+      const result = await waited;
+      expect(result.landed).toBe(false);
+      expect(result.reason).toBe('prober_error');
+      // 2 retries allowed → the 3rd 5xx trips give-up.
+      expect(fetchSpy).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('a 5xx followed by a 200 still lands (transient prober blip)', async () => {
@@ -136,12 +152,20 @@ describe('GislClient.waitForProbe', () => {
   });
 
   it('gives up with "prober_error" on repeated transport/network failures (never throws → caller creates anyway)', async () => {
-    // A fetch network failure surfaces as a TypeError out of request().
-    fetchSpy.mockRejectedValue(new TypeError('network down'));
-    const result = await client.waitForProbe(FID, { timeoutMs: 5000 });
-    expect(result.landed).toBe(false);
-    expect(result.reason).toBe('prober_error');
-    expect(fetchSpy).toHaveBeenCalledTimes(3); // 2 retries then give up
+    vi.useFakeTimers();
+    try {
+      // A fetch network failure surfaces as a TypeError out of request().
+      fetchSpy.mockRejectedValue(new TypeError('network down'));
+      const waited = client.waitForProbe(FID, { timeoutMs: 5000 });
+      // Two jitter sleeps, at most 249 + 499 ms.
+      await vi.advanceTimersByTimeAsync(750);
+      const result = await waited;
+      expect(result.landed).toBe(false);
+      expect(result.reason).toBe('prober_error');
+      expect(fetchSpy).toHaveBeenCalledTimes(3); // 2 retries then give up
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('a transient transport failure followed by a 200 still lands', async () => {
@@ -193,24 +217,40 @@ describe('GislClient.waitForProbe', () => {
 
   describe('the three 422 arms', () => {
     it('(i) probe_not_ready: keeps polling and lands on the next 200', async () => {
-      fetchSpy
-        .mockResolvedValueOnce(probe422('probe_not_ready'))
-        .mockResolvedValueOnce(probe422('probe_not_ready'))
-        .mockResolvedValueOnce(probeOk(FID));
-      const result = await client.waitForProbe(FID, { timeoutMs: 5000 });
-      expect(result).toMatchObject({ landed: true });
-      expect(fetchSpy).toHaveBeenCalledTimes(3);
+      vi.useFakeTimers();
+      try {
+        fetchSpy
+          .mockResolvedValueOnce(probe422('probe_not_ready'))
+          .mockResolvedValueOnce(probe422('probe_not_ready'))
+          .mockResolvedValueOnce(probeOk(FID));
+        const waited = client.waitForProbe(FID, { timeoutMs: 5000 });
+        // Two jitter sleeps, at most 249 + 499 ms.
+        await vi.advanceTimersByTimeAsync(750);
+        const result = await waited;
+        expect(result).toMatchObject({ landed: true });
+        expect(fetchSpy).toHaveBeenCalledTimes(3);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('(i) probe_not_ready: honours Retry-After before the next poll', async () => {
-      // Retry-After: 1 → the second poll waits ~1 s. The jitter backoff on
-      // attempt 1 is at most 250 ms, so >= 950 ms can only be the header.
-      fetchSpy.mockResolvedValueOnce(probe422('probe_not_ready', '1')).mockResolvedValueOnce(probeOk(FID));
-      const start = Date.now();
-      const result = await client.waitForProbe(FID, { timeoutMs: 5000 });
-      expect(result.landed).toBe(true);
-      expect(Date.now() - start).toBeGreaterThanOrEqual(950);
-      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      // Retry-After: 1 → the second poll waits exactly 1 s on the fake clock. The
+      // jitter backoff on attempt 1 is at most 249 ms, so a second poll still
+      // missing at 999 ms can only be the header.
+      vi.useFakeTimers();
+      try {
+        fetchSpy.mockResolvedValueOnce(probe422('probe_not_ready', '1')).mockResolvedValueOnce(probeOk(FID));
+        const waited = client.waitForProbe(FID, { timeoutMs: 5000 });
+        await vi.advanceTimersByTimeAsync(999);
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(1);
+        const result = await waited;
+        expect(result.landed).toBe(true);
+        expect(fetchSpy).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('(i) probe_not_ready never answering: gives up with "timeout", never throws', async () => {
@@ -241,15 +281,28 @@ describe('GislClient.waitForProbe', () => {
     });
 
     it('(iii) feature_not_available (older server builds) keeps retrying until timeoutMs, its ceiling', async () => {
-      fetchSpy.mockImplementation(() => Promise.resolve(notLanded()));
-      const start = Date.now();
-      // 1.5 s: the attempt-1 jitter backoff is at most 250 ms, so a second poll
-      // always fits (a 120 ms budget let one long jitter sleep consume it all).
-      const result = await client.waitForProbe(FID, { timeoutMs: 1500 });
-      expect(result).toEqual({ landed: false, reason: 'timeout' });
-      // More than one poll: it RETRIED, it did not treat the arm as terminal.
-      expect(fetchSpy.mock.calls.length).toBeGreaterThan(1);
-      expect(Date.now() - start).toBeGreaterThanOrEqual(1400);
+      vi.useFakeTimers();
+      try {
+        fetchSpy.mockImplementation(() => Promise.resolve(notLanded()));
+        // 1.5 s: the attempt-1 jitter backoff is at most 249 ms, so a second poll
+        // always fits (a 120 ms budget let one long jitter sleep consume it all).
+        // The last sleep is clamped to what remains, so whatever the jitter draws
+        // the wait ends at exactly 1500 ms on the fake clock.
+        let settled = false;
+        const waited = client.waitForProbe(FID, { timeoutMs: 1500 }).finally(() => {
+          settled = true;
+        });
+        await vi.advanceTimersByTimeAsync(1_499);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(settled).toBe(true);
+        const result = await waited;
+        expect(result).toEqual({ landed: false, reason: 'timeout' });
+        // More than one poll: it RETRIED, it did not treat the arm as terminal.
+        expect(fetchSpy.mock.calls.length).toBeGreaterThan(1);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('any OTHER 422 error_type still propagates', async () => {

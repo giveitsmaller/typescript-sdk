@@ -856,11 +856,18 @@ describe('MergeBuilder.run — projects only the merge job output (excludes pass
 // bTNCSX1x — merge's terminal downloads fetch retries a 429 (second-identity review of #432).
 describe('MergeBuilder — 429 on the downloads fetch (bTNCSX1x)', () => {
   it('is retried and the merge completes', async () => {
-    const mock = makeMockClient();
-    mock.getWorkflowDownloads.mockRejectedValueOnce(
-      new GislApiError(429, 'RATE_LIMITED', '/downloads', undefined, { responseHeaders: { 'retry-after': '1' } }),
-    );
-    await new MergeBuilder(mock.client, [asset('a.mp4'), asset('b.mp4')], {}).run({ maxWait: '30s' });
-    expect(mock.getWorkflowDownloads).toHaveBeenCalledTimes(2);
+    vi.useFakeTimers();
+    try {
+      const mock = makeMockClient();
+      mock.getWorkflowDownloads.mockRejectedValueOnce(
+        new GislApiError(429, 'RATE_LIMITED', '/downloads', undefined, { responseHeaders: { 'retry-after': '1' } }),
+      );
+      const run = new MergeBuilder(mock.client, [asset('a.mp4'), asset('b.mp4')], {}).run({ maxWait: '30s' });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await run;
+      expect(mock.getWorkflowDownloads).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -126,14 +126,18 @@ describe('createWorkflowAwaitingProbe', () => {
       if (calls === 1) throw refusal('op');
       return { workflowId: 'wf' };
     });
+    vi.useFakeTimers();
     // The probe wait gets the REMAINING budget, read from Date.now(). Freeze the
     // clock so "remaining" is exactly the budget; a live clock made this 4999
     // whenever a millisecond elapsed (flaked on the CI server, #461).
     const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
     try {
-      await expect(createWorkflowAwaitingProbe(d.client, single, { timeoutMs: 5_000 })).resolves.toEqual({ workflowId: 'wf' });
+      const created = createWorkflowAwaitingProbe(d.client, single, { timeoutMs: 5_000 });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(created).resolves.toEqual({ workflowId: 'wf' });
     } finally {
       now.mockRestore();
+      vi.useRealTimers();
     }
     expect(d.waitForProbe).toHaveBeenCalledOnce();
     expect(d.waitForProbe.mock.calls[0][0]).toBe('file_a');
@@ -142,13 +146,20 @@ describe('createWorkflowAwaitingProbe', () => {
   });
 
   it.each(['ok', 'missing_metadata'])('retries after a probe that landed %s', async (status) => {
-    let calls = 0;
-    const d = doubles(async () => {
-      if (++calls === 1) throw refusal('op');
-      return { workflowId: 'wf' };
-    }, landed(status));
-    await createWorkflowAwaitingProbe(d.client, single);
-    expect(d.createWorkflow).toHaveBeenCalledTimes(2);
+    vi.useFakeTimers();
+    try {
+      let calls = 0;
+      const d = doubles(async () => {
+        if (++calls === 1) throw refusal('op');
+        return { workflowId: 'wf' };
+      }, landed(status));
+      const created = createWorkflowAwaitingProbe(d.client, single);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await created;
+      expect(d.createWorkflow).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each(['corrupt', 'unsupported_codec'])('does NOT retry a probe that landed %s: the original refusal surfaces', async (status) => {
@@ -179,27 +190,41 @@ describe('createWorkflowAwaitingProbe', () => {
         },
       ],
     } as unknown as WorkflowCreatePayload;
-    let calls = 0;
-    const d = doubles(async () => {
-      if (++calls === 1) throw refusal('wm');
-      return { workflowId: 'wf' };
-    });
-    d.waitForProbe.mockImplementation(async (fileId: string) =>
-      fileId === 'logo_png' ? { landed: false, reason: 'not_applicable' } : landed('ok'),
-    );
-    await expect(createWorkflowAwaitingProbe(d.client, watermark)).resolves.toEqual({ workflowId: 'wf' });
-    expect(d.waitForProbe.mock.calls.map((c) => c[0])).toEqual(['logo_png', 'clip_mp4']);
-    expect(d.createWorkflow).toHaveBeenCalledTimes(2);
+    vi.useFakeTimers();
+    try {
+      let calls = 0;
+      const d = doubles(async () => {
+        if (++calls === 1) throw refusal('wm');
+        return { workflowId: 'wf' };
+      });
+      d.waitForProbe.mockImplementation(async (fileId: string) =>
+        fileId === 'logo_png' ? { landed: false, reason: 'not_applicable' } : landed('ok'),
+      );
+      const created = createWorkflowAwaitingProbe(d.client, watermark);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(created).resolves.toEqual({ workflowId: 'wf' });
+      expect(d.waitForProbe.mock.calls.map((c) => c[0])).toEqual(['logo_png', 'clip_mp4']);
+      expect(d.createWorkflow).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('re-creates without a probe wait when the only upload is not_applicable (nothing to wait for)', async () => {
-    let calls = 0;
-    const d = doubles(async () => {
-      if (++calls === 1) throw refusal('op');
-      return { workflowId: 'wf' };
-    }, { landed: false, reason: 'not_applicable' });
-    await expect(createWorkflowAwaitingProbe(d.client, single)).resolves.toEqual({ workflowId: 'wf' });
-    expect(d.createWorkflow).toHaveBeenCalledTimes(2);
+    vi.useFakeTimers();
+    try {
+      let calls = 0;
+      const d = doubles(async () => {
+        if (++calls === 1) throw refusal('op');
+        return { workflowId: 'wf' };
+      }, { landed: false, reason: 'not_applicable' });
+      const created = createWorkflowAwaitingProbe(d.client, single);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(created).resolves.toEqual({ workflowId: 'wf' });
+      expect(d.createWorkflow).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('a not_applicable upload the server keeps refusing: the budget ends it, not a create count (Hal5c41E)', async () => {
@@ -305,14 +330,22 @@ describe('createWorkflowAwaitingProbe', () => {
   });
 
   it('caps each wait at the time left before the deadline', async () => {
-    let calls = 0;
-    const d = doubles(async () => {
-      if (++calls === 1) throw refusal('op');
-      return { workflowId: 'wf' };
-    });
-    await createWorkflowAwaitingProbe(d.client, single, { timeoutMs: 60_000, deadline: Date.now() + 2_000 });
-    const opts = d.waitForProbe.mock.calls[0][1] as { timeoutMs: number };
-    expect(opts.timeoutMs).toBeLessThanOrEqual(2_000);
+    vi.useFakeTimers();
+    try {
+      let calls = 0;
+      const d = doubles(async () => {
+        if (++calls === 1) throw refusal('op');
+        return { workflowId: 'wf' };
+      });
+      const created = createWorkflowAwaitingProbe(d.client, single, { timeoutMs: 60_000, deadline: Date.now() + 2_000 });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await created;
+      const opts = d.waitForProbe.mock.calls[0][1] as { timeoutMs: number };
+      // The fake clock has not moved before the probe wait, so the cap is exactly the 2 s left.
+      expect(opts.timeoutMs).toBe(2_000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does not create at all when the signal is already aborted (codex ae65d4f34b8e)', async () => {
@@ -326,15 +359,23 @@ describe('createWorkflowAwaitingProbe', () => {
   });
 
   it("honours the refusal's Retry-After before polling (codex 089af94beb8e)", async () => {
-    let calls = 0;
-    const d = doubles(async () => {
-      if (++calls === 1) throw refusal('op', '1');
-      return { workflowId: 'wf' };
-    });
-    const started = Date.now();
-    await createWorkflowAwaitingProbe(d.client, single);
-    expect(d.waitForProbe.mock.invocationCallOrder[0]).toBeGreaterThan(d.createWorkflow.mock.invocationCallOrder[0]);
-    expect(Date.now() - started).toBeGreaterThanOrEqual(950);
+    vi.useFakeTimers();
+    try {
+      let calls = 0;
+      const d = doubles(async () => {
+        if (++calls === 1) throw refusal('op', '1');
+        return { workflowId: 'wf' };
+      });
+      const created = createWorkflowAwaitingProbe(d.client, single);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(d.waitForProbe).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(d.waitForProbe).toHaveBeenCalledOnce();
+      await created;
+      expect(d.waitForProbe.mock.invocationCallOrder[0]).toBeGreaterThan(d.createWorkflow.mock.invocationCallOrder[0]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('a Retry-After that ends past the deadline is a timeout now, not a wait', async () => {
@@ -407,10 +448,17 @@ afterEach(() => vi.restoreAllMocks());
 
 describe('probe_pending recovery through run()', () => {
   it('OperationBuilder.run() recovers without the caller writing the loop', async () => {
-    const m = mockClient();
-    await new OperationBuilder(m.client, 'compress', 'clip.mp4', {}).run({ maxWait: '30s' });
-    expect(m.createWorkflow).toHaveBeenCalledTimes(2);
-    expect(m.waitForProbe.mock.calls[0][0]).toBe('file_up');
+    vi.useFakeTimers();
+    try {
+      const m = mockClient();
+      const run = new OperationBuilder(m.client, 'compress', 'clip.mp4', {}).run({ maxWait: '30s' });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await run;
+      expect(m.createWorkflow).toHaveBeenCalledTimes(2);
+      expect(m.waitForProbe.mock.calls[0][0]).toBe('file_up');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('run({ probeBeforeCreate: false }) opts out of recovery too', async () => {
@@ -422,10 +470,19 @@ describe('probe_pending recovery through run()', () => {
   });
 
   it('Recipe.run() recovers without the caller writing the loop', async () => {
-    const m = mockClient();
-    await new Recipe(fileInput.path('clip.mp4'), undefined, [], undefined, undefined, m.client).compress().run({ maxWait: '30s' });
-    expect(m.createWorkflow).toHaveBeenCalledTimes(2);
-    expect(m.waitForProbe.mock.calls[0][0]).toBe('file_up');
+    vi.useFakeTimers();
+    try {
+      const m = mockClient();
+      const run = new Recipe(fileInput.path('clip.mp4'), undefined, [], undefined, undefined, m.client)
+        .compress()
+        .run({ maxWait: '30s' });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await run;
+      expect(m.createWorkflow).toHaveBeenCalledTimes(2);
+      expect(m.waitForProbe.mock.calls[0][0]).toBe('file_up');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -467,38 +524,52 @@ const jobsOf = (payload: WorkflowCreatePayload): JobShape[] => payload.jobs as u
 
 describe('merge probe_pending: the server names the feeder job src_N (f5ti3pik)', () => {
   it('files([...]).merge().run() waits on exactly src_1\'s upload, then re-creates', async () => {
-    const m = mergeFeederClient();
-    const inputs = ['a.mp4', 'b.mp4', 'c.mp4'].map((p) => fileInput.path(p));
-    await new FilesRecipe(inputs, [], undefined, undefined, m.client).merge({ mediaKind: 'video' }).run({ maxWait: '30s' });
+    vi.useFakeTimers();
+    try {
+      const m = mergeFeederClient();
+      const inputs = ['a.mp4', 'b.mp4', 'c.mp4'].map((p) => fileInput.path(p));
+      const run = new FilesRecipe(inputs, [], undefined, undefined, m.client).merge({ mediaKind: 'video' }).run({ maxWait: '30s' });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await run;
 
-    expect(m.createWorkflow).toHaveBeenCalledTimes(2);
-    const sent = m.createWorkflow.mock.calls[0][0];
-    const src1 = jobsOf(sent).find((j) => j.id === 'src_1');
-    expect(src1?.source).toEqual({ type: 'upload', file_id: 'up_b.mp4' });
-    expect(m.waitForProbe.mock.calls.map((c) => c[0])).toEqual(['up_b.mp4']);
-    // The SAME payload is re-sent.
-    expect(m.createWorkflow.mock.calls[1][0]).toBe(sent);
+      expect(m.createWorkflow).toHaveBeenCalledTimes(2);
+      const sent = m.createWorkflow.mock.calls[0][0];
+      const src1 = jobsOf(sent).find((j) => j.id === 'src_1');
+      expect(src1?.source).toEqual({ type: 'upload', file_id: 'up_b.mp4' });
+      expect(m.waitForProbe.mock.calls.map((c) => c[0])).toEqual(['up_b.mp4']);
+      // The SAME payload is re-sent.
+      expect(m.createWorkflow.mock.calls[1][0]).toBe(sent);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('client.merge (MergeBuilder) with a repeated asset: src_1 is the second UNIQUE asset', async () => {
-    const m = mergeFeederClient();
-    const a = asset('a.mp4');
-    const b = asset('b.mp4');
-    const c = asset('c.mp4');
-    // Play order a, a, b, c: MergedRecipe would lower a src job per position
-    // (src_1 = a); MergeBuilder dedups onto one src per asset (src_1 = b).
-    await new MergeBuilder(m.client, [a, b, c], { mediaKind: 'video' }).sequence(a, a, b, c).run({ maxWait: '30s' });
+    vi.useFakeTimers();
+    try {
+      const m = mergeFeederClient();
+      const a = asset('a.mp4');
+      const b = asset('b.mp4');
+      const c = asset('c.mp4');
+      // Play order a, a, b, c: MergedRecipe would lower a src job per position
+      // (src_1 = a); MergeBuilder dedups onto one src per asset (src_1 = b).
+      const run = new MergeBuilder(m.client, [a, b, c], { mediaKind: 'video' }).sequence(a, a, b, c).run({ maxWait: '30s' });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await run;
 
-    expect(m.createWorkflow).toHaveBeenCalledTimes(2);
-    const sent = m.createWorkflow.mock.calls[0][0];
-    expect(jobsOf(sent).filter((j) => j.id?.startsWith('src_')).map((j) => [j.id, j.source?.file_id])).toEqual([
-      ['src_0', 'up_a.mp4'],
-      ['src_1', 'up_b.mp4'],
-      ['src_2', 'up_c.mp4'],
-    ]);
-    expect(jobsOf(sent).find((j) => j.id === 'merge')?.inputs).toHaveLength(4);
-    expect(m.waitForProbe.mock.calls.map((c) => c[0])).toEqual(['up_b.mp4']);
-    expect(m.createWorkflow.mock.calls[1][0]).toBe(sent);
+      expect(m.createWorkflow).toHaveBeenCalledTimes(2);
+      const sent = m.createWorkflow.mock.calls[0][0];
+      expect(jobsOf(sent).filter((j) => j.id?.startsWith('src_')).map((j) => [j.id, j.source?.file_id])).toEqual([
+        ['src_0', 'up_a.mp4'],
+        ['src_1', 'up_b.mp4'],
+        ['src_2', 'up_c.mp4'],
+      ]);
+      expect(jobsOf(sent).find((j) => j.id === 'merge')?.inputs).toHaveLength(4);
+      expect(m.waitForProbe.mock.calls.map((c) => c[0])).toEqual(['up_b.mp4']);
+      expect(m.createWorkflow.mock.calls[1][0]).toBe(sent);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

@@ -396,19 +396,23 @@ describe('gisl.anonymous() — local refusals before any I/O', () => {
     };
     const client = await _internalAnonymous({ baseUrl: BASE });
     const payload = { jobs: [{ source: { type: 'upload', file_id: 'f1' }, operations: [] }] } as never;
+    vi.useFakeTimers();
     let thrown: unknown;
     try {
       // A 1 s budget fits no more than the first 1 s backoff: the server keeps
       // refusing, so the original refusal comes back once the budget is spent.
-      await client.createWorkflowAwaitingProbe(payload, { timeoutMs: 1000 });
-    } catch (err) {
-      thrown = err;
+      const outcome = client.createWorkflowAwaitingProbe(payload, { timeoutMs: 1000 }).catch((err: unknown) => err);
+      await vi.advanceTimersByTimeAsync(1_000);
+      thrown = await outcome;
+    } finally {
+      vi.useRealTimers();
     }
     // 5dJrOdVC: the probe endpoint is sign-in only, so a guest retries the
     // CREATE; it never calls waitForProbe (which the gate would refuse).
     expect(thrown).toBeInstanceOf(GislProbePendingError);
     const paths = seen.map((s) => `${s.method} ${new URL(s.url).pathname}`);
-    expect(paths.length).toBeGreaterThanOrEqual(1);
+    // On the fake clock: the first create, then exactly one at the budget boundary.
+    expect(paths).toHaveLength(2);
     expect(new Set(paths)).toEqual(new Set(['POST /api/workflows']));
   });
 });

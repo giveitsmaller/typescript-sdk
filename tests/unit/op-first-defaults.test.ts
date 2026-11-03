@@ -118,37 +118,47 @@ describe('36AZ98FV — operation-first run() takes no required arguments', () =>
     // known FRACTION of the budget, so the run can poll an exact number of times
     // before the deadline passes, and a larger default permits strictly more.
     //
-    // ⚠️ THE FRACTION IS A THIRD, NOT A TENTH, AND THE REASON IS THE POLL FLOOR
-    // (r7bpd7MY). `Date.now` is mocked so the DEADLINE advances virtually, but
-    // the sleep between polls is real — and the floor is now 1000 ms, sized
-    // against api's 60 requests/minute `status_poll` limit. At a tenth this test
-    // paid eleven REAL seconds and blew the 5 s timeout. A third costs three.
-    // The assertion stays an exact count; only the number of samples changed.
-    const mock = makeMockClient();
-    const t0 = 1_757_000_000_000;
-    const step = DEFAULT_POLL_TIMEOUT_MS / 3;
-    let now = t0;
-    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    // ⚠️ THE POLL FLOOR (r7bpd7MY) IS 1000 ms, sized against api's 60 requests/minute
+    // `status_poll` limit. `Date.now` is mocked so the DEADLINE advances virtually,
+    // and the floor sleep between polls runs on a FAKE `setTimeout`: three polls
+    // means two 1000 ms sleeps, so the clock is advanced exactly 2 s. Only
+    // setTimeout/clearTimeout are faked, so `Date` stays the real class this spy
+    // patches. vitest's default also swaps in a fake `Date`: a spy installed before
+    // `useFakeTimers` would then be bypassed and the deadline would stop moving.
+    // The fraction stays a third so the exact count stays 3; a larger default needs
+    // more sleeps than the 2 s advanced, so it fails as a test timeout instead.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const mock = makeMockClient();
+      const t0 = 1_757_000_000_000;
+      const step = DEFAULT_POLL_TIMEOUT_MS / 3;
+      let now = t0;
+      vi.spyOn(Date, 'now').mockImplementation(() => now);
 
-    let polls = 0;
-    mock.getWorkflowStatus.mockImplementation(async () => {
-      polls += 1;
-      now += step;
-      return {
-        workflowId: 'wf_1',
-        status: 'running',
-        createdAt: '2026-09-11T09:00:00Z',
-        updatedAt: '2026-09-11T09:00:00Z',
-        jobs: [{ jobId: 'job_1', ref: 'op', status: 'running' }],
-      };
-    });
+      let polls = 0;
+      mock.getWorkflowStatus.mockImplementation(async () => {
+        polls += 1;
+        now += step;
+        return {
+          workflowId: 'wf_1',
+          status: 'running',
+          createdAt: '2026-09-11T09:00:00Z',
+          updatedAt: '2026-09-11T09:00:00Z',
+          jobs: [{ jobId: 'job_1', ref: 'op', status: 'running' }],
+        };
+      });
 
-    await expect(
-      make(mock.client).run({ useSSE: false, pollIntervalMs: 1 }),
-    ).rejects.toThrow(GislTimeoutError);
+      const outcome = expect(
+        make(mock.client).run({ useSSE: false, pollIntervalMs: 1 }),
+      ).rejects.toThrow(GislTimeoutError);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await outcome;
 
-    expect(polls, `${_name} polled ${polls} times; the shared default allows exactly 3`).toBe(3);
-  }, 15_000);
+      expect(polls, `${_name} polled ${polls} times; the shared default allows exactly 3`).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('36AZ98FV — submit() without a webhook returns a USABLE handle', () => {
