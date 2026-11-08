@@ -41,27 +41,17 @@ if (UPDATE_MODE && process.env.CI === 'true') {
   );
 }
 
-// Cross-SDK known divergences (mirrors packages/php/tests/parity/ParityTest
-// KNOWN_DIVERGENCES). These shared fixtures pin a sub-contract-minimum
-// `recommended_chunk_size` (~2 MB) to keep the binary payload compact. The
-// PHP SDK already skips them (its strict generated model rejects
-// recommendedChunkSize below the contract minimum). The TS SDK now enforces
-// the SAME contract-range guard (codex review — closing the previously lax
-// TS path), so it skips the same fixtures for the same reason. The
-// happy-path multipart wire shape is covered by tests/unit/client.test.ts
-// and upload-streaming.test.ts with contract-valid chunk sizes.
+// Cross-SDK skips (mirrors packages/php/tests/parity/ParityTest
+// KNOWN_DIVERGENCES). The `upload_multipart` family is no longer here: until
+// xbWn0diW it pinned a ~2 MB `recommended_chunk_size`, below the contract's
+// 16 MiB floor that BOTH SDKs enforce, so both harnesses skipped it. It now
+// pins the floor and runs in both SDKs.
 const KNOWN_DIVERGENCES: Record<string, string> = {
-  // ⚠️ THE MAP'S NAME IS WRONG FOR THIS ENTRY AND THE REASON SAYS SO. Every
-  // other entry is a place the two SDKs disagree; this one is a place they
-  // AGREE to refuse, and it is here only because the harness has no other skip.
+  // ⚠️ THE MAP'S NAME IS WRONG FOR THIS ENTRY AND THE REASON SAYS SO. The two
+  // SDKs do not disagree here: they AGREE to refuse, and the entry is here only
+  // because the harness has no other skip.
   ff_lowering_video_watermark_overlay:
     'NOT A DIVERGENCE — both SDKs refuse identically. video_watermark was WITHDRAWN to `planned` by contracts v2.203.0, so the SDK now throws at .watermark() before any payload exists. 🔑 RESTORE THIS FIXTURE when the op is re-listed; until then the video lowering shape is uncovered. Converting it to mode=local_validation_error would keep the parity coverage and is carded.',
-  upload_multipart:
-    'SDK rejects recommendedChunkSize below the contract minimum; fixture pins ~2 MB for a compact payload. Covered by client.test.ts/upload-streaming.test.ts with valid chunk sizes.',
-  upload_metadata_hint:
-    'Same sub-minimum recommendedChunkSize as upload_multipart.',
-  upload_boundary_multipart:
-    'Same sub-minimum recommendedChunkSize as upload_multipart.',
 };
 
 // Exozpn36 — divergences the harness can SEE but this SDK has not closed.
