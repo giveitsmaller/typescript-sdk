@@ -261,6 +261,7 @@ OperationBreakdown	type
 OperationBuilder	value+type
 OperationCapability	type
 OperationDef	type
+OperationDefinitionBaseEnum	value
 OperationDownload	type
 OperationInputModel	value
 OperationMetadata	type

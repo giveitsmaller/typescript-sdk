@@ -12,7 +12,12 @@ import type {
   MultiInputSource,
   MultipartPartListing,
 } from '@giveitsmaller/contracts/openapi';
-import type { JobInputV2RoleEnum, NotifyConfig } from '@giveitsmaller/contracts/openapi';
+import type {
+  JobInputV2RoleEnum,
+  NotifyConfig,
+  OperationDefinition,
+  OperationDefinitionBaseEnum,
+} from '@giveitsmaller/contracts/openapi';
 import type {
   SseOperationProgressWire,
   SseOperationCompletedWire,
@@ -113,7 +118,32 @@ export interface GislClientConfig {
 export interface OperationDef {
   type: OperationType;
   options?: Record<string, unknown>;
+  /**
+   * For derived artifacts (`thumbnail`, `split`): which composition node the
+   * artifact branches from. The default depends on the operation (owner
+   * decision 720): `thumbnail` defaults to `original`, `split` to
+   * `processed_base`, so a `[compress, thumbnail]` job thumbnails the ORIGINAL
+   * unless this says `processed_base`. Omitted, no `base` key is sent and the
+   * server default applies.
+   */
+  base?: OperationDefinitionBaseEnum;
 }
+
+// Compile-time invariant: OperationDef carries exactly the contract
+// OperationDefinition's keys, so a field the contract adds to an operation
+// fails tsc here instead of being silently unreachable (otOQbZvq: `base`
+// shipped in spec v2.226.0 and no SDK could send it). Same tuple-wrapped
+// pattern as _JobDefinitionPayloadDrift below.
+type _ExtraOperationDefKey = Exclude<keyof OperationDef, keyof OperationDefinition>;
+type _MissingOperationDefKey = Exclude<keyof OperationDefinition, keyof OperationDef>;
+type _OperationDefDrift =
+  [_ExtraOperationDefKey] extends [never]
+    ? [_MissingOperationDefKey] extends [never]
+      ? true
+      : ['DRIFT: OperationDef is missing keys of the contract OperationDefinition', _MissingOperationDefKey]
+    : ['DRIFT: OperationDef has keys the contract OperationDefinition lacks', _ExtraOperationDefKey];
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+type _OperationDefDriftAssertion = _AssertTrue<_OperationDefDrift>;
 
 // ---------------------------------------------------------------------------
 // v2 source variants — discriminated by `type` wire key

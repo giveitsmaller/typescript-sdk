@@ -5,7 +5,7 @@ import {
   MULTIPART_CONCURRENCY_DEFAULT,
 } from '../../src/client.js';
 import { externalImportSource, uploadSource } from '../../src/types.js';
-import type { GislSseEvent } from '../../src/types.js';
+import type { GislSseEvent, OperationDef } from '../../src/types.js';
 import type { UserTier } from '@giveitsmaller/contracts/openapi';
 import {
   GislAbortError,
@@ -389,6 +389,46 @@ describe('GislClient', () => {
         connection_id: 'conn_1',
         path: '/exports/run-1',
       });
+    });
+
+    it("sends an operation's base on the wire, and no base key when it is unset (decision 720)", async () => {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            workflow_id: 'wf-1',
+            status: 'pending',
+            created_at: '2026-04-27T10:00:00Z',
+            jobs: [],
+            delivery_plan: {
+              mode: 'individual',
+              selection_type: 'terminal',
+              outputs: [],
+              hidden_outputs: [],
+            },
+            processing_plan: { jobs: [] },
+            warnings: [],
+          },
+        }),
+      );
+
+      await client.createWorkflow({
+        jobs: [
+          {
+            source: uploadSource('file-abc'),
+            operations: [{ type: 'compress' }, { type: 'thumbnail', base: 'processed_base' }],
+          },
+        ],
+      });
+
+      const [, options] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      const sentOps = JSON.parse(options.body as string).jobs[0].operations;
+      expect(sentOps[1]).toEqual({ type: 'thumbnail', base: 'processed_base' });
+      expect('base' in sentOps[0]).toBe(false);
+
+      // @ts-expect-error -- `base` is the contract enum, not a free string.
+      const bogus: OperationDef = { type: 'thumbnail', base: 'bogus' };
+      void bogus;
     });
   });
 

@@ -156,6 +156,8 @@ OperationInputModel, ExternalImportRequestProviderHintEnum, ContactSubject, Cred
 // CreditQuote enums (planned, RHxg7olf) — value-bearing forms for the
 // quote's `status`, `lines[].state` and `lines[].outcome`.
 CreditQuoteStatus, CreditQuoteLineState, CreditQuoteLineOutcome, WarningType, WorkflowWarningSeverity, OperationType, SseEventType, CallbackEventType, OperationStatus, JobStatus, JobInputV2RoleEnum, 
+// `OperationDef.base` (decision 720): `processed_base` | `original`.
+OperationDefinitionBaseEnum, 
 // Error-payload discriminator enums — pair with the typed payload
 // types above for narrowing inside `error instanceof Gisl<X>Error`
 // branches.

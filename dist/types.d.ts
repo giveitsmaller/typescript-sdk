@@ -1,5 +1,5 @@
 import type { OperationType, OperationsSchemaResponse, OperationCapability, OutputProperties, ImageEncodeCapabilities, CallbackEventType, SseEventType, MultipartInitiateRequestMetadataHint, UploadProbeResponse, MultipartPartListing } from '@giveitsmaller/contracts/openapi';
-import type { JobInputV2RoleEnum, NotifyConfig } from '@giveitsmaller/contracts/openapi';
+import type { JobInputV2RoleEnum, NotifyConfig, OperationDefinitionBaseEnum } from '@giveitsmaller/contracts/openapi';
 import type { SseOperationProgressWire, SseOperationCompletedWire, SseOperationFailedWire, SseJobCompletedWire, SseJobFailedWire, SseWorkflowTerminalWire } from './sse-wire.js';
 export interface GislClientConfig {
     baseUrl: string;
@@ -83,6 +83,15 @@ export interface GislClientConfig {
 export interface OperationDef {
     type: OperationType;
     options?: Record<string, unknown>;
+    /**
+     * For derived artifacts (`thumbnail`, `split`): which composition node the
+     * artifact branches from. The default depends on the operation (owner
+     * decision 720): `thumbnail` defaults to `original`, `split` to
+     * `processed_base`, so a `[compress, thumbnail]` job thumbnails the ORIGINAL
+     * unless this says `processed_base`. Omitted, no `base` key is sent and the
+     * server default applies.
+     */
+    base?: OperationDefinitionBaseEnum;
 }
 export interface UploadSourcePayload {
     type: 'upload';

@@ -512,6 +512,8 @@ export {
   OperationStatus,
   JobStatus,
   JobInputV2RoleEnum,
+  // `OperationDef.base` (decision 720): `processed_base` | `original`.
+  OperationDefinitionBaseEnum,
   // Error-payload discriminator enums — pair with the typed payload
   // types above for narrowing inside `error instanceof Gisl<X>Error`
   // branches.
