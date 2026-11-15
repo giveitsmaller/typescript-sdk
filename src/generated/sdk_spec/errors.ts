@@ -43,6 +43,7 @@ export type ErrorCode =
   | "input_password_protected"
   | "gif_too_long"
   | "merge_over_limit"
+  | "duration_unknown"
   | "inputs_not_concat_uniform"
   | "requires_reencode"
   | "invalid_options"
@@ -65,6 +66,7 @@ export type ErrorCode =
   | "service_degraded"
   | "long_video_cap_reached"
   | "long_video_job_too_costly"
+  | "abuse_detected"
   | "unprocessable_entity"
   | "email_same"
   | "config_error"
@@ -615,6 +617,17 @@ export const ERROR_CODES: Readonly<Record<ErrorCode, ErrorEntry>> = Object.freez
     description: "422 — a video merge whose inputs are not concat-uniform (so only merge.video short_form_concat can run it) and whose measured total exceeds that class's max_total_duration (PT5M) or max_total_input_size_bytes (500 MiB). Wire `MERGE_OVER_LIMIT`; ValidationErrorEnvelope, one details[] entry whose `ceiling` (InputCeilingViolation) carries axis, actual, maximum, bound_by merge. The caller trims the clips or uses uniform ones; retrying does not help. `planned` until api ships the create-time refusal (xuVTM06N; owner decision 755).",
     metadataSchema: Object.freeze({}),
   }),
+  "duration_unknown": Object.freeze({
+    code: "duration_unknown",
+    category: "validation" as ErrorCategory,
+    source: "ErrorEnvelope.error",
+    status: "planned" as ErrorStatus,
+    httpStatus: 422,
+    retryable: false,
+    sdkClass: "GislValidationError",
+    description: "422 on POST /api/workflows (director decision D287): a timed input's duration is unknown when the create is decided (its upload probe landed without one, or did not land within video.probe_wait_bound_seconds, or the input is another job's output) and the caller cannot afford the class-ceiling reserve an unknown duration takes. A technical refusal (schemas/pricing-policy.yaml refusals.technical_ceiling), never balance_exhausted, so no top-up is offered. Wire `DURATION_UNKNOWN`; ValidationErrorEnvelope, one details[] entry per such input with job_ref, upload_id (omitted for a derived input) and reason (DurationUnknownReason: probe_failed | probe_not_landed). `planned` until api ships the create-time refusal (api card yUoszzMk), like the other ErrorEnvelope.error codes.",
+    metadataSchema: Object.freeze({}),
+  }),
   "inputs_not_concat_uniform": Object.freeze({
     code: "inputs_not_concat_uniform",
     category: "validation" as ErrorCategory,
@@ -909,6 +922,17 @@ export const ERROR_CODES: Readonly<Record<ErrorCode, ErrorEntry>> = Object.freez
       "jobRef": "string",
     }),
   }),
+  "abuse_detected": Object.freeze({
+    code: "abuse_detected",
+    category: "api" as ErrorCategory,
+    source: "ErrorEnvelope.error",
+    status: "declared" as ErrorStatus,
+    httpStatus: 403,
+    retryable: false,
+    sdkClass: "GislApiError",
+    description: "403 on POST /api/workflows, and POST /api/workflows/quote by reference: the request is refused as abuse (operator decision D215, 2026-11-12). Detection is api's; the envelope names no signal. Distinct from feature_tier_restricted, balance_exhausted and every duration refusal, and input length alone is never abuse. Wire `error: ABUSE_DETECTED`, `error_type: abuse_detected` (AbuseDetectedResponse).",
+    metadataSchema: Object.freeze({}),
+  }),
   "unprocessable_entity": Object.freeze({
     code: "unprocessable_entity",
     category: "auth" as ErrorCategory,
@@ -1155,6 +1179,7 @@ export const ERROR_CATEGORIES: Readonly<Record<ErrorCategory, readonly ErrorCode
     "service_degraded",
     "long_video_cap_reached",
     "long_video_job_too_costly",
+    "abuse_detected",
     "item_failed",
     "quote_not_found",
     "quote_expired",
@@ -1202,6 +1227,7 @@ export const ERROR_CATEGORIES: Readonly<Record<ErrorCategory, readonly ErrorCode
     "input_password_protected",
     "gif_too_long",
     "merge_over_limit",
+    "duration_unknown",
     "inputs_not_concat_uniform",
     "invalid_options",
     "invalid_combination",
