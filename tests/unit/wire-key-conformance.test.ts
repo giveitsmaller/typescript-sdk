@@ -314,16 +314,20 @@ describe('wire-key conformance — merge', () => {
   // an explicit per-media omission set below.
   //
   // MERGE_INTENTIONALLY_OMITTED: op-level contract merge options the SDK
-  // deliberately does NOT surface as a standalone MergeOptions field. Empty
-  // today — every op-level key is reachable via a builder field:
+  // deliberately does NOT surface as a standalone MergeOptions field. Every
+  // other op-level key is reachable via a builder field:
   //   - output_type      via `output` / `outputType`
   //   - encoding_mode +
   //     target_size_bytes via `targetSize` (both emitted together)
+  // Omitted:
+  //   - audio `audio_format`: contracts v2.245.0 declares it `availability:
+  //     planned` with no default (4YyRIGB5); the worker keeps writing m4a until
+  //     it ships. Expose it on MergeOptions when it leaves `planned`.
   // A FUTURE new contract merge option fails this test until it is either
   // exposed on MergeOptions (+ wireMergeOptions) or documented here.
   const MERGE_INTENTIONALLY_OMITTED: Readonly<Record<string, ReadonlySet<string>>> = {
     video: new Set<string>(),
-    audio: new Set<string>(),
+    audio: new Set<string>(['audio_format']),
     image: new Set<string>(),
   };
 
