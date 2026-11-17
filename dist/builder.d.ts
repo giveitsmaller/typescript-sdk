@@ -46,11 +46,12 @@ import { type AudioFormatClass } from './ergonomic/preset_resolver.js';
 export declare function _detectCompressMedia(input: string | Blob): PresetMedia | undefined;
 /**
  * Best-effort classification of an audio input's format: `lossless`
- * (flac/wav), `lossy` (a recognised lossy format) or `uncertain` (nothing
- * on the input identifies the format). The worker rejects `bitrate` on
- * lossless audio (compress.yaml / contracts iakhSy3E), so the preset
- * resolver drops the shipped-preset bitrate for `lossless` AND `uncertain`
- * inputs (D569): an uncertain input may be flac/wav.
+ * (the contract refuses `bitrate` on it), `lossy` (it accepts `bitrate`) or
+ * `uncertain` (nothing on the input identifies the format). The sets come
+ * from the contract rule `compress.audio.bitrate.lossless_output`, generated
+ * at re-vendor (ajEAKlkJ), so the preset resolver drops the shipped-preset
+ * bitrate for `lossless` AND `uncertain` inputs (D569): an uncertain input
+ * may be lossless.
  *
  * Detection is filename/MIME only — it CANNOT probe the actual codec. A
  * recognised audio MIME wins over the filename; an unrecognised audio MIME

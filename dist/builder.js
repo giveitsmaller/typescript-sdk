@@ -38,6 +38,28 @@ import { GislApiError, GislConfigError, GislTimeoutError, GislFanOutTimeoutError
 import { Handle } from './handle.js';
 import { resolveCompressOptions, } from './ergonomic/preset_resolver.js';
 import { createWorkflowAwaitingProbe } from './probe-pending.js';
+import { COMPRESS_AUDIO_BITRATE_ACCEPTED_MIMES, COMPRESS_AUDIO_BITRATE_REFUSED_MIMES, } from './generated/capabilities/compress_audio_bitrate.js';
+// File-type knowledge, not a lossless judgement: the audio extensions the SDK
+// recognises and the canonical MIME each one names. Media detection reads the
+// keys; the audio classifier maps through it to the contract's MIME sets.
+const AUDIO_EXTENSION_MIME = new Map([
+    ['mp3', 'audio/mpeg'],
+    ['aac', 'audio/aac'],
+    ['m4a', 'audio/mp4'],
+    ['ogg', 'audio/ogg'],
+    ['oga', 'audio/ogg'],
+    ['opus', 'audio/ogg'], // Opus files are Ogg Opus (RFC 7845)
+    ['flac', 'audio/flac'],
+    ['wav', 'audio/wav'],
+]);
+// Non-canonical audio MIMEs clients send, mapped to the canonical MIME the
+// contract names.
+const AUDIO_MIME_ALIAS = new Map([
+    ['audio/x-flac', 'audio/flac'],
+    ['audio/x-wav', 'audio/wav'],
+    ['audio/wave', 'audio/wav'],
+    ['audio/opus', 'audio/ogg'],
+]);
 /**
  * Best-effort detection of the compress-operation media from the
  * builder's input. T4b only resolves presets for compress; the wire's
@@ -95,7 +117,7 @@ export function _detectCompressMedia(input) {
         return undefined;
     if (['jpg', 'jpeg', 'png', 'webp', 'avif', 'gif', 'tiff', 'tif', 'bmp', 'heic', 'heif'].includes(ext))
         return 'image';
-    if (['mp3', 'aac', 'm4a', 'ogg', 'oga', 'flac', 'wav', 'opus'].includes(ext))
+    if (AUDIO_EXTENSION_MIME.has(ext))
         return 'audio';
     if (['mp4', 'mov', 'mkv', 'webm', 'avi', 'wmv', 'flv', 'm4v'].includes(ext))
         return 'video';
@@ -109,29 +131,22 @@ export function _detectCompressMedia(input) {
         return 'document_office';
     return undefined;
 }
-// LOSSLESS audio per the compress.yaml contract (contracts iakhSy3E) —
-// flac/wav ONLY. `aiff` is deliberately absent — not a contract audio format,
-// so it classifies as uncertain (and loses the shipped bitrate) rather than lossy.
-const LOSSLESS_AUDIO_MIMES = new Set([
-    'audio/flac',
-    'audio/x-flac',
-    'audio/wav',
-    'audio/x-wav',
-    'audio/wave',
-]);
-const LOSSLESS_AUDIO_EXTENSIONS = new Set(['flac', 'wav']);
-// Recognised LOSSY audio (D569). The extensions are exactly the non-lossless
-// audio extensions `_detectCompressMedia` accepts, so a path never classifies
-// as uncertain.
-const LOSSY_AUDIO_MIMES = new Set(['audio/mpeg', 'audio/aac', 'audio/ogg', 'audio/mp4', 'audio/opus']);
-const LOSSY_AUDIO_EXTENSIONS = new Set(['mp3', 'aac', 'm4a', 'ogg', 'oga', 'opus']);
+/** The contract's class for a canonical audio MIME; undefined when it names none. */
+function audioFormatOfMime(mime) {
+    if (COMPRESS_AUDIO_BITRATE_REFUSED_MIMES.has(mime))
+        return 'lossless';
+    if (COMPRESS_AUDIO_BITRATE_ACCEPTED_MIMES.has(mime))
+        return 'lossy';
+    return undefined;
+}
 /**
  * Best-effort classification of an audio input's format: `lossless`
- * (flac/wav), `lossy` (a recognised lossy format) or `uncertain` (nothing
- * on the input identifies the format). The worker rejects `bitrate` on
- * lossless audio (compress.yaml / contracts iakhSy3E), so the preset
- * resolver drops the shipped-preset bitrate for `lossless` AND `uncertain`
- * inputs (D569): an uncertain input may be flac/wav.
+ * (the contract refuses `bitrate` on it), `lossy` (it accepts `bitrate`) or
+ * `uncertain` (nothing on the input identifies the format). The sets come
+ * from the contract rule `compress.audio.bitrate.lossless_output`, generated
+ * at re-vendor (ajEAKlkJ), so the preset resolver drops the shipped-preset
+ * bitrate for `lossless` AND `uncertain` inputs (D569): an uncertain input
+ * may be lossless.
  *
  * Detection is filename/MIME only — it CANNOT probe the actual codec. A
  * recognised audio MIME wins over the filename; an unrecognised audio MIME
@@ -159,17 +174,15 @@ export function _classifyAudioFormat(input) {
     // `audio` via the prefix check (codex 18b6b684).
     if (mime !== undefined && mime.startsWith('audio/')) {
         const bareMime = mime.split(';')[0].trim().toLowerCase();
-        if (LOSSLESS_AUDIO_MIMES.has(bareMime))
-            return 'lossless';
-        if (LOSSY_AUDIO_MIMES.has(bareMime))
-            return 'lossy';
+        const fromMime = audioFormatOfMime(AUDIO_MIME_ALIAS.get(bareMime) ?? bareMime);
+        if (fromMime !== undefined)
+            return fromMime;
     }
     if (filename !== undefined) {
-        const ext = filename.toLowerCase().split('.').pop();
-        if (ext !== undefined && LOSSLESS_AUDIO_EXTENSIONS.has(ext))
-            return 'lossless';
-        if (ext !== undefined && LOSSY_AUDIO_EXTENSIONS.has(ext))
-            return 'lossy';
+        const extMime = AUDIO_EXTENSION_MIME.get(filename.toLowerCase().split('.').pop() ?? '');
+        const fromName = extMime === undefined ? undefined : audioFormatOfMime(extMime);
+        if (fromName !== undefined)
+            return fromName;
     }
     return 'uncertain';
 }
