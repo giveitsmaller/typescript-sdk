@@ -282,7 +282,7 @@ describe('Recipe — compress preset delegation', () => {
   it('0Vcogefw — file-first compress on a *.flac input lowers WITHOUT bitrate', () => {
     // Proves the file-first call-site is wired (a regression here = only the
     // operation-first site got the audio-lossless drop). The Recipe must
-    // resolve audioLossless from the *.flac path and drop the sdkDefault
+    // resolve audioFormat from the *.flac path and drop the sdkDefault
     // bitrate while keeping sample_rate / normalize.
     const ops = operations(recipe('track.flac').compress(OptimizeFor.Size));
     expect(ops[0].type).toBe('compress');
@@ -296,6 +296,16 @@ describe('Recipe — compress preset delegation', () => {
     const ops = operations(recipe('song.mp3').compress(OptimizeFor.Size));
     const options = ops[0].options as Record<string, unknown>;
     expect(options.bitrate).toBe(96);
+    expect(options.sample_rate).toBe(44100);
+  });
+
+  it('gK4TWEiZ — file-first compress on audio of UNCERTAIN format lowers WITHOUT bitrate', () => {
+    // An unnamed Blob with an unrecognised audio MIME: audio, codec unknown, so the
+    // shipped bitrate is dropped as for lossless (D569).
+    const blob = new Blob(['x'], { type: 'audio/x-aiff' });
+    const ops = operations(new Recipe(fileInput.blob(blob)).compress(OptimizeFor.Size));
+    const options = ops[0].options as Record<string, unknown>;
+    expect('bitrate' in options).toBe(false);
     expect(options.sample_rate).toBe(44100);
   });
 

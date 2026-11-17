@@ -140,12 +140,23 @@ export interface ResolveCompressOptionsInput {
    */
   readonly explicitOptions: Readonly<Record<string, unknown>>;
   /**
-   * Classifier result from media detection. When `true` on audio, the
-   * shipped-preset (sdkDefault) bitrate is dropped — the worker rejects
-   * `bitrate` on lossless outputs (flac/wav — contracts iakhSy3E).
+   * Audio format class from media detection: `lossless` (flac/wav),
+   * `lossy` (a recognised lossy format) or `uncertain` (audio whose format
+   * the input does not identify). On audio, `lossless` and `uncertain` drop
+   * the shipped-preset (sdkDefault) bitrate: the worker rejects `bitrate` on
+   * lossless outputs (flac/wav, contracts iakhSy3E), and an uncertain input
+   * may be one (D569). Absent, the bitrate is kept.
+   */
+  readonly audioFormat?: 'lossless' | 'lossy' | 'uncertain';
+  /**
+   * @deprecated Use {@link audioFormat}. Read only when `audioFormat` is
+   * absent: `true` means `audioFormat: 'lossless'`.
    */
   readonly audioLossless?: boolean;
 }
+
+/** @internal The three-way audio format class the resolver reads. */
+export type AudioFormatClass = NonNullable<ResolveCompressOptionsInput['audioFormat']>;
 
 /**
  * Output of {@link resolveCompressOptions}. `wireOptions` is the
@@ -722,7 +733,8 @@ function computePresetConfigHash(
 export function resolveCompressOptions(
   input: ResolveCompressOptionsInput,
 ): ResolveCompressOptionsOutput {
-  const { media, op, presetDefaults, scopedPresetDefaults, presetOverrides, optimize, explicitOptions, audioLossless } = input;
+  const { media, op, presetDefaults, scopedPresetDefaults, presetOverrides, optimize, explicitOptions } = input;
+  const audioFormat = input.audioFormat ?? (input.audioLossless === true ? 'lossless' : undefined);
   if (op !== 'compress') {
     throw new GislConfigError(
       `Preset resolution is only wired for compress operations today; got op='${op}'.`,
@@ -808,10 +820,15 @@ export function resolveCompressOptions(
 
   // audio_compress bakes a bitrate (Size 96 / Balanced 192 / Quality 320); the
   // worker rejects `bitrate` on lossless outputs (flac/wav — contracts iakhSy3E).
-  // Drop ONLY the shipped-preset (sdkDefault) bitrate for clear-cut lossless
-  // audio; any user-supplied bitrate (client/scoped default, per-call override
+  // Drop ONLY the shipped-preset (sdkDefault) bitrate, for lossless audio and
+  // for audio whose format the input does not identify (it may be lossless,
+  // D569); any user-supplied bitrate (client/scoped default, per-call override
   // or explicit) is left for the worker to reject — no silent-ignore.
-  if (media === 'audio' && audioLossless === true && acc.winners.get('bitrate') === 'sdkDefault') {
+  if (
+    media === 'audio' &&
+    (audioFormat === 'lossless' || audioFormat === 'uncertain') &&
+    acc.winners.get('bitrate') === 'sdkDefault'
+  ) {
     delete acc.merged.bitrate;
     acc.winners.delete('bitrate');
   }

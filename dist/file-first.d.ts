@@ -722,12 +722,12 @@ export declare class Recipe {
      */
     private compressMediaHint;
     /**
-     * Whether the media a `compress` step at `uptoIndex` operates on is lossless audio.
-     * Determined by the most recent preceding `convert` target (`flac`/`wav` -> lossless)
-     * when there is one, else by the original input. Lossless is unaffected by the
-     * video/ogg guard (ogg is never lossless either way).
+     * The audio format class (lossless / lossy / uncertain) of the media a `compress`
+     * step at `uptoIndex` operates on. Determined by the most recent preceding `convert`
+     * target (`flac`/`wav` -> lossless) when there is one, else by the original input.
+     * Unaffected by the video/ogg guard (ogg is never lossless either way).
      */
-    private compressAudioLossless;
+    private compressAudioFormat;
 }
 /**
  * The single SDK-side source of truth for which `(wire op, base mime)`

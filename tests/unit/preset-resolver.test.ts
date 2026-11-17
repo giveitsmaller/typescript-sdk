@@ -1317,6 +1317,18 @@ describe('resolveCompressOptions — audio lossless bitrate drop (0Vcogefw)', ()
     expect(wireOptions.quality).toBe(65);
     expect('bitrate' in wireOptions).toBe(false);
   });
+
+  it('audioFormat wins over the deprecated audioLossless (gK4TWEiZ)', () => {
+    const { wireOptions } = resolveCompressOptions({
+      media: 'audio',
+      op: 'compress',
+      optimize: OptimizeFor.Size,
+      explicitOptions: {},
+      audioFormat: 'lossy',
+      audioLossless: true,
+    });
+    expect(wireOptions.bitrate).toBe(96);
+  });
 });
 
 // The TYPED preset surface (PresetDefaults.officeCompress / odfCompress /

@@ -528,7 +528,8 @@ function computePresetConfigHash(clientDefault, scopedDefault, callPresetOverrid
  * `optimize` unset ⇒ layer 1 contributes nothing; `resolvedOptions.preset = null`.
  */
 export function resolveCompressOptions(input) {
-    const { media, op, presetDefaults, scopedPresetDefaults, presetOverrides, optimize, explicitOptions, audioLossless } = input;
+    const { media, op, presetDefaults, scopedPresetDefaults, presetOverrides, optimize, explicitOptions } = input;
+    const audioFormat = input.audioFormat ?? (input.audioLossless === true ? 'lossless' : undefined);
     if (op !== 'compress') {
         throw new GislConfigError(`Preset resolution is only wired for compress operations today; got op='${op}'.`, { reason: 'unsupported_op' });
     }
@@ -608,10 +609,13 @@ export function resolveCompressOptions(input) {
     }
     // audio_compress bakes a bitrate (Size 96 / Balanced 192 / Quality 320); the
     // worker rejects `bitrate` on lossless outputs (flac/wav — contracts iakhSy3E).
-    // Drop ONLY the shipped-preset (sdkDefault) bitrate for clear-cut lossless
-    // audio; any user-supplied bitrate (client/scoped default, per-call override
+    // Drop ONLY the shipped-preset (sdkDefault) bitrate, for lossless audio and
+    // for audio whose format the input does not identify (it may be lossless,
+    // D569); any user-supplied bitrate (client/scoped default, per-call override
     // or explicit) is left for the worker to reject — no silent-ignore.
-    if (media === 'audio' && audioLossless === true && acc.winners.get('bitrate') === 'sdkDefault') {
+    if (media === 'audio' &&
+        (audioFormat === 'lossless' || audioFormat === 'uncertain') &&
+        acc.winners.get('bitrate') === 'sdkDefault') {
         delete acc.merged.bitrate;
         acc.winners.delete('bitrate');
     }

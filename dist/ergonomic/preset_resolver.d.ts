@@ -45,12 +45,22 @@ export interface ResolveCompressOptionsInput {
      */
     readonly explicitOptions: Readonly<Record<string, unknown>>;
     /**
-     * Classifier result from media detection. When `true` on audio, the
-     * shipped-preset (sdkDefault) bitrate is dropped — the worker rejects
-     * `bitrate` on lossless outputs (flac/wav — contracts iakhSy3E).
+     * Audio format class from media detection: `lossless` (flac/wav),
+     * `lossy` (a recognised lossy format) or `uncertain` (audio whose format
+     * the input does not identify). On audio, `lossless` and `uncertain` drop
+     * the shipped-preset (sdkDefault) bitrate: the worker rejects `bitrate` on
+     * lossless outputs (flac/wav, contracts iakhSy3E), and an uncertain input
+     * may be one (D569). Absent, the bitrate is kept.
+     */
+    readonly audioFormat?: 'lossless' | 'lossy' | 'uncertain';
+    /**
+     * @deprecated Use {@link audioFormat}. Read only when `audioFormat` is
+     * absent: `true` means `audioFormat: 'lossless'`.
      */
     readonly audioLossless?: boolean;
 }
+/** @internal The three-way audio format class the resolver reads. */
+export type AudioFormatClass = NonNullable<ResolveCompressOptionsInput['audioFormat']>;
 /**
  * Output of {@link resolveCompressOptions}. `wireOptions` is the
  * snake_case payload ready for the operation argument; `resolvedOptions`

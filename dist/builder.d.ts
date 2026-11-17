@@ -30,6 +30,7 @@ import type { GislClient } from './client.js';
 import type { OperationDownload, WorkflowStatusResponse, SseOperationProgressDataStatusEnum } from '@giveitsmaller/contracts/openapi';
 import { Handle } from './handle.js';
 import type { PresetDefaults, PresetMedia } from './ergonomic/presets/index.js';
+import { type AudioFormatClass } from './ergonomic/preset_resolver.js';
 /**
  * Best-effort detection of the compress-operation media from the
  * builder's input. T4b only resolves presets for compress; the wire's
@@ -44,19 +45,22 @@ import type { PresetDefaults, PresetMedia } from './ergonomic/presets/index.js';
  */
 export declare function _detectCompressMedia(input: string | Blob): PresetMedia | undefined;
 /**
- * Best-effort classification of whether an audio input is LOSSLESS
- * (flac/wav) vs lossy. The worker rejects `bitrate` on lossless audio
- * (compress.yaml / contracts iakhSy3E), so the preset resolver uses this
- * to drop the shipped-preset bitrate for clear-cut lossless inputs.
+ * Best-effort classification of an audio input's format: `lossless`
+ * (flac/wav), `lossy` (a recognised lossy format) or `uncertain` (nothing
+ * on the input identifies the format). The worker rejects `bitrate` on
+ * lossless audio (compress.yaml / contracts iakhSy3E), so the preset
+ * resolver drops the shipped-preset bitrate for `lossless` AND `uncertain`
+ * inputs (D569): an uncertain input may be flac/wav.
  *
- * Detection is filename/MIME only — it CANNOT probe the actual codec, so
- * any ambiguous or unknown input classifies as lossy (keep bitrate). The
- * worker stays authoritative: a user-supplied bitrate on a lossless file
- * still reaches the wire and earns a deliberate 422.
+ * Detection is filename/MIME only — it CANNOT probe the actual codec. A
+ * recognised audio MIME wins over the filename; an unrecognised audio MIME
+ * says nothing about the codec, so the filename decides. The worker stays
+ * authoritative: a user-supplied bitrate on a lossless file still reaches
+ * the wire and earns a deliberate 422.
  *
  * @internal — exported for tests + the preset resolver.
  */
-export declare function _detectAudioLossless(input: string | Blob): boolean;
+export declare function _classifyAudioFormat(input: string | Blob): AudioFormatClass;
 /**
  * Lightweight artifact reference passed to a `.mapEach(...)` fn. Mirrors
  * the subset of `Artifact` a fan-out callback can use to construct the

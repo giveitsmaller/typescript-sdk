@@ -11,7 +11,7 @@
  */
 import { _refusePlannedInOperations } from './ergonomic/planned_values.js';
 import { GislConfigError, GislItemFailedError, GislNoSuchKeyError, GislSinkError, GislTimeoutError } from './errors.js';
-import { _detectCompressMedia, _retryOn429, _detectAudioLossless, _awaitTerminalReportingTransport, _parseMaxWait, _checkAborted, _cappedProbeTimeoutMs, } from './builder.js';
+import { _detectCompressMedia, _retryOn429, _classifyAudioFormat, _awaitTerminalReportingTransport, _parseMaxWait, _checkAborted, _cappedProbeTimeoutMs, } from './builder.js';
 import { DEFAULT_POLL_TIMEOUT_MS } from './client.js';
 import { LazyHttpDownloader } from './lazy-downloader.js';
 import { resolveCompressOptions, } from './ergonomic/preset_resolver.js';
@@ -1295,7 +1295,7 @@ export class Recipe {
         }
         const input = { media, op: 'compress', explicitOptions };
         if (media === 'audio') {
-            input.audioLossless = this.compressAudioLossless(uptoIndex);
+            input.audioFormat = this.compressAudioFormat(uptoIndex);
         }
         if (this.presetDefaults !== undefined) {
             input.presetDefaults = this.presetDefaults;
@@ -1345,26 +1345,26 @@ export class Recipe {
         return media;
     }
     /**
-     * Whether the media a `compress` step at `uptoIndex` operates on is lossless audio.
-     * Determined by the most recent preceding `convert` target (`flac`/`wav` -> lossless)
-     * when there is one, else by the original input. Lossless is unaffected by the
-     * video/ogg guard (ogg is never lossless either way).
+     * The audio format class (lossless / lossy / uncertain) of the media a `compress`
+     * step at `uptoIndex` operates on. Determined by the most recent preceding `convert`
+     * target (`flac`/`wav` -> lossless) when there is one, else by the original input.
+     * Unaffected by the video/ogg guard (ogg is never lossless either way).
      */
-    compressAudioLossless(uptoIndex) {
+    compressAudioFormat(uptoIndex) {
         if (uptoIndex !== undefined) {
             for (let i = uptoIndex - 1; i >= 0; i--) {
                 const step = this.steps[i];
                 if (step.opType === 'convert') {
                     const fmt = step.options.output_format;
-                    return typeof fmt === 'string' ? _detectAudioLossless(`f.${fmt}`) : false;
+                    return typeof fmt === 'string' ? _classifyAudioFormat(`f.${fmt}`) : 'uncertain';
                 }
             }
         }
         if (this.input.kind === 'path')
-            return _detectAudioLossless(this.input.path);
+            return _classifyAudioFormat(this.input.path);
         if (this.input.kind === 'blob')
-            return _detectAudioLossless(this.input.blob);
-        return false;
+            return _classifyAudioFormat(this.input.blob);
+        return 'uncertain';
     }
 }
 /**

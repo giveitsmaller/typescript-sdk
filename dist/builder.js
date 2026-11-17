@@ -110,9 +110,8 @@ export function _detectCompressMedia(input) {
     return undefined;
 }
 // LOSSLESS audio per the compress.yaml contract (contracts iakhSy3E) —
-// flac/wav ONLY. Everything else audio (mp3/mpeg, aac, ogg, m4a/mp4, opus)
-// and any unknown input is treated as lossy so the shipped-preset bitrate is
-// kept. `aiff` is deliberately absent — not a contract audio format.
+// flac/wav ONLY. `aiff` is deliberately absent — not a contract audio format,
+// so it classifies as uncertain (and loses the shipped bitrate) rather than lossy.
 const LOSSLESS_AUDIO_MIMES = new Set([
     'audio/flac',
     'audio/x-flac',
@@ -121,20 +120,28 @@ const LOSSLESS_AUDIO_MIMES = new Set([
     'audio/wave',
 ]);
 const LOSSLESS_AUDIO_EXTENSIONS = new Set(['flac', 'wav']);
+// Recognised LOSSY audio (D569). The extensions are exactly the non-lossless
+// audio extensions `_detectCompressMedia` accepts, so a path never classifies
+// as uncertain.
+const LOSSY_AUDIO_MIMES = new Set(['audio/mpeg', 'audio/aac', 'audio/ogg', 'audio/mp4', 'audio/opus']);
+const LOSSY_AUDIO_EXTENSIONS = new Set(['mp3', 'aac', 'm4a', 'ogg', 'oga', 'opus']);
 /**
- * Best-effort classification of whether an audio input is LOSSLESS
- * (flac/wav) vs lossy. The worker rejects `bitrate` on lossless audio
- * (compress.yaml / contracts iakhSy3E), so the preset resolver uses this
- * to drop the shipped-preset bitrate for clear-cut lossless inputs.
+ * Best-effort classification of an audio input's format: `lossless`
+ * (flac/wav), `lossy` (a recognised lossy format) or `uncertain` (nothing
+ * on the input identifies the format). The worker rejects `bitrate` on
+ * lossless audio (compress.yaml / contracts iakhSy3E), so the preset
+ * resolver drops the shipped-preset bitrate for `lossless` AND `uncertain`
+ * inputs (D569): an uncertain input may be flac/wav.
  *
- * Detection is filename/MIME only — it CANNOT probe the actual codec, so
- * any ambiguous or unknown input classifies as lossy (keep bitrate). The
- * worker stays authoritative: a user-supplied bitrate on a lossless file
- * still reaches the wire and earns a deliberate 422.
+ * Detection is filename/MIME only — it CANNOT probe the actual codec. A
+ * recognised audio MIME wins over the filename; an unrecognised audio MIME
+ * says nothing about the codec, so the filename decides. The worker stays
+ * authoritative: a user-supplied bitrate on a lossless file still reaches
+ * the wire and earns a deliberate 422.
  *
  * @internal — exported for tests + the preset resolver.
  */
-export function _detectAudioLossless(input) {
+export function _classifyAudioFormat(input) {
     let filename;
     let mime;
     if (typeof input === 'string') {
@@ -148,19 +155,23 @@ export function _detectAudioLossless(input) {
     }
     // MIME-first if a recognised audio MIME is present — Blob.type is canonical.
     // Strip any MIME parameters (`audio/flac; codecs=flac`) before the exact-set
-    // lookup so a parameterised type still classifies as lossless — `media` is
-    // already `audio` via the prefix check, so a miss would wrongly keep the
-    // bitrate (codex 18b6b684).
+    // lookup so a parameterised type still classifies — `media` is already
+    // `audio` via the prefix check (codex 18b6b684).
     if (mime !== undefined && mime.startsWith('audio/')) {
         const bareMime = mime.split(';')[0].trim().toLowerCase();
-        return LOSSLESS_AUDIO_MIMES.has(bareMime);
+        if (LOSSLESS_AUDIO_MIMES.has(bareMime))
+            return 'lossless';
+        if (LOSSY_AUDIO_MIMES.has(bareMime))
+            return 'lossy';
     }
-    if (filename === undefined)
-        return false;
-    const ext = filename.toLowerCase().split('.').pop();
-    if (ext === undefined)
-        return false;
-    return LOSSLESS_AUDIO_EXTENSIONS.has(ext);
+    if (filename !== undefined) {
+        const ext = filename.toLowerCase().split('.').pop();
+        if (ext !== undefined && LOSSLESS_AUDIO_EXTENSIONS.has(ext))
+            return 'lossless';
+        if (ext !== undefined && LOSSY_AUDIO_EXTENSIONS.has(ext))
+            return 'lossy';
+    }
+    return 'uncertain';
 }
 // ---------------------------------------------------------------------------
 // OperationBuilder
@@ -237,7 +248,7 @@ export class OperationBuilder {
             explicitOptions,
         };
         if (media === 'audio') {
-            input.audioLossless = _detectAudioLossless(this.input);
+            input.audioFormat = _classifyAudioFormat(this.input);
         }
         if (this.presetDefaults !== undefined) {
             input.presetDefaults = this.presetDefaults;

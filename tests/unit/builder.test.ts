@@ -1262,63 +1262,84 @@ describe('T4b — _detectCompressMedia (input → media classification)', () => 
   });
 });
 
-describe('0Vcogefw — _detectAudioLossless (audio input → lossless classification)', () => {
+describe('0Vcogefw / gK4TWEiZ — _classifyAudioFormat (audio input → lossless / lossy / uncertain)', () => {
   it.each(['song.flac', 'a.wav', 'PATH/X.FLAC', 'audio/clip.WAV'])(
-    'filename %s → true (case-insensitive, flac/wav only)',
+    'filename %s → lossless (case-insensitive, flac/wav only)',
     async (input) => {
-      const { _detectAudioLossless } = await import('../../src/builder.js');
-      expect(_detectAudioLossless(input)).toBe(true);
+      const { _classifyAudioFormat } = await import('../../src/builder.js');
+      expect(_classifyAudioFormat(input)).toBe('lossless');
     },
   );
 
-  it.each([
-    'song.mp3',
-    'a.aac',
-    'b.m4a',
-    'c.ogg',
-    'd.oga',
-    'e.opus',
-    'f.unknownext',
-    'noextension',
-  ])('lossy / unknown filename %s → false', async (input) => {
-    const { _detectAudioLossless } = await import('../../src/builder.js');
-    expect(_detectAudioLossless(input)).toBe(false);
+  it.each(['song.mp3', 'a.aac', 'b.m4a', 'c.ogg', 'd.oga', 'e.opus'])(
+    'lossy filename %s → lossy',
+    async (input) => {
+      const { _classifyAudioFormat } = await import('../../src/builder.js');
+      expect(_classifyAudioFormat(input)).toBe('lossy');
+    },
+  );
+
+  it.each(['f.unknownext', 'noextension'])('unidentified filename %s → uncertain', async (input) => {
+    const { _classifyAudioFormat } = await import('../../src/builder.js');
+    expect(_classifyAudioFormat(input)).toBe('uncertain');
   });
 
   it.each(['audio/flac', 'audio/x-flac', 'audio/wav', 'audio/x-wav', 'audio/wave'])(
-    'Blob with lossless audio MIME %s → true',
+    'Blob with lossless audio MIME %s → lossless',
     async (type) => {
-      const { _detectAudioLossless } = await import('../../src/builder.js');
-      expect(_detectAudioLossless(new Blob(['x'], { type }))).toBe(true);
+      const { _classifyAudioFormat } = await import('../../src/builder.js');
+      expect(_classifyAudioFormat(new Blob(['x'], { type }))).toBe('lossless');
     },
   );
 
-  it('Blob with lossy audio MIME audio/mpeg → false', async () => {
-    const { _detectAudioLossless } = await import('../../src/builder.js');
-    expect(_detectAudioLossless(new Blob(['x'], { type: 'audio/mpeg' }))).toBe(false);
-  });
+  it.each(['audio/mpeg', 'audio/aac', 'audio/ogg', 'audio/mp4', 'audio/opus'])(
+    'Blob with lossy audio MIME %s → lossy',
+    async (type) => {
+      const { _classifyAudioFormat } = await import('../../src/builder.js');
+      expect(_classifyAudioFormat(new Blob(['x'], { type }))).toBe('lossy');
+    },
+  );
 
-  it('Blob with a parameterised lossless MIME (audio/flac; codecs=flac) → true', async () => {
+  it('Blob with a parameterised lossless MIME (audio/flac; codecs=flac) → lossless', async () => {
     // MIME params must be stripped before the exact-set lookup — media is
     // already audio via the prefix check, so a miss would wrongly KEEP the
     // shipped bitrate on a lossless input (codex 18b6b684).
-    const { _detectAudioLossless } = await import('../../src/builder.js');
-    expect(_detectAudioLossless(new Blob(['x'], { type: 'audio/flac; codecs=flac' }))).toBe(true);
+    const { _classifyAudioFormat } = await import('../../src/builder.js');
+    expect(_classifyAudioFormat(new Blob(['x'], { type: 'audio/flac; codecs=flac' }))).toBe('lossless');
+  });
+
+  it('a recognised audio MIME wins over the name: audio/mpeg named x.flac → lossy', async () => {
+    const { _classifyAudioFormat } = await import('../../src/builder.js');
+    const b = new Blob(['x'], { type: 'audio/mpeg' });
+    Object.defineProperty(b, 'name', { value: 'x.flac' });
+    expect(_classifyAudioFormat(b)).toBe('lossy');
+  });
+
+  it('an unrecognised audio MIME with no name → uncertain (D569)', async () => {
+    const { _classifyAudioFormat } = await import('../../src/builder.js');
+    expect(_classifyAudioFormat(new Blob(['x'], { type: 'audio/x-aiff' }))).toBe('uncertain');
+  });
+
+  it('an unrecognised audio MIME defers to the name: audio/x-m4a named song.m4a → lossy', async () => {
+    const { _classifyAudioFormat } = await import('../../src/builder.js');
+    const b = new Blob(['x'], { type: 'audio/x-m4a' });
+    Object.defineProperty(b, 'name', { value: 'song.m4a' });
+    expect(_classifyAudioFormat(b)).toBe('lossy');
   });
 
   it('MIME-first only applies to audio/* — a non-audio MIME falls back to the extension', async () => {
     // Edge case: a Blob typed application/octet-stream but named x.flac is
     // NOT matched by the audio/* MIME branch, so it falls through to the
-    // extension fallback → flac → TRUE. (Document this fall-through.)
-    const { _detectAudioLossless } = await import('../../src/builder.js');
+    // extension fallback → flac → lossless. (Document this fall-through.)
+    const { _classifyAudioFormat } = await import('../../src/builder.js');
     const b = new Blob(['x'], { type: 'application/octet-stream' });
     Object.defineProperty(b, 'name', { value: 'x.flac' });
-    expect(_detectAudioLossless(b)).toBe(true);
+    expect(_classifyAudioFormat(b)).toBe('lossless');
   });
 
-  it('typeless / nameless Blob → false (no inferable signal)', async () => {
-    const { _detectAudioLossless } = await import('../../src/builder.js');
-    expect(_detectAudioLossless(new Blob(['x']))).toBe(false);
+  it('typeless / nameless Blob → uncertain (no inferable signal)', async () => {
+    const { _classifyAudioFormat } = await import('../../src/builder.js');
+    expect(_classifyAudioFormat(new Blob(['x']))).toBe('uncertain');
   });
 });
 
@@ -1347,6 +1368,22 @@ describe('0Vcogefw — operation-first end-to-end audio bitrate drop (both call-
     const options = payload.jobs[0].operations[0].options as Record<string, unknown>;
     expect(options.bitrate).toBe(96);
     expect(options.sample_rate).toBe(44100);
+  });
+
+  it('gK4TWEiZ — compress(optimize: Size) on audio of UNCERTAIN format lowers WITHOUT bitrate', async () => {
+    // An unnamed Blob typed with an audio MIME outside both the lossless and the
+    // known-lossy sets is audio, but its codec is unknown: it may be FLAC/WAV, on
+    // which the API refuses `bitrate` (D569). The shipped bitrate must go.
+    const { OptimizeFor } = await import('../../src/generated/sdk_spec/enums.js');
+    const mock = makeMockClient();
+    await new OperationBuilder(mock.client, 'compress', new Blob(['x'], { type: 'audio/x-aiff' }), {
+      optimize: OptimizeFor.Size,
+    }).run({ maxWait: '30s' });
+    const payload = mock.createWorkflow.mock.calls[0][0];
+    const options = payload.jobs[0].operations[0].options as Record<string, unknown>;
+    expect('bitrate' in options).toBe(false);
+    expect(options.sample_rate).toBe(44100);
+    expect(options.normalize).toBe(true);
   });
 });
 
