@@ -395,18 +395,20 @@ export class GislFeatureNotAvailableError extends GislApiError {
  * The `Retry-After` response header (when present) suggests a delay
  * in seconds before the next poll/retry.
  *
- * `payload.jobRef` identifies which job in the multi-job request triggered
- * the probe-pending rejection.
+ * `payload.jobRef` is the workflow-local id (`JobDefinition.id`, or the
+ * auto-generated `job_N`) of the job whose upload-probe has not landed. For a
+ * video merge it is the FEEDER job holding the pending upload, not the merge
+ * job. To recover by hand, wait on that job's upload with
+ * `client.waitForProbe(fileId)`; `client.createWorkflowAwaitingProbe(payload)`
+ * does the job-to-upload lookup, the wait and the re-create for you.
  *
  * @example
  * try {
  *   await client.createWorkflow({ jobs });
  * } catch (e) {
- *   if (e instanceof GislProbePendingError) {
- *     await waitForProbe(e.payload.jobRef);
- *     // retry...
- *   }
- *   throw e;
+ *   if (!(e instanceof GislProbePendingError)) throw e;
+ *   // Waits for the pending upload's probe, then re-creates the same payload.
+ *   await client.createWorkflowAwaitingProbe({ jobs });
  * }
  */
 export class GislProbePendingError extends GislApiError {
