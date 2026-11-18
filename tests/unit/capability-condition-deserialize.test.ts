@@ -14,12 +14,17 @@
  * The round-trip test feeds the SHIPPED operation-capabilities sidecar through
  * the generated deserialiser and back, so a new operator, or a new renamed
  * field, is covered the moment the contract ships it.
+ *
+ * 6uM9mcvM: a node matching NO form still decoded to `{}`, so a condition the
+ * SDK could not read (a newer server's new operator) vanished. Every generated
+ * oneOf codec now returns an unmatched value unchanged, in both directions.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import {
   CapabilityConditionFromJSON,
+  CapabilityConditionToJSON,
   CapabilityProducesFromJSON,
   CodegenSourceJobSourceFromJSON,
   OperationsSchemaResponseFromJSON,
@@ -139,8 +144,44 @@ describe('capability conditions survive OperationsSchemaResponseFromJSON (F9UUic
     expect(CapabilityConditionFromJSON({ field: 'f', equals: null })).toEqual({ field: 'f', equals: null });
   });
 
-  it('a node matching no form still decodes to {} (unchanged fallback)', () => {
-    expect(CapabilityConditionFromJSON({ unknown_operator: 1 })).toEqual({});
+  it('compression_e2e report: the webm `in` conflict of deployed schema 2.241.0 keeps every leaf', () => {
+    // capabilities.compress.option_conflicts, constraint_id compress.video.codec_container.webm,
+    // copied from compression_contracts v2.241.0 operation-capabilities/operation-capabilities.json.
+    const when = {
+      all: [
+        { field: 'output_container', in: ['webm'] },
+        { field: 'compress.codec', isSet: true },
+        { field: 'compress.codec', in: ['h265'] },
+      ],
+    };
+    const decoded = CapabilityConditionFromJSON(when);
+    expect(decoded).toEqual({
+      all: [
+        { field: 'output_container', _in: ['webm'] },
+        { field: 'compress.codec', isSet: true },
+        { field: 'compress.codec', _in: ['h265'] },
+      ],
+    });
+    expect(CapabilityConditionToJSON(decoded)).toEqual(when);
+  });
+
+  it('a node matching no form passes through unchanged, never {} (6uM9mcvM)', () => {
+    // A newer server's operator this SDK does not know, beside a leaf it does.
+    const when = {
+      all: [
+        { field: 'output_container', in: ['webm'] },
+        { field: 'compress.codec', matches: '^h26' },
+      ],
+    };
+    const decoded = CapabilityConditionFromJSON(when);
+    expect(decoded).toEqual({
+      all: [
+        { field: 'output_container', _in: ['webm'] },
+        { field: 'compress.codec', matches: '^h26' },
+      ],
+    });
+    // Re-encoding must not turn it into {} either.
+    expect(CapabilityConditionToJSON(decoded)).toEqual(when);
   });
 
   it('produces: same_as_input and from_option decode (snake_case wire keys)', () => {
