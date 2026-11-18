@@ -220,6 +220,10 @@ function requireValidDate(value, method, field) {
 function fallbackErrorMessage(status, errorCode) {
     return `Request failed with status ${status} (${errorCode ?? 'unknown_error'}).`;
 }
+// Shape guard for the contract's `ValidationErrorEnvelope.details[]`: only
+// `message` is required (a cross-field error may name `operation` + `option`
+// alone; requiring `field` once misrouted per-option envelopes to the base
+// `GislApiError`). The entries pass through unconverted, snake_case.
 function isValidationDetails(value) {
     return (Array.isArray(value) &&
         value.length > 0 &&

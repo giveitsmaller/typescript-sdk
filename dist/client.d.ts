@@ -16,15 +16,6 @@ export declare const DEFAULT_MULTIPART_FIRST_CHUNK_SIZE: number;
  * FOURTEEN defaulting sites anyway — which is the duplication this replaces.
  */
 export declare const DEFAULT_POLL_TIMEOUT_MS = 600000;
-export interface ValidationDetail {
-    message: string;
-    field?: string;
-    operation?: string;
-    option?: string;
-    messageKey?: string;
-    locale?: string;
-    messageParams?: Record<string, unknown>;
-}
 /** @internal Marks a client as a guest client (see ANONYMOUS_CLIENTS). */
 export declare function _markAnonymousClient(client: object): void;
 /** @internal True for a client built by `gisl.anonymous()` (see ANONYMOUS_CLIENTS). */

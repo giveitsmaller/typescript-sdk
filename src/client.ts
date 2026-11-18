@@ -126,6 +126,7 @@ import {
   GislStreamHostNotDeclaredError,
   GislUploadCapExceededError,
   type GislUploadCapKind,
+  type GislValidationDetail,
   GislValidationError,
   GislWorkflowExpiredError,
 } from './errors.js';
@@ -320,22 +321,6 @@ const TERMINAL_STATUSES: ReadonlySet<string> = new Set([
   WorkflowStatus.paused_insufficient_credits,
 ]);
 
-// Wire-shape guard for ValidationErrorEnvelopeDetailsInner. The v2 contract
-// only requires `message`; `field` / `operation` / `option` are all optional
-// (per `compression_contracts/openapi/api.yaml` -- a cross-field validation
-// error may identify the violation by `operation` + `option` alone). Earlier
-// versions of this guard required `field` too, which silently misrouted
-// per-option validation envelopes to the base `GislApiError`.
-export interface ValidationDetail {
-  message: string;
-  field?: string;
-  operation?: string;
-  option?: string;
-  messageKey?: string;
-  locale?: string;
-  messageParams?: Record<string, unknown>;
-}
-
 // Flatten a `Headers` object into a plain `Record<string,string>` for
 // attaching to a thrown `GislApiError`. `Headers.forEach` yields LOWERCASED
 // keys (HTTP header names are case-insensitive per RFC 9110) and collapses
@@ -439,7 +424,11 @@ function fallbackErrorMessage(status: number, errorCode: string | undefined): st
   return `Request failed with status ${status} (${errorCode ?? 'unknown_error'}).`;
 }
 
-function isValidationDetails(value: unknown): value is ValidationDetail[] {
+// Shape guard for the contract's `ValidationErrorEnvelope.details[]`: only
+// `message` is required (a cross-field error may name `operation` + `option`
+// alone; requiring `field` once misrouted per-option envelopes to the base
+// `GislApiError`). The entries pass through unconverted, snake_case.
+function isValidationDetails(value: unknown): value is GislValidationDetail[] {
   return (
     Array.isArray(value) &&
     value.length > 0 &&

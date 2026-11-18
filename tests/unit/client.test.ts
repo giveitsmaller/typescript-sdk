@@ -149,6 +149,52 @@ describe('GislClient', () => {
       }
     });
 
+    it('hands a MERGE_OVER_LIMIT detail over in its wire spelling, ceiling included (ZVy950dx)', async () => {
+      // The 422 api 1.26.0-rc.5 returned on staging (hub decision 755 evidence).
+      // The response handler is shared, so the route does not matter here.
+      const ceiling = {
+        axis: 'duration_seconds',
+        actual: 301,
+        maximum: 300,
+        bound_by: 'merge',
+        input_mime: 'video/mp4',
+      };
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: false,
+            error: 'MERGE_OVER_LIMIT',
+            message: 'These clips are too long to merge together.',
+            message_key: 'error.validation_failed',
+            locale: 'en-GB',
+            error_type: 'validation_error',
+            failed_ref: 'j1',
+            details: [
+              {
+                operation: 'merge',
+                field: 'inputs',
+                message: 'These clips are too long to merge together: 301 s in total, the limit is 300 s. Trim them to fit.',
+                message_key: 'error.merge.combined_too_long',
+                message_params: ceiling,
+                ceiling,
+              },
+            ],
+          },
+          422,
+        ),
+      );
+
+      const err = await client.getMetadata('merge').catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(GislValidationError);
+      const detail = (err as GislValidationError).details[0];
+      expect((err as GislValidationError).errorCode).toBe('MERGE_OVER_LIMIT');
+      // Read through the declared keys: `npm run check:tests` fails if the type
+      // stops declaring them, and these fail if the client starts converting.
+      expect(detail.message_key).toBe('error.merge.combined_too_long');
+      expect(detail.ceiling?.bound_by).toBe('merge');
+      expect(detail.ceiling).toEqual(ceiling);
+    });
+
     it('forwards non-array details through GislApiError (does NOT escalate to GislValidationError)', async () => {
       fetchSpy.mockResolvedValueOnce(
         jsonResponse(

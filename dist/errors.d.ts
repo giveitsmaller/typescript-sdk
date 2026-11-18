@@ -1,4 +1,4 @@
-import type { AuthErrorResponse, AuthRejectionEnvelope, AuthRejectionEnvelopeErrorTypeEnum, BalanceExhaustedResponse, FeatureNotAvailableResponse, FeatureTierRestrictedResponse, LongFormConcurrencyLimitResponse, ProbePendingResponse, TierRestrictionResponse, UploadDurationExceedsTierResponse, UploadSizeExceedsTierResponse, UserTier, WorkflowExpiredResponse } from '@giveitsmaller/contracts/openapi';
+import type { AuthErrorResponse, AuthRejectionEnvelope, AuthRejectionEnvelopeErrorTypeEnum, BalanceExhaustedResponse, DurationUnknownReason, FeatureNotAvailableResponse, FeatureTierRestrictedResponse, LongFormConcurrencyLimitResponse, ProbePendingResponse, TierRestrictionResponse, UploadDurationExceedsTierResponse, UploadSizeExceedsTierResponse, UserTier, WorkflowExpiredResponse } from '@giveitsmaller/contracts/openapi';
 import type { ErrorCategory } from './generated/sdk_spec/errors.js';
 import type { RateLimitSnapshot } from './retry-metadata.js';
 export declare class GislError extends Error {
@@ -111,20 +111,52 @@ export declare class GislApiError extends GislError {
     get retryAfterSeconds(): number | undefined;
 }
 /**
- * Shape of a single validation detail entry. Mirrors the v2
- * `ValidationErrorEnvelopeDetailsInner` contract: only `message` is required;
- * `field` / `operation` / `option` are mutually-permissive identifiers (a
- * given detail may carry one, two, or all three depending on whether the
- * violation is single-field, per-option, or cross-field).
+ * A measured quantity over its ceiling, on a validation detail (contracts
+ * v2.231.0, owner decision 755): the contract's `InputCeilingViolation`, in its
+ * WIRE spelling, because the client hands the detail over as received.
+ *
+ * Carried by `MERGE_OVER_LIMIT` (the combined inputs of a non-uniform video
+ * merge, `bound_by: 'merge'`) and by a single input over a ceiling
+ * (`message_key: 'error.input_exceeds_ceiling'`). Absent on a size refusal from
+ * a server that predates the field: fall back to the detail's `message`.
+ */
+export interface GislInputCeilingViolation {
+    /** `size_bytes`, `pixels` or `duration_seconds` today. Open: treat an unknown axis as "too large". */
+    readonly axis: string;
+    /** The measured value on `axis` (bytes, pixels, or whole seconds rounded up). */
+    readonly actual: number;
+    /** The binding ceiling on `axis`, in the unit of `actual`. */
+    readonly maximum: number;
+    /** The operation whose ceiling binds; not always the one that ingests the file. */
+    readonly bound_by: string;
+    readonly input_mime?: string;
+}
+/**
+ * A single validation detail entry: the contract's
+ * `ValidationErrorEnvelope.details[]` item EXACTLY as the server sent it, so
+ * its keys are the wire's snake_case (`message_key`, not `messageKey`). The
+ * client does not convert it; `sse-wire-drift.test.ts` fails when the contract
+ * and this interface disagree.
+ *
+ * Only `message` is required. `field` / `operation` / `option` are
+ * mutually-permissive identifiers (a detail may carry one, two or all three,
+ * for a single-field, per-option or cross-field violation). The envelope's
+ * `locale` is on the error (`err.locale`); an entry has none.
  */
 export interface GislValidationDetail {
     readonly message: string;
     readonly field?: string;
     readonly operation?: string;
     readonly option?: string;
-    readonly messageKey?: string;
-    readonly locale?: string;
-    readonly messageParams?: Record<string, unknown>;
+    readonly message_key?: string;
+    readonly message_params?: Record<string, unknown>;
+    readonly ceiling?: GislInputCeilingViolation;
+    /** The job the entry is about, on an entry that names one input (today `DURATION_UNKNOWN`). */
+    readonly job_ref?: string;
+    /** The upload the entry is about (today `DURATION_UNKNOWN`); absent for a derived input. */
+    readonly upload_id?: string;
+    /** Why the duration is unknown (`DURATION_UNKNOWN`). Open: treat an unknown value as unknown. */
+    readonly reason?: DurationUnknownReason | (string & {});
 }
 export declare class GislValidationError extends GislApiError {
     readonly details: GislValidationDetail[];

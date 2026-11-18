@@ -21,6 +21,12 @@
  *
  * Reads the vendored spec (not the contracts sibling), so it runs anywhere the
  * repo is checked out, worktrees included.
+ *
+ * ZVy950dx: the same gate covers the two hand-written ERROR wire interfaces in
+ * `src/errors.ts` (`GislValidationDetail`, `GislInputCeilingViolation`), which
+ * the client also hands over unconverted. They are listed explicitly in
+ * `ERROR_WIRE_KEYS`: errors.ts exports non-wire interfaces too, so there is no
+ * "every export is gated" check for it as there is for sse-wire.ts.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -40,6 +46,7 @@ import type {
   SseJobFailedWire,
   SseWorkflowTerminalWire,
 } from '../../src/sse-wire.js';
+import type { GislInputCeilingViolation, GislValidationDetail } from '../../src/errors.js';
 import { GENERATED_SPEC_PATH, SDKS_REPO_ROOT } from './_contract-paths.js';
 
 // ---------------------------------------------------------------------------
@@ -152,6 +159,20 @@ const WIRE_KEYS: Record<string, WireKeyDescriptor> = {
     `${S}/SseWorkflowTerminalData`,
     ['workflow_id', 'status'],
     ['reason'],
+  ),
+};
+
+/** The error wire interfaces (errors.ts), gated the same way; see the header. */
+const ERROR_WIRE_KEYS: Record<string, WireKeyDescriptor> = {
+  GislValidationDetail: wireKeys<GislValidationDetail>()(
+    `${S}/ValidationErrorEnvelope/properties/details/items`,
+    ['message'],
+    ['operation', 'option', 'field', 'message_key', 'message_params', 'ceiling', 'job_ref', 'upload_id', 'reason'],
+  ),
+  GislInputCeilingViolation: wireKeys<GislInputCeilingViolation>()(
+    `${S}/InputCeilingViolation`,
+    ['axis', 'actual', 'maximum', 'bound_by'],
+    ['input_mime'],
   ),
 };
 
@@ -314,6 +335,17 @@ describe('SSE wire interfaces match the vendored contract (iOcpCt6L)', () => {
       ].sort(),
     );
   });
+});
+
+describe('error wire interfaces match the vendored contract (ZVy950dx)', () => {
+  for (const [name, descriptor] of Object.entries(ERROR_WIRE_KEYS)) {
+    it(`${name} has exactly the keys of ${descriptor.schema}`, () => {
+      const doc = loadSpec();
+      const spec = schemaKeys(doc, pointer(doc, descriptor.schema));
+      expect(spec.properties.size).toBeGreaterThan(0);
+      expect(diffWireKeys(descriptor, spec)).toEqual([]);
+    });
+  }
 });
 
 describe('the drift comparison can fail (negative controls)', () => {
