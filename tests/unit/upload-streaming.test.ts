@@ -870,6 +870,35 @@ describe('streaming upload (string-path branch)', () => {
       expect(err).not.toBeInstanceOf(GislMultipartPartCountError); // not the ≤10k path
       expect((err as Error).message).toMatch(/internally inconsistent/);
       expect(s3Puts).toBe(0); // failed BEFORE any S3 PUT
+
+      // Vq3J6soI: fewer URLs than parts is a valid first batch now, but MORE
+      // URLs than parts is still inconsistent (3 parts, 3 URLs for parts 2..4).
+      fetchSpy.mockImplementation(async (url: string) => {
+        if (url.endsWith('/multipart/initiate')) {
+          return jsonResponse({
+            success: true,
+            data: {
+              upload_id: 'mp-too-many',
+              mime_type: 'application/octet-stream',
+              first_chunk_etag: '"e1"',
+              first_chunk_size_bytes: DEFAULT_MULTIPART_FIRST_CHUNK_SIZE,
+              total_parts: 3,
+              recommended_chunk_size: CHUNK,
+              presigned_urls: [2, 3, 4].map((p) => ({
+                part_number: p,
+                url: `https://s3.example.com/up?part=${p}`,
+                expires_at: '2026-04-18T09:00:00.000Z',
+              })),
+              constraints_applied: { processing_class_pre_assignment: 'short_form' },
+            },
+          });
+        }
+        s3Puts += 1;
+        return new Response('', { status: 200, headers: { etag: '"e2"' } });
+      });
+      const tooMany = await client.uploadFile('/tmp/x.bin').catch((e: unknown) => e);
+      expect((tooMany as Error).message).toMatch(/internally inconsistent.*more presigned URLs than parts/);
+      expect(s3Puts).toBe(0);
     });
 
     it('pre-aborted signal never touches the filesystem', async () => {

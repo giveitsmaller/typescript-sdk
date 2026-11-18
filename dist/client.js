@@ -1117,19 +1117,57 @@ export class GislClient {
         // bounds the count; it does NOT catch an initiate plan that is internally
         // inconsistent BELOW the cap. Under Model A a contract-compliant server
         // computes `total_parts` from the same `recommended_chunk_size` it
-        // returns, and emits exactly one presigned URL per remaining part (part 1
-        // is the initiate first chunk). If `total_parts`, the client recompute,
-        // and `presigned_urls.length` disagree, proceeding would PUT the wrong
-        // number of byte ranges (or wrong offsets) and only fail opaquely at
+        // returns. If `total_parts` and the client recompute disagree, proceeding
+        // would PUT the wrong number of byte ranges and only fail opaquely at
         // /multipart/complete. Fail fast here with the discrepancy instead.
-        if (!Number.isFinite(serverParts) ||
-            serverParts !== computedParts ||
-            presignedUrls.length !== computedParts - 1) {
-            throw new GislError('Multipart initiate plan is internally inconsistent: server ' +
-                `total_parts=${serverParts}, client computed ${computedParts} ` +
-                `from ${chunkSize}-byte chunks, presigned_urls.length=` +
-                `${presignedUrls.length} (expected ${computedParts - 1}). ` +
-                'Refusing to upload a mismatched part plan.');
+        //
+        // `presigned_urls` is only the FIRST BATCH (contract: "treat this array as
+        // the first batch"; the api sends at most 500, so a plan above ~48.8 GiB
+        // gets a partial one, Vq3J6soI). Fewer URLs than parts is valid — the tail
+        // comes from presignParts below. More URLs than parts, or an entry that
+        // names no usable part, is not.
+        const inconsistentPlan = (detail) => new GislError('Multipart initiate plan is internally inconsistent: server ' +
+            `total_parts=${serverParts}, client computed ${computedParts} ` +
+            `from ${chunkSize}-byte chunks, presigned_urls.length=` +
+            `${presignedUrls.length} (at most ${computedParts - 1}); ${detail}. ` +
+            'Refusing to upload a mismatched part plan.');
+        if (!Number.isFinite(serverParts) || serverParts !== computedParts) {
+            throw inconsistentPlan('total_parts disagrees with the recompute');
+        }
+        if (presignedUrls.length > computedParts - 1) {
+            throw inconsistentPlan('more presigned URLs than parts');
+        }
+        const firstBatch = [];
+        const firstBatchParts = new Set();
+        for (const part of presignedUrls) {
+            const partNumber = part?.partNumber;
+            if (typeof partNumber !== 'number' ||
+                !Number.isInteger(partNumber) ||
+                partNumber < 2 ||
+                partNumber > computedParts ||
+                firstBatchParts.has(partNumber) ||
+                typeof part.url !== 'string' ||
+                part.url === '') {
+                throw inconsistentPlan(`presigned_urls entry for part ${String(partNumber)} is out of range, duplicated or has no url`);
+            }
+            firstBatchParts.add(partNumber);
+            firstBatch.push({ partNumber, url: part.url });
+        }
+        firstBatch.sort((a, b) => a.partNumber - b.partNumber);
+        // Every part the first batch did not cover, ascending, in batches of at
+        // most 100 (the presign endpoint's cap, as in multipartResume).
+        const PRESIGN_BATCH_SIZE = 100;
+        const tailBatches = [];
+        for (let partNumber = 2; partNumber <= computedParts; partNumber += 1) {
+            if (firstBatchParts.has(partNumber))
+                continue;
+            const last = tailBatches[tailBatches.length - 1];
+            if (last !== undefined && last.length < PRESIGN_BATCH_SIZE) {
+                last.push(partNumber);
+            }
+            else {
+                tailBatches.push([partNumber]);
+            }
         }
         // Internal abort signal that workers use to short-circuit each others'
         // backoff sleeps. When any worker hits a terminal failure it aborts this
@@ -1190,9 +1228,11 @@ export class GislClient {
                 lastErr: new GislError(`S3 chunk upload failed for part ${part.partNumber}: ${s3Response.status}`),
             };
         };
-        const uploadChunk = async (index) => {
-            const part = presignedUrls[index];
-            const start = firstChunkSize + index * chunkSize;
+        const uploadChunk = async (part) => {
+            // The byte range follows the PART NUMBER, not the URL's position in a
+            // batch (part 1 is the initiate first chunk) — the formula the resume
+            // path uses too.
+            const start = firstChunkSize + (part.partNumber - 2) * chunkSize;
             const end = Math.min(start + chunkSize, totalSize);
             // Read this part's bytes ONCE here, then reuse the captured chunk
             // across every retry attempt below — so a retry never re-reads the
@@ -1264,25 +1304,59 @@ export class GislClient {
         // dispatching new chunks. Chunks already in-flight are cancelled via the
         // composed signal passed to fetch above; sleeping siblings are woken via
         // the failureController set below.
-        const queue = [...presignedUrls.keys()];
-        const workers = Array.from({ length: Math.min(this.multipartConcurrency, queue.length) }, async () => {
-            while (queue.length > 0 && !failureController.signal.aborted) {
-                if (options?.signal?.aborted) {
-                    throw new GislAbortError('Multipart upload aborted');
+        const uploadGroup = async (group) => {
+            const queue = [...group];
+            const workers = Array.from({ length: Math.min(this.multipartConcurrency, queue.length) }, async () => {
+                while (queue.length > 0 && !failureController.signal.aborted) {
+                    if (options?.signal?.aborted) {
+                        throw new GislAbortError('Multipart upload aborted');
+                    }
+                    const part = queue.shift();
+                    try {
+                        await uploadChunk(part);
+                    }
+                    catch (err) {
+                        // Wake any sibling currently in a backoff sleep, and prevent
+                        // siblings from picking up further queue items.
+                        failureController.abort();
+                        throw err;
+                    }
                 }
-                const index = queue.shift();
-                try {
-                    await uploadChunk(index);
-                }
-                catch (err) {
-                    // Wake any sibling currently in a backoff sleep, and prevent
-                    // siblings from picking up further queue items.
-                    failureController.abort();
-                    throw err;
-                }
+            });
+            await Promise.all(workers);
+        };
+        // The first batch, then each tail batch, presigned immediately before
+        // its own PUTs (as multipartResume does) so a tail URL is minted at most
+        // one batch ahead of use — a 100 GiB upload can outlast the 2 h presign
+        // TTL if the whole tail were minted up front.
+        await uploadGroup(firstBatch);
+        for (const batch of tailBatches) {
+            if (options?.signal?.aborted) {
+                throw new GislAbortError('Multipart upload aborted');
             }
-        });
-        await Promise.all(workers);
+            const presigned = await this.presignParts(initResponse.uploadId, batch, serverParts, { signal: options?.signal });
+            // The contract promises one URL per requested part. A part missing,
+            // repeated or unrequested is a gap no further request would fill.
+            const urlByPart = new Map();
+            for (const part of presigned.presignedUrls) {
+                if (!batch.includes(part.partNumber) ||
+                    urlByPart.has(part.partNumber) ||
+                    typeof part.url !== 'string' ||
+                    part.url === '') {
+                    throw new GislError(`presignParts returned an unusable entry for part ${String(part.partNumber)} ` +
+                        `(requested ${batch[0]}..${batch[batch.length - 1]}): not requested, ` +
+                        'duplicated or without a url. Refusing to upload a mismatched part plan.');
+                }
+                urlByPart.set(part.partNumber, part.url);
+            }
+            const missing = batch.find((partNumber) => !urlByPart.has(partNumber));
+            if (missing !== undefined) {
+                throw new GislError(`presignParts returned no URL for part ${missing} ` +
+                    `(requested ${batch[0]}..${batch[batch.length - 1]}). ` +
+                    'Refusing to upload a mismatched part plan.');
+            }
+            await uploadGroup(batch.map((partNumber) => ({ partNumber, url: urlByPart.get(partNumber) })));
+        }
         // Step 3: Complete multipart upload.
         // Build a typed MultipartCompleteRequest and serialise via the generated
         // ToJSON helper — tsc now catches any field-name drift between the SDK

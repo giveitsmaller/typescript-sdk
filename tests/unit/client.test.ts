@@ -13,6 +13,7 @@ import {
   GislAuthError,
   GislAuthRejectionError,
   GislBalanceExhaustedError,
+  GislError,
   GislFeatureNotAvailableError,
   GislFeatureTierRestrictedError,
   GislLongFormConcurrencyError,
@@ -2159,6 +2160,130 @@ describe('GislClient', () => {
       expect(result.sizeBytes).toBe(BLOB_SIZE);
       // Only three HTTP calls: initiate, S3 PUT, complete. No metadata fetch.
       expect(fetchSpy.mock.calls).toHaveLength(3);
+    });
+
+    // Vq3J6soI: `presigned_urls` is only the FIRST BATCH (the api presigns at
+    // most 500 at initiate). These plans are many GiB, so the source is a
+    // duck-typed Blob whose slice() returns its start offset as the body:
+    // no chunk bytes exist, and each PUT says which range it carried.
+    const PART_CHUNK = 16 * 1024 * 1024;
+    function rangeBlob(size: number): { blob: Blob; slices: Array<[number, number]> } {
+      const slices: Array<[number, number]> = [];
+      const blob = {
+        size,
+        type: '',
+        slice: (start: number, end: number) => {
+          slices.push([start, end]);
+          return new Blob([String(start)]);
+        },
+      } as unknown as Blob;
+      return { blob, slices };
+    }
+    const partUrl = (partNumber: number) => ({
+      part_number: partNumber,
+      url: `https://s3.example.com/up?part=${partNumber}`,
+      expires_at: '2026-12-31T00:00:00Z',
+    });
+    const parts = (from: number, to: number) =>
+      Array.from({ length: to - from + 1 }, (_, i) => from + i);
+    function initiateEnvelope(uploadId: string, totalParts: number, firstBatch: number[]) {
+      return jsonResponse({
+        success: true,
+        data: {
+          upload_id: uploadId,
+          mime_type: 'application/octet-stream',
+          first_chunk_etag: '"etag-part-1"',
+          first_chunk_size_bytes: DEFAULT_MULTIPART_FIRST_CHUNK_SIZE,
+          total_parts: totalParts,
+          recommended_chunk_size: PART_CHUNK,
+          presigned_urls: firstBatch.map(partUrl),
+          constraints_applied: { processing_class_pre_assignment: 'long_form' },
+        },
+      });
+    }
+
+    it('a 620-part plan: PUTs the 500-URL first batch, then presigns the tail in batches of <=100 (Vq3J6soI)', async () => {
+      const TOTAL_PARTS = 620;
+      const size = DEFAULT_MULTIPART_FIRST_CHUNK_SIZE + (TOTAL_PARTS - 1) * PART_CHUNK;
+      const { blob, slices } = rangeBlob(size);
+      const presignRequests: number[][] = [];
+      const putStartByPart = new Map<number, number>();
+      let putCount = 0;
+      let completedParts: number[] = [];
+      fetchSpy.mockImplementation(async (url: string, opts?: RequestInit) => {
+        if (url.endsWith('/multipart/initiate')) {
+          // The api's real shape: parts 2..501 at initiate, the rest via presign.
+          return initiateEnvelope('mp-big', TOTAL_PARTS, parts(2, 501));
+        }
+        if (url === 'https://api.example.com/api/uploads/multipart/mp-big/presign') {
+          const requested = JSON.parse(opts!.body as string).part_numbers as number[];
+          presignRequests.push(requested);
+          return jsonResponse({
+            success: true,
+            data: { upload_id: 'mp-big', presigned_urls: requested.map(partUrl) },
+          });
+        }
+        if (url.startsWith('https://s3.example.com/up?part=')) {
+          putCount += 1;
+          const partNumber = Number(new URL(url).searchParams.get('part'));
+          putStartByPart.set(partNumber, Number(await (opts!.body as Blob).text()));
+          return new Response('', { status: 200, headers: { etag: `"etag-${partNumber}"` } });
+        }
+        if (url.endsWith('/multipart/complete')) {
+          completedParts = (
+            JSON.parse(opts!.body as string).parts as Array<{ part_number: number }>
+          ).map((p) => p.part_number);
+          return jsonResponse({ success: true, data: { upload_id: 'mp-big', status: 'completed' } }, 201);
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      });
+
+      const result = await client.uploadFile(blob);
+
+      expect(result.fileId).toBe('mp-big');
+      expect(presignRequests).toEqual([parts(502, 601), parts(602, 620)]);
+      // Every part 2..620 PUT exactly once, carrying its own byte range.
+      expect(putCount).toBe(TOTAL_PARTS - 1);
+      expect([...putStartByPart.keys()].sort((a, b) => a - b)).toEqual(parts(2, TOTAL_PARTS));
+      for (const [partNumber, start] of putStartByPart) {
+        expect(start).toBe(DEFAULT_MULTIPART_FIRST_CHUNK_SIZE + (partNumber - 2) * PART_CHUNK);
+      }
+      // The reads tile [0, size) exactly once.
+      let cursor = 0;
+      for (const [start, end] of [...slices].sort((a, b) => a[0] - b[0])) {
+        expect(start).toBe(cursor);
+        cursor = end;
+      }
+      expect(cursor).toBe(size);
+      expect(completedParts).toEqual(parts(2, TOTAL_PARTS));
+    });
+
+    it('refuses a presign batch that leaves a part without a URL, and never completes (Vq3J6soI)', async () => {
+      const { blob } = rangeBlob(DEFAULT_MULTIPART_FIRST_CHUNK_SIZE + 3 * PART_CHUNK);
+      const putUrls: string[] = [];
+      const apiUrls: string[] = [];
+      fetchSpy.mockImplementation(async (url: string) => {
+        if (url.startsWith('https://s3.example.com/')) {
+          putUrls.push(url);
+          return new Response('', { status: 200, headers: { etag: '"etag"' } });
+        }
+        apiUrls.push(url);
+        if (url.endsWith('/multipart/initiate')) {
+          return initiateEnvelope('mp-gap', 4, [2]);
+        }
+        if (url.endsWith('/multipart/mp-gap/presign')) {
+          // Asked for parts 3 and 4; the server answers for part 3 only.
+          return jsonResponse({ success: true, data: { upload_id: 'mp-gap', presigned_urls: [partUrl(3)] } });
+        }
+        return jsonResponse({ success: true, data: { upload_id: 'mp-gap', status: 'completed' } }, 201);
+      });
+
+      const err = await client.uploadFile(blob).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(GislError);
+      expect((err as Error).message).toMatch(/no URL for part 4/);
+      expect(putUrls).toEqual(['https://s3.example.com/up?part=2']);
+      expect(apiUrls.some((u) => u.endsWith('/multipart/complete'))).toBe(false);
     });
   });
 
