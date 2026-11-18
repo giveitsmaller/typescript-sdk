@@ -683,6 +683,7 @@ export const SOLE_OP_TYPES: ReadonlySet<string> = new Set([
   'custom_luma',
   'image_watermark',
   'merge',
+  'passthrough',
   'split',
   'text_watermark',
   'video_text_watermark',
