@@ -7,7 +7,13 @@ import { GislClient } from '../../src/client.js';
 import type { SplitOptions } from '../../src/ergonomic/option_types.js';
 import type { OperationDef, WorkflowCreatePayload } from '../../src/types.js';
 import { SDKS_REPO_ROOT } from './_contract-paths.js';
-import { PKG_ROOT, intersectionLiteralMembers, publicClassMethods, typesEntrypoints } from './_built-surface.js';
+import {
+  BUILT_SURFACE_TIMEOUT_MS,
+  PKG_ROOT,
+  intersectionLiteralMembers,
+  publicClassMethods,
+  typesEntrypoints,
+} from './_built-surface.js';
 
 /**
  * xybG2CzQ (DX A1b-TS) — the `ts` column of docs/parity/operations.yaml, proven
@@ -471,7 +477,7 @@ describe('operation parity: docs/parity/operations.yaml ts column on the real su
         expect.arrayContaining(['dist/index.d.ts', 'dist/index.browser.d.ts']),
       );
       expect(existenceFailures(surface, REQUIRED_MEMBERS)).toEqual([]);
-    });
+    }, BUILT_SURFACE_TIMEOUT_MS);
   });
 
   describe('(2) binding: each reachable entry sends its row operation', () => {
@@ -505,7 +511,7 @@ describe('operation parity: docs/parity/operations.yaml ts column on the real su
       expect(existenceFailures(surface, [{ type: 'ErgonomicClient', name: 'uploadFile' }])).toEqual(
         entries.map((entry) => `${entry}: ErgonomicClient declares no public uploadFile`),
       );
-    });
+    }, BUILT_SURFACE_TIMEOUT_MS);
 
     it('binding: the compress/image row bound to thumbnail is a type mismatch; bound as the YAML says it passes', async () => {
       const row = requiredRow('compress', 'image');

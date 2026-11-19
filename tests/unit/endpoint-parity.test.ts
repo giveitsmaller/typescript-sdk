@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 import { GislClient, DEFAULT_MULTIPART_FIRST_CHUNK_SIZE } from '../../src/client.js';
 import { SDKS_REPO_ROOT } from './_contract-paths.js';
-import { PKG_ROOT, publicClassMethods, typesEntrypoints } from './_built-surface.js';
+import { BUILT_SURFACE_TIMEOUT_MS, PKG_ROOT, publicClassMethods, typesEntrypoints } from './_built-surface.js';
 
 /**
  * zdbFzaNX (DX A1a-TS) — the `ts` column of docs/parity/endpoints.yaml, proven
@@ -486,11 +486,15 @@ describe('endpoint parity: docs/parity/endpoints.yaml ts column on the real clie
       expect(entries).toContain('dist/index.d.ts');
       expect(entries).toContain('dist/index.browser.d.ts');
       for (const methods of surface.values()) expect(methods.size).toBeGreaterThan(0);
-    });
+    }, BUILT_SURFACE_TIMEOUT_MS);
 
-    it.each(BOUND_IDS)('%s: bound method is public on every built entrypoint and on the prototype', (operationId) => {
-      expect(existenceFailure(builtSurface(), row(operationId).value)).toBeNull();
-    });
+    it.each(BOUND_IDS)(
+      '%s: bound method is public on every built entrypoint and on the prototype',
+      (operationId) => {
+        expect(existenceFailure(builtSurface(), row(operationId).value)).toBeNull();
+      },
+      BUILT_SURFACE_TIMEOUT_MS,
+    );
   });
 
   describe('(2) binding, direct rows', () => {
@@ -572,7 +576,7 @@ describe('endpoint parity: docs/parity/endpoints.yaml ts column on the real clie
       expect(existenceFailure(surface, 'getHealth')).toBeNull();
       expect(existenceFailure(surface, 'getHelth')).toBe(`${firstEntry}: GislClient has no public method getHelth`);
       for (const methods of surface.values()) expect(methods.has('getHelth')).toBe(false);
-    });
+    }, BUILT_SURFACE_TIMEOUT_MS);
 
     it("getHealth's request checked against the logoutUser row fails on method and path", async () => {
       const requests = await record('getHealth');

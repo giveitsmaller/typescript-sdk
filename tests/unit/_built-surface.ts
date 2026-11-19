@@ -72,9 +72,31 @@ export function typesEntrypoints(): string[] {
   return [...found].map((relative) => resolve(PKG_ROOT, relative)).sort();
 }
 
+// One program per entrypoint per test file. Building it is seconds of synchronous
+// compiler work on a loaded runner, and every reader asks several names of the same
+// entry; sharing it keeps a parity test from paying that cost once per name.
+const entryPrograms = new Map<string, ts.Program>();
+
+function entryProgram(entryFile: string): ts.Program {
+  let program = entryPrograms.get(entryFile);
+  if (program === undefined) {
+    program = createRelativeOnlyProgram([entryFile]);
+    entryPrograms.set(entryFile, program);
+  }
+  return program;
+}
+
+/**
+ * Per-test timeout for a test whose body can be the first to build a file's built
+ * surface. Measured: the first build costs 1-2 s quiet and 5-23 s at 0.25 CPU, past
+ * vitest's 5000 ms default, and a synchronous test is failed after it returns, so the
+ * timeout must cover the build. The global testTimeout is deliberately left alone.
+ */
+export const BUILT_SURFACE_TIMEOUT_MS = 30_000;
+
 /** The declarations of the symbol `entryFile` exports as `name`, followed through every alias. */
 function exportedDeclarations(entryFile: string, name: string): ts.Declaration[] {
-  const program = createRelativeOnlyProgram([entryFile]);
+  const program = entryProgram(entryFile);
   const checker = program.getTypeChecker();
   const sourceFile = program.getSourceFile(entryFile);
   if (sourceFile === undefined) throw new Error(`${entryFile}: not in the program`);
